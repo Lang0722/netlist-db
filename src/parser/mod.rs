@@ -585,10 +585,15 @@ pub async fn parse_top_multi_with<I: Iterator<Item = FileId>>(
     )
 }
 
+/// The body of the last `.lib <section>` ... `.endl` block of `text`, and
+/// the number of lines before its `.lib` line. Only spaces and tabs may
+/// come before `.lib` on its line: a `\s*` there would also match the blank
+/// lines before it, and the line numbers of the section would be too small
+/// by their number.
 fn match_lib(text: &str, section: &str) -> Option<(String, u32)> {
     let section_escaped = regex::escape(section);
     let re = Regex::new(&format!(
-        r"(?ims)^\s*\.lib\s+{section_escaped}\b(.*?)^\s*\.endl\b(?:\s+{section_escaped}\b)?"
+        r"(?ims)^[ \t]*\.lib\s+{section_escaped}\b(.*?)^\s*\.endl\b(?:\s+{section_escaped}\b)?"
     ))
     .unwrap();
     re.captures_iter(text).last().map(|caps| {
@@ -2733,8 +2738,12 @@ fn test_match_lib() {
         .lib ttg
         it is wrong
         .endl"#;
+    // `.lib tt` is line 8: 7 lines come before it
     assert_eq!(
-        Some(("\n        R1 in out 10k\n".to_owned(), 6)),
+        Some(("\n        R1 in out 10k\n".to_owned(), 7)),
         match_lib(text, "tt")
     );
+    // blank and space-only lines before the `.lib` line count
+    let text = "* lib\n\n   \n\t\n.lib tt\n.subckt res a b\n.ends\n.endl tt\n";
+    assert_eq!(match_lib(text, "tt").map(|(_, n)| n), Some(4));
 }

@@ -182,9 +182,10 @@ handle, and the other tools take it first. See `mcp_server/README.md`.
   definitions in different instances.
 - `net_info` and `trace_net` also take an HSPICE full node name, such as
   `x1.xm1.n1` from a listing or a waveform, as the net, with the scope
-  path `""`. When the scope has no net with that name, the name is split
-  at its last `.` into an instance path and a net, as HSPICE splits an
-  element path.
+  path `""`. When the scope has no net with that name, the name is read as
+  an instance path, a `.`, and a net of that instance. A net name can hold
+  a `.`, so each `.` is tried, the last one first: HSPICE finds `x1.n.1`
+  as the net `n.1` of `x1` (golden `node_dotted_in_subckt`).
 - Parameters follow `.option parhier`. The default is `global`: a top-level
   `.param` wins over an `X`-line override or a subckt default. With
   `parhier=local`, the definition nearest the element wins.
@@ -205,7 +206,14 @@ handle, and the other tools take it first. See `mcp_server/README.md`.
   element line that a load error skipped (for example `G1 … POLY(2) …`).
 - Verilog-A modules (`.hdl`) and encrypted regions (`.prot`) are not read.
   In a deck with a `.prot` region, the load checks of undefined names are
-  off, and a name that only the region defines has no value.
+  off, and a name that only the region defines has no value. An `X` line
+  that calls a subckt with no visible definition gets a Warning, not an
+  Error, because the region can define it (golden `prot_subckt`).
+- HSPICE joins the nets that have one full name into one node: a
+  top-level net written `x1.n` is the net `n` of instance `x1` (golden
+  `node_dotted_collision`, `node_dotted_two_splits_a`). The tool keeps
+  them apart. `net_info` and `trace_net` give a caveat that names the
+  other net when the full name of their net has another reading.
 - The DSPF scanner reads lines: a `*|` record or a parasitic value on a `+`
   line is not read (the sum of the values is then `null`, with a caveat).
   An R or C line after a `*|NET` block that touches no node of the block is

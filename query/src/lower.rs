@@ -295,6 +295,7 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
             swept: Vec::new(),
             elem_names: Default::default(),
             net_index: Default::default(),
+            dotted_instances: Default::default(),
             dspf: Vec::new(),
             skipped: Vec::new(),
             protected: false,

@@ -1173,6 +1173,7 @@ impl Build<'_> {
         unresolved.sort_unstable_by_key(|&(n, j)| (hier.nodes[n as usize].def, j));
         let mut counted_unresolved = 0_usize;
         let mut counted_va = 0_usize;
+        let mut counted_prot = 0_usize;
         // the `.model` cards of the first run, by (scope, name): their
         // types. An `X` line can call a model of a Verilog-A module
         let mut models: FxMap<(DefId, Sym), Sym> = FxMap::default();
@@ -1214,13 +1215,14 @@ impl Build<'_> {
                 Some(kind) if builtin_model_type(net.syms.name(kind)) => Va::No,
                 Some(kind) => Va::Model(kind),
                 None if net.hdl => Va::Hdl,
+                None if net.protected => Va::Prot,
                 None => Va::No,
             };
             if missing.count().is_some_and(|c| c > 0) {
-                if !matches!(va, Va::No) {
-                    counted_va += 1;
-                } else {
-                    counted_unresolved += 1;
+                match va {
+                    Va::No => counted_unresolved += 1,
+                    Va::Prot => counted_prot += 1,
+                    _ => counted_va += 1,
                 }
             }
             let contexts = hier.binding_nodes(def).count();
@@ -1427,6 +1429,13 @@ impl Build<'_> {
                         notes.push(format!(
                             "lower bound: {counted_unresolved} `X` line{} {verb} a subckt with no visible definition on some instance paths, and HSPICE rejects the deck (diagnostic `unresolved_subckt`); the instances they would make are not counted",
                             s(counted_unresolved)
+                        ));
+                    }
+                    if counted_prot > 0 {
+                        notes.push(format!(
+                            "lower bound: {counted_prot} `X` line{} on instance paths {} a subckt with no visible definition, which a `.prot` region (not parsed) can define (golden `prot_subckt`: HSPICE runs the deck); the instances they make are not counted",
+                            s(counted_prot),
+                            if counted_prot == 1 { "calls" } else { "call" }
                         ));
                     }
                     if counted_va > 0 {
@@ -1768,6 +1777,9 @@ enum Va {
     No,
     /// The first run has a `.hdl` line.
     Hdl,
+    /// The deck has a `.prot` region, which is not parsed and can define
+    /// the subckt: HSPICE runs such a deck (golden `prot_subckt`).
+    Prot,
     /// A `.model` card of that name, visible from the line, has this type,
     /// which is not a built-in HSPICE type.
     Model(Sym),
@@ -1877,7 +1889,14 @@ fn unresolved_diag(
             ),
             _ => String::new(),
         };
-        if va != Va::No {
+        if va == Va::Prot {
+            (
+                Level::Warning,
+                format!(
+                    "`{x}` {place} calls subckt `{callee}`, which has no visible definition{scope}: a `.prot` region, which is not parsed, can define it (golden `prot_subckt`: HSPICE runs the deck)"
+                ),
+            )
+        } else if va != Va::No {
             // short, with no scope: a deck loaded without its cell library
             // has one for each `X` line, and the summary note gives the
             // rule and the counts
@@ -2296,27 +2315,22 @@ impl Netlist {
     pub fn subckt_info(&self, name: &str, page: &Page) -> Result<SubcktInfo, QueryError> {
         let id = self.subckt_by_name(name)?;
         let def = &self.defs[id.idx()];
-        let first_run: Vec<&Element> = def
+        let first_run: Vec<(usize, &Element)> = def
             .elements
             .iter()
-            .filter(|e| e.alter.is_none() && !e.parasitic)
+            .enumerate()
+            .filter(|(_, e)| e.alter.is_none() && !e.parasitic)
             .collect();
-        let elements = api::page(first_run.iter(), page)?.map(|e| ElementBrief {
+        let elements = api::page(first_run.iter(), page)?.map(|&(i, e)| ElementBrief {
             name: self.syms.name(e.name).to_owned(),
             kind: e.kind.name().to_owned(),
-            model: e.model.map(|m| self.syms.name(m).to_owned()),
+            model: self.elem_model(id, i).map(|m| self.syms.name(m).to_owned()),
             callee: e.callee.map(|c| self.syms.name(c).to_owned()),
             loc: self.loc(e.loc),
         });
         let (children, children_total) = self.children(id, def);
-        let mut caveats = Vec::new();
-        if let Some(&at) = self.hier.dup_at.get(&id) {
-            caveats.push(format!(
-                "HSPICE rejects this deck: `{}` is defined again at {} (golden `dup_subckt`). Queries use this (first) definition",
-                self.def_display(id),
-                self.loc_string(at)
-            ));
-        }
+        let mut caveats: Vec<String> = self.dup_def_caveat(id).into_iter().collect();
+        caveats.extend(self.def_alter_caveats(id));
         // the names of more than one element line of the definition
         let dup_names = self
             .hier
@@ -2368,7 +2382,7 @@ impl Netlist {
                 })
                 .collect(),
             funcs_total: funcs().count(),
-            devices_by_type: self.devices_by_type(&first_run),
+            devices_by_type: self.devices_by_type(id, &first_run),
             children,
             children_total,
             x_lines: self.x_lines(id),
@@ -2377,6 +2391,18 @@ impl Netlist {
             caveats,
             elements,
             parasitics: self.def_parasitics(id),
+        })
+    }
+
+    /// The caveat of a definition `id` that is defined again in its scope
+    /// (HSPICE rejects the deck).
+    fn dup_def_caveat(&self, id: DefId) -> Option<String> {
+        self.hier.dup_at.get(&id).map(|&at| {
+            format!(
+                "HSPICE rejects this deck: `{}` is defined again at {} (golden `dup_subckt`). Queries use this (first) definition",
+                self.def_display(id),
+                self.loc_string(at)
+            )
         })
     }
 
@@ -2399,11 +2425,13 @@ impl Netlist {
             left: total,
         };
         let lines = api::page(lines, page)?.map(str::to_owned);
+        // `api::page` checked the cursor
         let offset = page
             .cursor
             .as_deref()
-            .map_or(0, |c| c.trim().parse().unwrap_or(0));
-        let mut caveats = Vec::new();
+            .map_or(0, |c| c.trim().parse::<usize>().unwrap_or(0));
+        let mut caveats: Vec<String> = self.dup_def_caveat(id).into_iter().collect();
+        caveats.extend(self.def_alter_caveats(id));
         let loc = LocIdx {
             file: def.text.file,
             line: def.text_line,
@@ -2444,11 +2472,14 @@ impl Netlist {
     }
 
     /// The devices of `elements` by type, most first.
-    fn devices_by_type(&self, elements: &[&Element]) -> Vec<DeviceGroup> {
+    fn devices_by_type(&self, id: DefId, elements: &[(usize, &Element)]) -> Vec<DeviceGroup> {
         const MAX_MODELS: usize = 50;
         // (type, count, models, models seen)
         let mut groups: Vec<(&'static str, usize, Vec<Sym>, HashSet<Sym>)> = Vec::new();
-        for e in elements.iter().filter(|e| e.kind != ElemKind::Instance) {
+        for &(i, e) in elements
+            .iter()
+            .filter(|(_, e)| e.kind != ElemKind::Instance)
+        {
             let name = e.kind.name();
             let g = match groups.iter().position(|g| g.0 == name) {
                 Some(g) => g,
@@ -2459,7 +2490,7 @@ impl Netlist {
             };
             let g = &mut groups[g];
             g.1 += 1;
-            if let Some(m) = e.model
+            if let Some(m) = self.elem_model(id, i)
                 && g.3.insert(m)
             {
                 g.2.push(m);
@@ -2601,6 +2632,8 @@ impl Netlist {
                         self.def_display(def)
                     ));
                 }
+                caveats.extend(self.def_alter_caveats(def));
+                caveats.extend(self.elem_alter_caveats(def, elem as usize));
                 let overrides = || params.iter().filter(|p| Some(p.name) != m);
                 InstanceRef {
                     parent: self.def_display(def),

@@ -33,7 +33,10 @@
 
 use crate::{
     Netlist,
-    api::{ChainStep, DEFAULT_LIMIT, ElementParams, MAX_LIMIT, QueryError, Resolved, StepKind},
+    api::{
+        ChainStep, DEFAULT_LIMIT, ElementParams, MAX_LIMIT, NameText, QueryError, Resolved,
+        StepKind,
+    },
     hier::suggest,
     intern::Sym,
     lower::{QuoteFault, after_eq, arg_words, next_token, one_line, pwl_values, quote_fault},
@@ -2184,33 +2187,68 @@ impl Netlist {
                 ));
             }
         }
+        out.extend(self.path_alter_caveats(w));
+        out
+    }
+
+    /// The caveats of `.alter` blocks that redefine a definition of the
+    /// path `w`, an `X` line of the path or the element at its end.
+    pub(crate) fn path_alter_caveats(&self, w: &Walk) -> Vec<String> {
+        let mut out = Vec::new();
         for &d in w.defs.iter().chain(&w.last_binding) {
-            let def = &self.defs[d.idx()];
-            let parent = def.parent.unwrap_or(ROOT);
-            for &other in &self.defs[parent.idx()].nested {
-                let o = &self.defs[other.idx()];
-                if let (Some(a), true) = (o.alter, o.name == def.name && d != ROOT) {
-                    out.push(format!(
+            out.extend(self.def_alter_caveats(d));
+        }
+        for &(holder, i) in &w.elems {
+            out.extend(self.elem_alter_caveats(holder, i));
+        }
+        out
+    }
+
+    /// The caveat of each `.alter` block that defines `d` again.
+    pub(crate) fn def_alter_caveats(&self, d: DefId) -> Vec<String> {
+        if self.alters.is_empty() || d == ROOT {
+            return Vec::new();
+        }
+        let def = &self.defs[d.idx()];
+        let parent = def.parent.unwrap_or(ROOT);
+        self.defs[parent.idx()]
+            .nested
+            .iter()
+            .map(|&other| &self.defs[other.idx()])
+            .filter(|o| o.name == def.name)
+            .filter_map(|o| {
+                o.alter.map(|a| {
+                    format!(
                         "subckt `{}` is defined again by .alter #{a} at {}: this answer describes the first run",
                         self.def_display(d),
                         loc_str(self, o.loc)
-                    ));
-                }
-            }
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The caveat of each `.alter` line that changes element `i` of
+    /// `holder`.
+    pub(crate) fn elem_alter_caveats(&self, holder: DefId, i: ElemIdx) -> Vec<String> {
+        if self.alters.is_empty() {
+            return Vec::new();
         }
-        for &(holder, i) in &w.elems {
-            let e = &self.defs[holder.idx()].elements[i];
-            for o in &self.defs[holder.idx()].elements {
-                if let (Some(a), true) = (o.alter, o.name == e.name) {
-                    out.push(format!(
+        let elements = &self.defs[holder.idx()].elements;
+        let name = elements[i].name;
+        elements
+            .iter()
+            .filter(|o| o.name == name)
+            .filter_map(|o| {
+                o.alter.map(|a| {
+                    format!(
                         "`{}` is changed by .alter #{a} at {}: this answer describes the first run (golden `alter`: the changes of the `.alter` blocks accumulate over the runs)",
-                        self.syms.name(e.name),
+                        self.syms.name(name),
                         loc_str(self, o.loc)
-                    ));
-                }
-            }
-        }
-        out
+                    )
+                })
+            })
+            .collect()
     }
 
     /// The scopes of the instance path `scope_path` (`""`: the top level,
@@ -2760,6 +2798,62 @@ impl Netlist {
             _ => None,
         });
         (why, model.and_then(|m| self.visible_model(holder, m)))
+    }
+
+    /// The model of element `i` of `holder` as HSPICE reads the line: for
+    /// an R, C or L line with a model word, the reading of
+    /// [`Netlist::rcl_reading`] (`R1 1 0 rval 0.004` has no model when no
+    /// `.model rval` is visible: `rval` is the value, golden
+    /// `rcl_param_tc`); else the model word of the line.
+    pub(crate) fn elem_model(&self, holder: DefId, i: ElemIdx) -> Option<Sym> {
+        let e = &self.defs[holder.idx()].elements[i];
+        match e.kind {
+            ElemKind::Resistor | ElemKind::Capacitor | ElemKind::Inductor if e.model.is_some() => {
+                self.rcl_items(holder, i).1
+            }
+            _ => e.model,
+        }
+    }
+
+    /// For R, C or L line `i` of `holder`: the model and the parameters
+    /// (name, text) as HSPICE reads the tokens after the nodes, as
+    /// [`Netlist::resolve_element`] reads them (`R1 1 0 rval 0.004` is
+    /// `r=rval`, `tc1=0.004` with no `.model rval`, golden
+    /// `rcl_param_tc`), and the reasons the line has no value or HSPICE
+    /// rejects it. `None` for another type.
+    pub(crate) fn rcl_reading(
+        &self,
+        holder: DefId,
+        i: ElemIdx,
+    ) -> Option<(Option<Sym>, Vec<NameText>, Vec<String>)> {
+        let e = &self.defs[holder.idx()].elements[i];
+        if !matches!(
+            e.kind,
+            ElemKind::Resistor | ElemKind::Capacitor | ElemKind::Inductor
+        ) {
+            return None;
+        }
+        let (items, model, _) = self.rcl_items(holder, i);
+        let mut params = Vec::new();
+        let mut why = Vec::new();
+        for it in items {
+            let text = match it.src {
+                Src::Param(p) => Some(self.name_text(p).text),
+                Src::Word(w, _) => Some(w),
+                Src::Fail(reason, p) => {
+                    why.push(reason);
+                    p.map(|p| self.name_text(p).text)
+                }
+                Src::Builtin(..) | Src::SourceT0(..) => None,
+            };
+            if let Some(text) = text {
+                params.push(NameText {
+                    name: it.name,
+                    text,
+                });
+            }
+        }
+        Some((model, params, why))
     }
 
     /// The parameters of an R, C or L line, read as HSPICE reads the tokens

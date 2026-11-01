@@ -595,3 +595,105 @@ fn trace_from_a_full_node_name() {
             .is_err()
     );
 }
+
+// ---- bug-hunt round 2: HSPICE full node names (golden `node_dotted_*`) ----
+
+#[test]
+fn full_node_name_with_a_dot_in_the_net() {
+    // `x1.n.1` is the net `n.1` of `x1`: the deck has no instance `x1.n`
+    let net = load(repo("golden/cases/node_dotted_in_subckt/deck.sp"));
+    let i = info(&net, "", "x1.n.1");
+    assert_eq!((i.scope.as_str(), i.net.as_str()), ("x1", "n.1"));
+    assert_eq!(i.caveats.len(), 1, "{:?}", i.caveats);
+    assert!(
+        i.caveats[0].contains("net `n.1` of instance `x1`"),
+        "{:?}",
+        i.caveats
+    );
+    let t = net
+        .trace_net("", "x1.n.1", TraceDir::Up, 1, &all())
+        .unwrap();
+    assert!(
+        t.caveats[0].contains("net `n.1` of instance `x1`"),
+        "{:?}",
+        t.caveats
+    );
+    // the errors come from the last-dot reading (no instance `x1.n`)
+    match net.net_info("", "x1.n.9", NetView::Logical, &all()) {
+        Err(QueryError::NotFound { what, name, .. }) => {
+            assert_eq!((what.as_str(), name.as_str()), ("element", "x1.n"))
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn nets_with_one_full_name_are_joined_by_hspice() {
+    let net = load(repo("golden/cases/node_dotted_collision/deck.sp"));
+    // the top-level net written `x1.n`, and the net `n` of `x1`
+    let top = info(&net, "", "x1.n");
+    assert_eq!(top.scope, "");
+    assert!(
+        top.caveats[0].contains("net `n` of instance `x1`") && top.caveats[0].contains("joins"),
+        "{:?}",
+        top.caveats
+    );
+    let inner = info(&net, "x1", "n");
+    assert!(
+        inner.caveats[0].contains("net `x1.n` at the top level"),
+        "{:?}",
+        inner.caveats
+    );
+    let t = net.trace_net("x1", "n", TraceDir::Up, 1, &all()).unwrap();
+    assert!(
+        t.caveats.iter().any(|c| c.contains("joins")),
+        "{:?}",
+        t.caveats
+    );
+    // two instances: `x1.n` (node `1`) and `x1` (node `n.1`)
+    let net = load(repo("golden/cases/node_dotted_two_splits_a/deck.sp"));
+    let i = info(&net, "", "x1.n.1");
+    assert_eq!(
+        (i.scope.as_str(), i.net.as_str(), i.def.as_str()),
+        ("x1.n", "1", "cella")
+    );
+    assert!(i.caveats[0].contains("read as an HSPICE full node name"));
+    assert!(
+        i.caveats[1].contains("net `n.1` of instance `x1`"),
+        "{:?}",
+        i.caveats
+    );
+    let other = info(&net, "x1", "n.1");
+    assert!(
+        other.caveats[0].contains("net `1` of instance `x1.n`"),
+        "{:?}",
+        other.caveats
+    );
+    // a net with no other reading has no such caveat
+    let plain = load(repo("golden/cases/hier_counts/deck.sp"));
+    assert!(info(&plain, "x1.xm1", "n1").caveats.is_empty());
+}
+
+#[test]
+fn trace_into_an_instance_whose_full_name_is_taken() {
+    // `x0.xq` is the top-level `X` line (cell3), which HSPICE creates
+    // first: the `xq` line of `wrap` under `x0` does not get that name
+    // (golden `hier_dotted_collision`)
+    let net = load(repo("golden/cases/hier_dotted_collision/deck.sp"));
+    let t = net.trace_net("", "1", TraceDir::Down, 2, &all()).unwrap();
+    let to: Vec<&str> = t.hops.items.iter().map(|h| h.to_scope.as_str()).collect();
+    assert_eq!(to, ["x0", "x0.xq", "x0.xq"]);
+    let renamed: Vec<&String> = t
+        .caveats
+        .iter()
+        .filter(|c| c.contains("full name of another instance"))
+        .collect();
+    assert_eq!(renamed.len(), 1, "{:?} {to:?}", t.caveats);
+    assert!(renamed[0].contains("`xq` in `wrap`"), "{renamed:?}");
+    // no dotted `X` line names: no such caveat
+    let (_deck, plain) = load_text("trace_plain", BUF);
+    let t = plain
+        .trace_net("", "n1", TraceDir::Down, 5, &all())
+        .unwrap();
+    assert!(!t.caveats.iter().any(|c| c.contains("another instance")));
+}

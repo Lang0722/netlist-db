@@ -1,0 +1,13 @@
+{
+ "case": "node_dotted_in_subckt",
+ "resistors": [],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {
+  "merged_listing": "listing shows 0 resistors, statistics count 2"
+ }
+}

@@ -891,8 +891,8 @@ pub(super) enum Step<'a> {
     /// A `.subckt` (or `.macro`) header: the statements after it are its
     /// body.
     Open(Open<'a>),
-    /// `.ends` (or `.eom`): the body ends. `end` is the byte after the
-    /// `.ends` statement (before its line end).
+    /// `.ends` (or `.eom`): the body ends. `end` is the start of the line
+    /// after the `.ends` statement and its `+` lines.
     Close { end: usize },
     /// `.include`, `.inc` or `.lib <file> <section>`: the included
     /// statements come here. The input is at the end of the include line.
@@ -1209,7 +1209,8 @@ fn statement<'a>(
                         return Err(ParseErrorInner::StrayEnds { keyword });
                     }
                     (i, _) = opt((space1, name)).parse_complete(i)?;
-                    let end = i.location_offset();
+                    // the end of the statement, with its `+` lines
+                    let end = skip_statement(i).location_offset();
                     i = match statement_end(i) {
                         Ok(next) => next,
                         Err(e) => {

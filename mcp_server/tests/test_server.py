@@ -124,6 +124,15 @@ def test_letter_case_and_empty_strings():
     h = b["handle"]
     assert "items" in call("diagnostics", handle=h, level="", cursor="")
     assert "items" in call("list_subckts", handle=h, filter="", cursor="")
+    # an empty choice is its default, not an error
+    assert call("list_subckts", handle=h, sort="") == call("list_subckts", handle=h, sort="name")
+    assert call("net_info", handle=h, scope_path="", net="1", view="")["net"] == "1"
+    assert call("trace_net", handle=h, scope_path="", net="1", direction="")["hops"]["total"] > 0
+    # an empty or odd-case title_line is `auto`: the same handle
+    assert load("hier_counts", title_line="")["handle"] == load("hier_counts")["handle"]
+    assert load("hier_counts", title_line=" AUTO ")["handle"] == load("hier_counts")["handle"]
+    bad = load("hier_counts", title_line="maybe")
+    assert bad["error"]["kind"] == "bad_argument", bad
 
 
 def test_odd_arguments_give_answers_or_errors():

@@ -108,6 +108,12 @@ fn is_ground_name(name: &str) -> bool {
     GROUND.iter().any(|g| g.eq_ignore_ascii_case(name))
 }
 
+/// The error of [`Netlist::net_at`] for a net that the scope does not have
+/// (it names it `net in ...`), not for a scope path that names no instance.
+fn net_missing(e: &QueryError) -> bool {
+    matches!(e, QueryError::NotFound { what, .. } if what.starts_with("net in "))
+}
+
 impl Netlist {
     /// The key of net `s` in a [`NetIndex`].
     pub(crate) fn net_key(&self, s: Sym) -> u32 {
@@ -334,6 +340,17 @@ impl Netlist {
         Ok((links, caveats))
     }
 
+    /// Whether an `X` line name holds a `.` (cached).
+    fn dotted_instances(&self) -> bool {
+        *self.dotted_instances.get_or_init(|| {
+            self.defs.iter().any(|d| {
+                d.elements
+                    .iter()
+                    .any(|e| e.kind == ElemKind::Instance && self.syms.name(e.name).contains('.'))
+            })
+        })
+    }
+
     /// The role of pin `k` of element `i` of `d`, whose `X` lines bind in
     /// `scope`. An `X` line with no visible definition, or with a node count
     /// that is not the port count, has no port names: `n1`, `n2`, … and a
@@ -433,61 +450,123 @@ impl Netlist {
         page_req: &Page,
     ) -> Result<NetInfo, QueryError> {
         self.full_name(scope_path, net, view, page_req)
-            .map(|(info, _)| info)
+            .map(|(info, _, _)| info)
     }
 
     /// [`Netlist::net_info`] for `net` in `scope_path`. When the scope has
     /// no net `net` and `net` holds a `.`, `net` is an HSPICE full node
-    /// name below the scope (`x1.xm1.n1`): it is split at its last `.`
-    /// into an instance path, below `scope_path`, and a net of that
-    /// instance. HSPICE splits an element path in this way (golden
-    /// `elem_dotted_name_collision`); for a node it was not probed, and a
-    /// caveat says how the name was read. Returns the answer, and the net
-    /// that it is for (`info.scope` is its scope path).
+    /// name below the scope (`x1.xm1.n1`): an instance path below
+    /// `scope_path`, a `.`, and a net of that instance. A net name can hold
+    /// a `.` too, so each `.` is tried, the last one first: HSPICE finds
+    /// `x1.n.1` as net `n.1` of `x1` (golden `node_dotted_in_subckt`).
+    /// HSPICE joins the nets that have one full name into one node (golden
+    /// `node_dotted_collision`, `node_dotted_two_splits_a`), which the
+    /// model does not do: a caveat names the other nets with the full name
+    /// of the answer. Returns the answer, the net that it is for
+    /// (`info.scope` is its scope path), and the caveats that this reading
+    /// added (also in `info.caveats`).
     fn full_name(
         &self,
         scope_path: &str,
         net: &str,
         view: NetView,
         page_req: &Page,
-    ) -> Result<(NetInfo, String), QueryError> {
+    ) -> Result<(NetInfo, String, Vec<String>), QueryError> {
         let asked = net.trim();
-        let err = match self.net_at(scope_path, asked, view, page_req) {
-            Ok(info) => return Ok((info, asked.to_owned())),
-            // only a net that the scope does not have (`net_at` names it
-            // `net in ...`), not a scope path that names no instance
-            Err(e @ QueryError::NotFound { .. }) if matches!(&e, QueryError::NotFound { what, .. } if what.starts_with("net in ")) => {
-                e
+        let (mut info, local, mut notes) = match self.net_at(scope_path, asked, view, page_req) {
+            Ok(info) => (info, asked.to_owned(), Vec::new()),
+            Err(e) if !net_missing(&e) => return Err(e),
+            Err(err) => {
+                let scope = scope_path.trim();
+                let mut hit = None;
+                // the name has a `.` and is no net of the scope: a full
+                // name, so the errors of that reading are the useful ones
+                let mut first_err = None;
+                for (p, _) in asked.rmatch_indices('.') {
+                    let (inst, local) = (asked[..p].trim(), asked[p + 1..].trim());
+                    if inst.is_empty() || local.is_empty() {
+                        continue;
+                    }
+                    let full = if scope.is_empty() || scope == "." {
+                        inst.to_owned()
+                    } else {
+                        format!("{scope}.{inst}")
+                    };
+                    match self.net_at(&full, local, view, page_req) {
+                        Ok(info) => {
+                            hit = Some((info, local.to_owned()));
+                            break;
+                        }
+                        Err(e) => {
+                            first_err.get_or_insert(e);
+                        }
+                    }
+                }
+                let Some((info, local)) = hit else {
+                    return Err(first_err.unwrap_or(err));
+                };
+                let note = Self::full_name_note(asked, &local, &info.scope);
+                (info, local, vec![note])
             }
-            Err(e) => return Err(e),
         };
-        let Some((inst, local)) = asked
-            .rsplit_once('.')
-            .filter(|(i, l)| !i.trim().is_empty() && !l.trim().is_empty())
-        else {
-            return Err(err);
-        };
-        let scope = scope_path.trim();
-        let full = if scope.is_empty() || scope == "." {
-            inst.trim().to_owned()
-        } else {
-            format!("{scope}.{}", inst.trim())
-        };
-        let local = local.trim();
-        // the name has a `.` and is no net of the scope: a full name, so
-        // the errors of that reading are the useful ones
-        let mut info = self.net_at(&full, local, view, page_req)?;
-        info.caveats
-            .insert(0, Self::full_name_note(asked, local, &info.scope));
-        Ok((info, local.to_owned()))
+        notes.extend(self.joined_nets(&info, &local));
+        for (k, n) in notes.iter().enumerate() {
+            info.caveats.insert(k, n.clone());
+        }
+        Ok((info, local, notes))
     }
 
     /// The caveat of [`Netlist::full_name`] for `asked` read as net
-    /// `local` of the instance `info.scope`.
+    /// `local` of the instance `scope`.
     fn full_name_note(asked: &str, local: &str, scope: &str) -> String {
         format!(
             "`{asked}` is read as an HSPICE full node name: net `{local}` of instance `{scope}`"
         )
+    }
+
+    /// A caveat for each other net with the HSPICE full name of net
+    /// `local` of the instance `info.scope` (`x1.n` is net `n` of `x1`,
+    /// and also a top-level net written `x1.n`): HSPICE joins them into one
+    /// node, so their pins are on this net too. Ground and the `.global`
+    /// names are one net already.
+    fn joined_nets(&self, info: &NetInfo, local: &str) -> Vec<String> {
+        if info.is_ground || info.is_global {
+            return Vec::new();
+        }
+        let local = local.to_ascii_lowercase();
+        let full = if info.scope.is_empty() {
+            local.clone()
+        } else {
+            format!("{}.{local}", info.scope)
+        };
+        if !full.contains('.') {
+            return Vec::new();
+        }
+        let none = Page {
+            limit: 0,
+            cursor: None,
+        };
+        let readings = std::iter::once(("", full.as_str())).chain(
+            full.match_indices('.')
+                .map(|(p, _)| (&full[..p], &full[p + 1..])),
+        );
+        let mut out = Vec::new();
+        for (inst, net) in readings {
+            if net.is_empty() || (inst == info.scope && net == local) {
+                continue;
+            }
+            if self.net_at(inst, net, NetView::Logical, &none).is_ok() {
+                let at = if inst.is_empty() {
+                    "at the top level".to_owned()
+                } else {
+                    format!("of instance `{inst}`")
+                };
+                out.push(format!(
+                    "`{full}` is also the full name of net `{net}` {at}: HSPICE joins the nets that have one full name into one node (golden `node_dotted_collision`, `node_dotted_two_splits_a`), so its pins are on this net too. This answer lists the pins of one of them: net_info(\"{inst}\", \"{net}\") lists the others"
+                ));
+            }
+        }
+        out
     }
 
     /// [`Netlist::net_info`] for `net` as written in `scope_path`.
@@ -651,7 +730,7 @@ impl Netlist {
         page_req: &Page,
     ) -> Result<NetTrace, QueryError> {
         // the start net must exist in the scope; it can be a full node name
-        let (info, local) = self.full_name(
+        let (info, local, notes) = self.full_name(
             scope_path,
             net,
             NetView::Logical,
@@ -662,9 +741,7 @@ impl Netlist {
         )?;
         let asked = local.as_str();
         let (links, mut caveats) = self.chain(&info.scope)?;
-        if asked != net.trim() {
-            caveats.insert(0, Self::full_name_note(net.trim(), asked, &info.scope));
-        }
+        caveats.splice(0..0, notes);
         let start = links.last().expect("the chain has the root").node.clone();
         let key = self.logical(start.scope.def, self.asked_key(asked)).0;
         let (down, up) = match dir {
@@ -713,6 +790,7 @@ impl Netlist {
             let mut unbound = Capped::new("`X` line");
             let mut mismatch = Capped::new("`X` line");
             let mut stopped = Capped::new("net");
+            let mut renamed = Capped::new("step");
             'search: while let Some((node, key, at)) = queue.pop_front() {
                 if at >= depth {
                     continue;
@@ -742,6 +820,18 @@ impl Netlist {
                         if ports.len() != nodes {
                             mismatch.add(|| format!("`{child_path}` has {nodes} nodes, but subckt `{}` has {} ports: HSPICE rejects the deck (diagnostic `port_count_mismatch`); the trace stops there", self.def_display(t), ports.len()));
                             continue;
+                        }
+                        // with `.` in instance names, the joined path can be
+                        // the full name of an instance that HSPICE creates
+                        // first: then it names that one, not this one
+                        if self.dotted_instances() {
+                            let same = walk(self, &child_path, Want::Instance).is_ok_and(|w| {
+                                w.elems.last() == Some(&(node.scope.def, i as usize))
+                                    && w.last_binding == Some(t)
+                            });
+                            if !same {
+                                renamed.add(|| format!("`{child_path}` is the full name of another instance, which HSPICE creates first: HSPICE lists the instance of this step (`{x}` in `{}`) as circuit `.` (golden `hier_dotted_collision`), so a query with this path answers for the other instance", self.def_display(node.scope.def)));
+                            }
                         }
                         let port = ports[k as usize];
                         let to_key = self.logical(t, self.net_key(port)).0;
@@ -825,6 +915,7 @@ impl Netlist {
             caveats.extend(unbound.done());
             caveats.extend(mismatch.done());
             caveats.extend(stopped.done());
+            caveats.extend(renamed.done());
             if truncated {
                 caveats.push(format!(
                     "the trace stopped at {MAX_HOPS} steps before depth {depth}: trace from a deeper scope or with a smaller depth"

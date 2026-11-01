@@ -71,6 +71,20 @@ def test_full_node_name():
     t = net.trace_net("", "x1.xm1.xl1.a", direction="up", depth=3)
     assert t["scope"] == "x1.xm1.xl1" and t["hops"]["total"] == 3
 
+    # a net name with a `.`, and nets that HSPICE joins (golden `node_dotted_*`)
+    i = golden("node_dotted_in_subckt").net_info("", "x1.n.1")
+    assert (i["scope"], i["net"]) == ("x1", "n.1")
+    j = golden("node_dotted_collision").net_info("x1", "n")
+    assert "HSPICE joins" in j["caveats"][0]
+
+
+def test_rcl_reading_and_protected_subckt():
+    e = golden("rcl_param_tc").element_info("r1")
+    assert e["model"] is None
+    assert [(p["name"], p["text"]) for p in e["params"]] == [("r", "rval"), ("tc1", "0.004")]
+    s = golden("prot_subckt").summary()
+    assert s["errors"] == 0
+
 
 def test_error_is_dict():
     net = golden("hier_counts")

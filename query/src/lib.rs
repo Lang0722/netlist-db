@@ -107,6 +107,9 @@ pub struct Netlist {
     pub(crate) elem_names: std::sync::OnceLock<Vec<std::sync::OnceLock<paths::ElemNames>>>,
     /// The net index of each definition, built on first use (connectivity).
     pub(crate) net_index: std::sync::OnceLock<Vec<std::sync::OnceLock<nets::NetIndex>>>,
+    /// An `X` line name holds a `.`: two instances can get one full name
+    /// (see [`crate::paths`]). Built on first use.
+    pub(crate) dotted_instances: std::sync::OnceLock<bool>,
     /// The DSPF files: included ones, then `.option sim_dspf` ones.
     pub(crate) dspf: Vec<dspf::Dspf>,
     /// The element lines (first run) that a load error skipped: their
@@ -236,23 +239,36 @@ impl Netlist {
     /// nested `b` of the active top-level `a`; a plain name is the active
     /// top-level definition, else the one active nested definition (no
     /// inactive definition around it) with that name. `LoadOptions::top`
-    /// and the subckt-name queries use this rule.
+    /// and the subckt-name queries use this rule. A definition name can hold
+    /// `>` (`bus<1>`), so the name as written is looked up first.
     pub(crate) fn find_def(&self, name: &str) -> DefLookup {
         let name = name.trim();
-        if name.contains('>') {
-            let mut scope = ROOT;
-            for part in name.split('>') {
-                let found = self
-                    .syms
-                    .get(part.trim())
-                    .and_then(|sym| self.def_index.get(&(scope, sym)));
-                match found {
-                    Some(&id) => scope = id,
-                    None => return DefLookup::NotFound,
-                }
-            }
-            return DefLookup::Found(scope);
+        let plain = self.find_plain_def(name);
+        if plain != DefLookup::NotFound || !name.contains('>') {
+            return plain;
         }
+        self.find_qualified(ROOT, name)
+            .map_or(DefLookup::NotFound, DefLookup::Found)
+    }
+
+    /// The active definition that the qualified name `rest` names below
+    /// `scope`: `rest` itself, else a definition named by the text before
+    /// one of its `>`, then the rest below that one.
+    fn find_qualified(&self, scope: DefId, rest: &str) -> Option<DefId> {
+        let here = |n: &str| {
+            self.syms
+                .get(n.trim())
+                .and_then(|sym| self.def_index.get(&(scope, sym)))
+                .copied()
+        };
+        here(rest).or_else(|| {
+            rest.match_indices('>')
+                .find_map(|(p, _)| self.find_qualified(here(&rest[..p])?, &rest[p + 1..]))
+        })
+    }
+
+    /// [`Netlist::find_def`] for a name that is not qualified.
+    fn find_plain_def(&self, name: &str) -> DefLookup {
         let Some(sym) = self.syms.get(name) else {
             return DefLookup::NotFound;
         };

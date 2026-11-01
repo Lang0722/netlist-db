@@ -672,6 +672,9 @@ impl Netlist {
         let e = &d.elements[i];
         let bound = w.last_binding.map(|t| &self.defs[t.idx()]);
         let pins_total = d.element_pins(e).len();
+        // port names only when the node count is the port count, as in
+        // `net_info`: else `n1`, `n2`, …
+        let port_names = bound.filter(|b| b.ports.len() == pins_total);
         let pins: Vec<PinNet> = d
             .element_pins(e)
             .iter()
@@ -681,10 +684,9 @@ impl Netlist {
                 role: match pin_role(e.kind, k) {
                     PinRole::Fixed(name) => name.to_owned(),
                     PinRole::Extra(n) => format!("e{n}"),
-                    PinRole::Port(p) => bound.and_then(|b| b.ports.get(p as usize)).map_or_else(
-                        || format!("port{}", p + 1),
-                        |&s| self.syms.name(s).to_owned(),
-                    ),
+                    PinRole::Port(p) => port_names
+                        .and_then(|b| b.ports.get(p as usize))
+                        .map_or_else(|| format!("n{}", p + 1), |&s| self.syms.name(s).to_owned()),
                     PinRole::Node(n) => format!("n{n}"),
                 },
                 net: self.syms.name(net).to_owned(),
@@ -700,26 +702,48 @@ impl Netlist {
         let callee = e.callee.map(|c| self.syms.name(c).to_owned());
         if let (ElemKind::Instance, None, Some(callee)) = (e.kind, bound, &callee) {
             caveats.push(format!(
-                "no definition of subckt `{callee}` is visible on this path (diagnostic `unresolved_subckt`)"
+                "no definition of subckt `{callee}` is visible on this path (diagnostic `unresolved_subckt`); its pins are listed as n1, n2, …"
+            ));
+        }
+        if let (Some(b), None) = (bound, port_names) {
+            caveats.push(format!(
+                "`{}` has {pins_total} nodes, but subckt `{}` has {} ports: HSPICE rejects the deck (diagnostic `port_count_mismatch`); its pins are listed as n1, n2, …",
+                self.syms.name(e.name),
+                self.def_display(w.last_binding.expect("bound")),
+                b.ports.len()
             ));
         }
         caveats.extend(self.path_caveats(&w));
+        caveats.extend(self.path_alter_caveats(&w));
+        // an R, C or L line as HSPICE reads the tokens after the nodes
+        let (model, params, params_total) = match self.rcl_reading(def, i) {
+            Some((model, params, why)) => {
+                caveats.extend(why);
+                let total = params.len();
+                let params = params.into_iter().take(MAX_LIMIT).collect();
+                (model, params, total)
+            }
+            None => (
+                e.model,
+                d.element_params(e)
+                    .iter()
+                    .take(MAX_LIMIT)
+                    .map(|p| self.name_text(p))
+                    .collect(),
+                d.element_params(e).len(),
+            ),
+        };
         Ok(ElementInfo {
             path: w.path,
             kind: e.kind.name().to_owned(),
             def: self.def_display(def),
             pins,
             pins_total,
-            model: e.model.map(|m| self.syms.name(m).to_owned()),
+            model: model.map(|m| self.syms.name(m).to_owned()),
             callee,
             binds_to: w.last_binding.map(|t| self.def_display(t)),
-            params: d
-                .element_params(e)
-                .iter()
-                .take(MAX_LIMIT)
-                .map(|p| self.name_text(p))
-                .collect(),
-            params_total: d.element_params(e).len(),
+            params,
+            params_total,
             loc: self.loc(e.loc),
             caveats,
         })

@@ -1,0 +1,13 @@
+{
+ "case": "node_dotted_collision",
+ "resistors": [],
+ "totals": {
+  "resistors": 3,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {
+  "merged_listing": "listing shows 0 resistors, statistics count 3"
+ }
+}

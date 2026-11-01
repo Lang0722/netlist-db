@@ -127,12 +127,17 @@ def _load(
         full = absolute(path)
     except ValueError as e:  # a NUL in the path
         return _error("bad_argument", f"bad path {path!r}: {e}")
+    title_line = (title_line or "").strip().lower() or "auto"
+    if title_line not in ("auto", "yes", "no"):
+        return _error(
+            "bad_argument", f"title_line `{title_line}` is not one of `auto`, `yes`, `no`"
+        )
     # names and sections in any letter case are the same
     key = (
         full,
         top.lower() if top else None,
         tuple((f, a.lower(), b.lower()) for f, a, b in overrides),
-        title_line.strip().lower(),
+        title_line,
     )
     with _lock:
         handle = _handle_of.get(key)
@@ -201,7 +206,7 @@ def list_subckts(
     cursor: Optional[str] = None,
 ) -> str:
     """The subckt definitions with ports, devices, `X` lines and `copies` (instances in the expanded hierarchy), paged. `filter`: a part of the name. `sort`: `name`, `copies` or `devices`."""
-    return _call(handle, "list_subckts", _opt(filter), sort, limit, _opt(cursor))
+    return _call(handle, "list_subckts", _opt(filter), _opt(sort) or "name", limit, _opt(cursor))
 
 
 @mcp.tool()
@@ -250,7 +255,7 @@ def net_info(
     cursor: Optional[str] = None,
 ) -> str:
     """The pins on net `net` in the instance `scope_path` (`""`: the top level), with their roles (MOSFET `d g s b`, `X` lines by port name), paged; DSPF parasitics of the net. `view`: `logical` (a DSPF net as one net, without parasitic R/C) or `physical` (the nodes as written). `net` can be an HSPICE full node name such as `x1.xm1.n1` with `scope_path` `""`: the answer gives the instance in `scope`."""
-    return _call(handle, "net_info", scope_path, net, view, limit, _opt(cursor))
+    return _call(handle, "net_info", scope_path, net, _opt(view) or "logical", limit, _opt(cursor))
 
 
 @mcp.tool()
@@ -264,7 +269,9 @@ def trace_net(
     cursor: Optional[str] = None,
 ) -> str:
     """Where net `net` of the instance `scope_path` goes through ports: `down` into instances, `up` to the parent, or `both`, up to `depth` steps, nearest first, paged. Ground and `.global` nets are not followed (they connect by name). `net` can be an HSPICE full node name such as `x1.xm1.n1` with `scope_path` `""`."""
-    return _call(handle, "trace_net", scope_path, net, direction, depth, limit, _opt(cursor))
+    return _call(
+        handle, "trace_net", scope_path, net, _opt(direction) or "down", depth, limit, _opt(cursor)
+    )
 
 
 def main() -> None:

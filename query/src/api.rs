@@ -492,7 +492,9 @@ pub struct ElementInfo {
     pub binds_to: Option<String>,
     /// The parameters as written (`r` for the R value, `dc` for a source,
     /// overrides of an `X` line, …), at most [`MAX_LIMIT`]; see
-    /// `params_total`.
+    /// `params_total`. An R, C or L line is read as HSPICE reads the tokens
+    /// after its nodes, as `resolve_element` does: `R1 1 0 rval 0.004`
+    /// with no `.model rval` is `r=rval`, `tc1=0.004`, with no model.
     pub params: Vec<NameText>,
     pub params_total: usize,
     pub loc: Loc,

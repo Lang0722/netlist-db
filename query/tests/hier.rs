@@ -232,6 +232,10 @@ fn golden_totals_all_cases() {
     // skips a statement that HSPICE counts in these cases, with an error
     // diagnostic that the summary notes.
     let skipped_with_error = ["cap_value_model"];
+    // an `X` line calls a subckt that a `.prot` region defines: the loader
+    // does not read the region, so the totals are a lower bound, with a
+    // summary note
+    let protected_lower_bound = ["prot_subckt"];
     let mut checked = 0;
     for entry in std::fs::read_dir(repo("golden/cases")).unwrap() {
         let dir = entry.unwrap().path();
@@ -256,6 +260,20 @@ fn golden_totals_all_cases() {
             .expanded_devices
             .clone()
             .unwrap_or_else(|| panic!("{case}: no totals: {:?}", s.expanded_note));
+        if protected_lower_bound.contains(&case.as_str()) {
+            let note = s.expanded_note.as_deref().unwrap_or_default();
+            assert!(
+                note.contains("lower bound") && note.contains(".prot"),
+                "{case}: {note}"
+            );
+            for (kind, n) in listing_counts(&case).unwrap() {
+                assert!(
+                    got.get(kind).copied().unwrap_or(0) <= n,
+                    "{case}: {kind} ({got:?})"
+                );
+            }
+            continue;
+        }
         // HSPICE counts the parasitic R and C of an included DSPF
         // (`dspf_included`); the summary gives them apart (Task 10)
         for (kind, n) in s.expanded_parasitics.clone().unwrap_or_default() {
@@ -2727,4 +2745,269 @@ fn subckt_text_not_found() {
         net.subckt_text("leaf", &bad),
         Err(QueryError::BadArgument(_))
     ));
+}
+
+// ---- bug-hunt round 2 (regressions) ----
+
+/// (name, text) of the parameters of an `element_info` answer.
+fn param_texts(net: &Netlist, path: &str) -> Vec<(String, String)> {
+    net.element_info(path)
+        .unwrap()
+        .params
+        .into_iter()
+        .map(|p| (p.name, p.text))
+        .collect()
+}
+
+fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+    v.iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
+}
+
+#[test]
+fn lib_section_lines_after_blank_lines() {
+    // blank and space-only lines before `.lib tt` counted in the line numbers
+    let deck = write_deck(
+        "lib_blank_lines",
+        &[
+            ("main.sp", "* top\n.lib 'lib.l' tt\nx1 a b res\n.end\n"),
+            (
+                "lib.l",
+                "* lib file\n\n   \n\t\n.lib tt\n.subckt res a b\nr1 a b 1k\n.ends res\n.endl tt\n",
+            ),
+        ],
+    );
+    let net = load(&deck.main);
+    let t = net.subckt_text("res", &all_page()).unwrap();
+    assert_eq!((t.loc.line, t.first_line), (6, 6));
+    assert_eq!(t.lines.items, [".subckt res a b", "r1 a b 1k", ".ends res"]);
+    assert_eq!(net.element_info("x1.r1").unwrap().loc.line, 7);
+}
+
+#[test]
+fn subckt_text_ends_with_continuation_lines() {
+    let (_deck, net) = load_text(
+        "ends_plus",
+        "* t\n.subckt buf a y\nr1 a y 1k\n.ends\n+ buf\n* after\nx2 1 2 buf\n.end\n",
+    );
+    let t = net.subckt_text("buf", &all_page()).unwrap();
+    assert_eq!(
+        t.lines.items,
+        [".subckt buf a y", "r1 a y 1k", ".ends", "+ buf"]
+    );
+}
+
+#[test]
+fn subckt_text_of_a_duplicate_definition() {
+    let net = load(repo("golden/cases/dup_subckt/deck.sp"));
+    let t = net.subckt_text("inv", &all_page()).unwrap();
+    assert!(
+        t.caveats.iter().any(|c| c.contains("defined again")),
+        "{:?}",
+        t.caveats
+    );
+    assert_eq!(
+        t.caveats,
+        net.subckt_info("inv", &all_page()).unwrap().caveats
+    );
+}
+
+#[test]
+fn subckt_text_cursor_past_i32() {
+    let net = load(repo("golden/cases/hier_counts/deck.sp"));
+    let far = Page {
+        limit: 5,
+        cursor: Some("3000000000".to_owned()),
+    };
+    let t = net.subckt_text("leaf", &far).unwrap();
+    assert!(t.lines.items.is_empty());
+    assert_eq!(t.first_line, 5 + 3_000_000_000);
+}
+
+#[test]
+fn alter_changes_have_caveats_in_every_query() {
+    let (_deck, net) = load_text(
+        "alter_caveats",
+        "* t\n.subckt cell a b\nr1 a b 1k\n.ends\nx1 1 0 cell\nr2 1 0 2k\nv1 1 0 1\n.op\n.alter\nr2 1 0 5k\n.alter\n.subckt cell a b\nr1 a b 9k\n.ends\n.alter\nx1 1 0 cell\n.end\n",
+    );
+    let has = |caveats: &[String], part: &str| caveats.iter().any(|c| c.contains(part));
+    let r2 = net.element_info("r2").unwrap();
+    assert!(has(&r2.caveats, "changed by .alter #1"), "{:?}", r2.caveats);
+    let r1 = net.element_info("x1.r1").unwrap();
+    assert!(
+        has(&r1.caveats, "defined again by .alter #2"),
+        "{:?}",
+        r1.caveats
+    );
+    let info = net.subckt_info("cell", &all_page()).unwrap();
+    assert!(
+        has(&info.caveats, "defined again by .alter #2"),
+        "{:?}",
+        info.caveats
+    );
+    let text = net.subckt_text("cell", &all_page()).unwrap();
+    assert!(
+        has(&text.caveats, "defined again by .alter #2"),
+        "{:?}",
+        text.caveats
+    );
+    let inst = net.instances_of("cell", &all_page()).unwrap();
+    assert!(
+        has(&inst.items[0].caveats, "changed by .alter #3"),
+        "{:?}",
+        inst.items[0].caveats
+    );
+    // no `.alter` block: no such caveat
+    let plain = load(repo("golden/cases/hier_counts/deck.sp"));
+    assert!(!has(
+        &plain.element_info("x1.rmk_blk").unwrap().caveats,
+        ".alter"
+    ));
+}
+
+#[test]
+fn subckt_names_with_angle_brackets() {
+    let (deck, net) = load_text(
+        "angle_subckt",
+        "* t\n.subckt bus<1> a b\nr1 a b 3\n.ends\n.subckt outer a b\n.subckt in<2> a b\nr2 a b 4\n.ends\nxi a b in<2>\n.ends\nxb 1 0 bus<1>\nxo 1 0 outer\nv1 1 0 1\n.end\n",
+    );
+    assert_eq!(
+        net.subckt_info("bus<1>", &all_page()).unwrap().name,
+        "bus<1>"
+    );
+    assert_eq!(
+        net.subckt_text("BUS<1>", &all_page()).unwrap().lines.total,
+        3
+    );
+    assert_eq!(net.instances_of("bus<1>", &all_page()).unwrap().total, 1);
+    assert_eq!(
+        net.subckt_info("outer>in<2>", &all_page()).unwrap().name,
+        "outer>in<2>"
+    );
+    assert_eq!(
+        net.subckt_info("in<2>", &all_page()).unwrap().name,
+        "outer>in<2>"
+    );
+    let top = load_top(&deck.main, "bus<1>");
+    assert_eq!(top.summary().root, "subckt:bus<1>");
+    // a qualified name still works, and a wrong one is not found
+    assert!(matches!(
+        net.subckt_info("outer>nope", &all_page()),
+        Err(QueryError::NotFound { .. })
+    ));
+}
+
+#[test]
+fn x_line_into_a_protected_subckt_is_a_warning() {
+    // HSPICE runs the deck (golden `prot_subckt`)
+    let net = load(repo("golden/cases/prot_subckt/deck.sp"));
+    let unres = with_code(&net, "unresolved_subckt");
+    assert_eq!(unres.len(), 1, "{unres:?}");
+    assert_eq!(unres[0].level, Level::Warning);
+    assert!(
+        unres[0].message.contains("`.prot` region"),
+        "{}",
+        unres[0].message
+    );
+    let s = net.summary();
+    assert_eq!(s.errors, 0);
+    let note = s.expanded_note.unwrap_or_default();
+    assert!(
+        note.contains("prot_subckt") && !note.contains("rejects"),
+        "{note}"
+    );
+    // with no `.prot` region the same line is an Error
+    let (_deck, plain) = load_text("unres_plain", "* t\nv1 1 0 1\nx1 1 0 secret\n.end\n");
+    assert_eq!(
+        with_code(&plain, "unresolved_subckt")[0].level,
+        Level::Error
+    );
+}
+
+#[test]
+fn element_info_pin_roles_match_net_info() {
+    let (_deck, net) = load_text(
+        "pin_roles",
+        "* t\n.subckt cell a b c\nr1 a b 1k\nr2 b c 1k\n.ends\nx1 n1 n2 cell\nx2 n1 n2 n3 n4 cell\nx3 n1 n2 n3 cell\nx4 n1 n2 nowhere\nr9 n1 0 1\n.end\n",
+    );
+    let roles = |p: &str| -> Vec<String> {
+        net.element_info(p)
+            .unwrap()
+            .pins
+            .into_iter()
+            .map(|p| p.role)
+            .collect()
+    };
+    assert_eq!(roles("x1"), ["n1", "n2"]);
+    assert_eq!(roles("x2"), ["n1", "n2", "n3", "n4"]);
+    assert_eq!(roles("x3"), ["a", "b", "c"]);
+    assert_eq!(roles("x4"), ["n1", "n2"]);
+    let x1 = net.element_info("x1").unwrap();
+    assert!(
+        x1.caveats.iter().any(|c| c.contains("listed as n1, n2")),
+        "{:?}",
+        x1.caveats
+    );
+    let x4 = net.element_info("x4").unwrap();
+    assert!(
+        x4.caveats.iter().any(|c| c.contains("listed as n1, n2")),
+        "{:?}",
+        x4.caveats
+    );
+    // net_info names the same pins in the same way
+    let on_n1 = net
+        .net_info("", "n1", netlist_query::NetView::Logical, &all_page())
+        .unwrap();
+    for c in on_n1
+        .connections
+        .items
+        .iter()
+        .filter(|c| c.kind == "instance")
+    {
+        let want = if c.element == "x3" { "a" } else { "n1" };
+        assert_eq!(c.pin_role, want, "{}", c.element);
+    }
+}
+
+#[test]
+fn rcl_lines_read_as_hspice_reads_them() {
+    // `r1 1 0 rval 0.004` with `.param rval=2k` and no `.model rval`: the
+    // value, then TC1 (golden `rcl_param_tc`)
+    let net = load(repo("golden/cases/rcl_param_tc/deck.sp"));
+    let r1 = net.element_info("r1").unwrap();
+    assert_eq!(r1.model, None);
+    assert_eq!(
+        param_texts(&net, "r1"),
+        pairs(&[("r", "rval"), ("tc1", "0.004")])
+    );
+    assert_eq!(
+        param_texts(&net, "r3"),
+        pairs(&[("r", "rval"), ("tc1", "0.004"), ("tc2", "1e-5")])
+    );
+    assert_eq!(param_texts(&net, "r2"), pairs(&[("r", "rval")]));
+    // `l2 1 12 lval lmod`: the value, then the model (golden `ind_name_model`)
+    let net = load(repo("golden/cases/ind_name_model/deck.sp"));
+    let l2 = net.element_info("l2").unwrap();
+    assert_eq!(l2.model.as_deref(), Some("lmod"));
+    assert_eq!(param_texts(&net, "l2"), pairs(&[("l", "lval")]));
+    // subckt_info gives the same models
+    let (_deck, net) = load_text(
+        "rcl_models",
+        "* t\n.param rval=2k\n.model rmod r\n.subckt cell a b\nr1 a b rval 0.004\nr2 a b rval r=5k\nr3 a b rmod 1k\n.ends\nx1 1 0 cell\nv1 1 0 1\n.end\n",
+    );
+    let info = net.subckt_info("cell", &all_page()).unwrap();
+    let models: Vec<Option<String>> = info
+        .elements
+        .items
+        .iter()
+        .map(|e| e.model.clone())
+        .collect();
+    assert_eq!(models, [None, None, Some("rmod".to_owned())]);
+    assert_eq!(info.devices_by_type[0].models, ["rmod"]);
+    assert_eq!(param_texts(&net, "x1.r2"), pairs(&[("r", "rval")]));
+    assert_eq!(
+        net.element_info("x1.r3").unwrap().model.as_deref(),
+        Some("rmod")
+    );
 }
