@@ -274,6 +274,12 @@ pub(crate) struct Def {
     /// The definition this one is written inside; `None` at the top level.
     pub(crate) parent: Option<DefId>,
     pub(crate) loc: LocIdx,
+    /// The text of the definition, from the `.subckt` to the end of the
+    /// `.ends` (or, with no `.ends`, to the `.end` line or the end of the
+    /// file); empty for the root.
+    pub(crate) text: TextRef,
+    /// The line of the start of `text`.
+    pub(crate) text_line: u32,
     /// The `.alter` block that holds the definition; `None` for the first
     /// run.
     pub(crate) alter: Option<u32>,

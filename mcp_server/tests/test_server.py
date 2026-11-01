@@ -29,6 +29,12 @@ def test_load_then_list():
     rows = call("list_subckts", handle=h, sort="copies")
     assert [x["name"] for x in rows["items"]][:1] == ["leaf"]
     assert call("subckt_info", handle=h, name="leaf")["copies"] == 17
+    t = call("subckt_text", handle=h, name="mid", limit=2)
+    assert t["first_line"] == 9
+    assert t["lines"]["items"] == [".subckt mid a b", "rmk_mid a b 2k"]
+    assert t["lines"]["total"] == 10
+    t2 = call("subckt_text", handle=h, name="mid", cursor=t["lines"]["next_cursor"])
+    assert t2["first_line"] == 11 and t2["lines"]["items"][-1] == ".ends"
 
 
 def test_handle_reuse():
@@ -84,7 +90,7 @@ def test_tools_have_docs():
     names = {t.name for t in tools}
     assert names == {
         "load_netlist", "unload_netlist", "summary", "diagnostics", "list_subckts",
-        "subckt_info", "instances_of", "element_info", "resolve_param",
+        "subckt_info", "subckt_text", "instances_of", "element_info", "resolve_param",
         "resolve_element", "net_info", "trace_net",
     }
     for t in tools:

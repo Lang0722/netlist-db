@@ -2575,3 +2575,156 @@ fn answer_lists_are_capped() {
     let r1 = info(&net, "x1.r1");
     assert_eq!((r1.params.len(), r1.params_total), (500, n + 1));
 }
+
+/// The lines, the first line number and the caveats of the whole text of
+/// subckt `name`.
+fn text_of(net: &Netlist, name: &str) -> (u32, Vec<String>, Vec<String>) {
+    let t = net.subckt_text(name, &all_page()).unwrap();
+    assert_eq!(t.lines.total, t.lines.items.len());
+    assert_eq!(t.first_line, t.loc.line);
+    (t.first_line, t.lines.items, t.caveats)
+}
+
+#[test]
+fn subckt_text_is_the_text_as_written() {
+    let (_deck, net) = load_text(
+        "subckt_text_written",
+        "* title\r\n.param p=1\r\n* a comment before\r\n.SUBCKT Inv a b wn=1u   $ header\r\n+ wp=2u\r\nr1 a b 1k\r\n* body comment\r\n.ENDS Inv $ end comment\r\n\r\nx1 1 0 inv\r\n.end\r\n",
+    );
+    let t = net.subckt_text("INV", &all_page()).unwrap();
+    assert_eq!(t.name, net.subckt_info("inv", &all_page()).unwrap().name);
+    assert!(t.loc.file.ends_with("main.sp"), "{}", t.loc.file);
+    let (line, lines, caveats) = text_of(&net, "inv");
+    assert_eq!(line, 4);
+    assert_eq!(
+        lines,
+        [
+            ".SUBCKT Inv a b wn=1u   $ header",
+            "+ wp=2u",
+            "r1 a b 1k",
+            "* body comment",
+            ".ENDS Inv $ end comment",
+        ]
+    );
+    assert!(caveats.is_empty(), "{caveats:?}");
+}
+
+#[test]
+fn subckt_text_nested_and_paged() {
+    let net = load(repo("golden/cases/nested_def/deck.sp"));
+    let (line, lines, _) = text_of(&net, "outer>cell");
+    assert_eq!(line, 6);
+    assert_eq!(lines, [".subckt cell a b", "rc a b 2", ".ends"]);
+    let (line, lines, _) = text_of(&net, "outer");
+    assert_eq!(line, 5);
+    assert_eq!(lines.len(), 10);
+    assert_eq!(lines[0], ".subckt outer a b");
+    assert_eq!(lines[9], ".ends");
+    // the nested definitions are part of the text
+    assert_eq!(lines[1], ".subckt cell a b");
+    let page = |cursor: Option<&str>| Page {
+        limit: 4,
+        cursor: cursor.map(str::to_owned),
+    };
+    let p1 = net.subckt_text("outer", &page(None)).unwrap();
+    assert_eq!((p1.first_line, p1.lines.items.len()), (5, 4));
+    assert_eq!(p1.lines.next_cursor.as_deref(), Some("4"));
+    let p3 = net.subckt_text("outer", &page(Some("8"))).unwrap();
+    assert_eq!(p3.first_line, 13);
+    assert_eq!(p3.lines.items, ["xd a b deep", ".ends"]);
+    assert_eq!(p3.lines.next_cursor, None);
+    assert_eq!(p3.loc.line, 5);
+}
+
+#[test]
+fn subckt_text_macro_eom() {
+    let net = load(repo("golden/cases/macro_eom/deck.sp"));
+    let (line, lines, caveats) = text_of(&net, "inv");
+    assert_eq!(line, 2);
+    assert_eq!(lines, [".macro inv a b rv=3", "r1 a b rv", ".eom"]);
+    assert!(caveats.is_empty());
+}
+
+#[test]
+fn subckt_text_without_ends() {
+    let (_deck, net) = load_text(
+        "subckt_text_no_ends",
+        "* title\n.subckt open a b\nr1 a b 1\n* trailing comment\n\n   \n.end\nafter the end\n",
+    );
+    let (line, lines, caveats) = text_of(&net, "open");
+    assert_eq!(line, 2);
+    assert_eq!(
+        lines,
+        [".subckt open a b", "r1 a b 1", "* trailing comment"]
+    );
+    assert!(
+        caveats.iter().any(|c| c.contains("missing_ends")),
+        "{caveats:?}"
+    );
+    // no `.end` either: the text goes to the end of the file
+    let (_deck, net) = load_text("subckt_text_eof", "* title\n.subckt open a b\nr1 a b 1\n\n");
+    let (_, lines, caveats) = text_of(&net, "open");
+    assert_eq!(lines, [".subckt open a b", "r1 a b 1"]);
+    assert_eq!(caveats.len(), 1);
+}
+
+#[test]
+fn subckt_text_include_lines() {
+    let net = load(repo("golden/cases/include_in_subckt/deck.sp"));
+    let (_, lines, caveats) = text_of(&net, "holder");
+    assert_eq!(
+        lines,
+        [
+            ".subckt holder a b pv=3",
+            ".include 'inc.sp'",
+            "r0 a b 1",
+            ".ends"
+        ]
+    );
+    assert_eq!(caveats.len(), 1);
+    assert!(
+        caveats[0].contains("1 `.include` or `.lib` line:"),
+        "{caveats:?}"
+    );
+}
+
+#[test]
+fn subckt_text_in_a_lib_section() {
+    let deck = write_deck(
+        "subckt_text_lib",
+        &[
+            ("main.sp", "* title\n.lib 'lib.sp' tt\nx1 1 0 cell\n.end\n"),
+            (
+                "lib.sp",
+                "* cells\n.lib ff\n.subckt cell a b\nr1 a b 2\n.ends\n.endl ff\n.lib tt\n.subckt cell a b\nr1 a b 1\n.ends cell\n.endl tt\n",
+            ),
+        ],
+    );
+    let net = load(&deck.main);
+    let t = net.subckt_text("cell", &all_page()).unwrap();
+    assert!(t.loc.file.ends_with("lib.sp"), "{}", t.loc.file);
+    assert_eq!(t.first_line, 8);
+    assert_eq!(
+        t.lines.items,
+        [".subckt cell a b", "r1 a b 1", ".ends cell"]
+    );
+}
+
+#[test]
+fn subckt_text_not_found() {
+    let net = load(repo("golden/cases/hier_counts/deck.sp"));
+    match net.subckt_text("lef", &all_page()) {
+        Err(QueryError::NotFound { suggestions, .. }) => {
+            assert!(suggestions.iter().any(|s| s == "leaf"), "{suggestions:?}")
+        }
+        other => panic!("{other:?}"),
+    }
+    let bad = Page {
+        limit: 5,
+        cursor: Some("x".to_owned()),
+    };
+    assert!(matches!(
+        net.subckt_text("leaf", &bad),
+        Err(QueryError::BadArgument(_))
+    ));
+}

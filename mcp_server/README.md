@@ -47,6 +47,7 @@ claude mcp add netlist-db -- /path/to/netlist-db/.venv/bin/python -m netlist_mcp
 | `diagnostics(handle, level, limit, cursor)` | Load and hierarchy diagnostics |
 | `list_subckts(handle, filter, sort, limit, cursor)` | Definitions with ports, devices, `X` lines and copies |
 | `subckt_info(handle, name, limit, cursor)` | One definition and a page of its elements |
+| `subckt_text(handle, name, limit, cursor)` | The original text of one definition, `.subckt` to `.ends`, as a page of lines |
 | `instances_of(handle, name, limit, cursor)` | The `X` lines that call a definition |
 | `element_info(handle, path)` | One element by its instance path |
 | `resolve_param(handle, scope_path, name)` | A parameter value in a scope, with its chain |

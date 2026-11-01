@@ -58,6 +58,9 @@ class Netlist:
     def subckt_info(self, name: str, limit: int = 50, cursor: Optional[str] = None) -> dict:
         return json.loads(self._n.subckt_info(name, _i64(limit), cursor))
 
+    def subckt_text(self, name: str, limit: int = 200, cursor: Optional[str] = None) -> dict:
+        return json.loads(self._n.subckt_text(name, _i64(limit), cursor))
+
     def instances_of(self, name: str, limit: int = 50, cursor: Optional[str] = None) -> dict:
         return json.loads(self._n.instances_of(name, _i64(limit), cursor))
 

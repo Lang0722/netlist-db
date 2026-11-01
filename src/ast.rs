@@ -152,6 +152,11 @@ pub struct SubcktBuilder {
     pub ports: Vec<Span>,
     pub params: Vec<KeyValueBuilder>,
     pub ast: ASTBuilder,
+    /// The text of the definition in its file: from the `.` of `.subckt`
+    /// (or `.macro`) to the end of the `.ends` (or `.eom`) statement. With
+    /// no `.ends`, to the `.end` line or to the end of the input.
+    /// `line_num` is the line of the `.subckt`.
+    pub text: Span,
 }
 
 /// The `.include` and `.lib file tt` will be directly evaluated

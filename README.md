@@ -121,7 +121,8 @@ questions about it, in JSON, in pages:
 - Which subcircuits the deck defines, and how many instances each one has
   in the expanded hierarchy (`list_subckts`, `subckt_info`, `instances_of`).
 - What is inside a subcircuit: ports, defaults, `.param` lines, devices by
-  type, the subcircuits it calls (`subckt_info`).
+  type, the subcircuits it calls (`subckt_info`), and its original text,
+  from `.subckt` to `.ends` (`subckt_text`).
 - The value of a parameter or of an element parameter, through the
   hierarchy, with the chain of definitions that gave it (`resolve_param`,
   `resolve_element`).

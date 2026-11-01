@@ -1001,6 +1001,8 @@ impl<'p> Lower<'p> {
         let name = self.net.syms.intern(name_str);
         let id = DefId(u32::try_from(self.net.defs.len()).expect("fewer than 2^32 definitions"));
         let mut d = new_def(name, (parent != ROOT).then_some(parent), loc, self.alter);
+        d.text = tref(pid as u32, s.text.start, s.text.end);
+        d.text_line = s.text.line_num;
         d.ports = s
             .ports
             .iter()
@@ -1632,6 +1634,8 @@ fn new_def(name: Sym, parent: Option<DefId>, loc: LocIdx, alter: Option<u32>) ->
         nested: Vec::new(),
         parent,
         loc,
+        text: tref(loc.file, 0, 0),
+        text_line: 0,
         alter,
         dup_of: None,
         has_dup: false,

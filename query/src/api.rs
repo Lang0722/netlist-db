@@ -412,6 +412,25 @@ pub struct SubcktInfo {
     pub parasitics: Option<DefParasitics>,
 }
 
+/// The answer of [`crate::Netlist::subckt_text`]: the text of a
+/// definition, as written in its file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SubcktText {
+    /// The qualified name (see [`SubcktRow::name`]).
+    pub name: String,
+    /// The file, and the line of the `.subckt` (or `.macro`).
+    pub loc: Loc,
+    /// The line number of the first line of this page.
+    pub first_line: u32,
+    /// A page of the lines, from the `.subckt` line to the `.ends` line,
+    /// without line ends. The lines of nested definitions are included.
+    /// `total` is the number of lines.
+    pub lines: Paged<String>,
+    /// What the text does not show (the text of `.include` and `.lib`
+    /// files), or a definition with no `.ends`.
+    pub caveats: Vec<String>,
+}
+
 /// An `X` line that calls a definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InstanceRef {

@@ -171,15 +171,22 @@ impl<'a> Level<'a> {
         }
     }
 
-    /// The finished `.subckt` of a body level.
-    fn into_subckt(mut self) -> SubcktBuilder {
+    /// The finished `.subckt` of a body level, whose text ends at byte
+    /// `end`.
+    fn into_subckt(mut self, end: usize) -> SubcktBuilder {
         self.flush();
         let open = self.open.expect("a body level");
+        let header = open.body.header;
         SubcktBuilder {
             name: open.name,
             ports: open.ports,
             params: open.params,
             ast: self.ast,
+            text: Span {
+                start: header.location_offset(),
+                end,
+                line_num: header.location_line(),
+            },
         }
     }
 }
@@ -215,8 +222,8 @@ pub fn ast<'a>(
         (i, step) = local_ast(i, body, blocks, &mut level.local);
         match step {
             Step::Open(open) => levels.push(Level::new(Some(open))),
-            Step::Close => {
-                let subckt = levels.pop().expect("a body level").into_subckt();
+            Step::Close { end } => {
+                let subckt = levels.pop().expect("a body level").into_subckt(end);
                 let parent = levels.last_mut().expect("the file level");
                 parent.local.subckt.push(subckt);
             }
@@ -258,17 +265,18 @@ pub fn ast<'a>(
                     line: pos.map_or(0, |p| p.line_num),
                     lines: statement_lines(i.fragment()),
                 };
-                return finish(levels, Some(after_end));
+                let end = pos.map_or(i.location_offset(), |p| p.start);
+                return finish(levels, Some(after_end), end);
             }
-            Step::Eof => return finish(levels, None),
+            Step::Eof => return finish(levels, None, i.location_offset()),
         }
     }
 }
 
-/// The AST of a file whose parse stopped with the open levels `levels`
-/// (the file level first): the bodies with no `.ends` are closed, each
-/// with an error at its `.subckt`.
-fn finish(mut levels: Vec<Level<'_>>, after_end: Option<AfterEnd>) -> ASTBuilder {
+/// The AST of a file whose parse stopped at byte `end` with the open levels
+/// `levels` (the file level first): the bodies with no `.ends` are closed,
+/// each with an error at its `.subckt`, and their text ends at `end`.
+fn finish(mut levels: Vec<Level<'_>>, after_end: Option<AfterEnd>, end: usize) -> ASTBuilder {
     // the innermost first
     while levels.len() > 1 {
         let mut level = levels.pop().expect("a body level");
@@ -280,7 +288,7 @@ fn finish(mut levels: Vec<Level<'_>>, after_end: Option<AfterEnd>) -> ASTBuilder
             }
             .record(body.header),
         );
-        let subckt = level.into_subckt();
+        let subckt = level.into_subckt(end);
         let parent = levels.last_mut().expect("the file level");
         parent.local.subckt.push(subckt);
     }

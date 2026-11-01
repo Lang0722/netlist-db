@@ -211,6 +211,12 @@ def subckt_info(handle: str, name: str, limit: int = 50, cursor: Optional[str] =
 
 
 @mcp.tool()
+def subckt_text(handle: str, name: str, limit: int = 200, cursor: Optional[str] = None) -> str:
+    """The original text of one subckt, from its `.subckt` line to its `.ends` line, as a page of lines. `first_line` is the file line number of the first line of the page. The text of `.include` files is not shown. `outer>inner` names a nested subckt."""
+    return _call(handle, "subckt_text", name, limit, _opt(cursor))
+
+
+@mcp.tool()
 def instances_of(handle: str, name: str, limit: int = 50, cursor: Optional[str] = None) -> str:
     """The `X` lines that call subckt `name`, with the definition that holds each and its copies, paged."""
     return _call(handle, "instances_of", name, limit, _opt(cursor))

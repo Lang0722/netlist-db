@@ -53,7 +53,7 @@ use crate::{
     DefLookup, Netlist,
     api::{
         self, ChildCall, DeviceGroup, ElementBrief, InstanceRef, Level, MAX_LIMIT, NameText, Page,
-        Paged, QueryError, SubcktInfo, SubcktRow, SubcktSort,
+        Paged, QueryError, SubcktInfo, SubcktRow, SubcktSort, SubcktText,
     },
     intern::Sym,
     model::{Def, DefId, Diag, ElemKind, Element, LocIdx, ParamDef, ROOT, Range32, Root},
@@ -64,6 +64,28 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     hash::{BuildHasherDefault, Hasher},
 };
+
+/// An iterator whose length is known, for [`api::page`].
+struct Known<I> {
+    it: I,
+    left: usize,
+}
+
+impl<I: Iterator> Iterator for Known<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<I::Item> {
+        let item = self.it.next()?;
+        self.left = self.left.saturating_sub(1);
+        Some(item)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, Some(self.left))
+    }
+}
+
+impl<I: Iterator> ExactSizeIterator for Known<I> {}
 
 /// No node: an `X` line with no visible definition, or the end of a list.
 const NONE: u32 = u32::MAX;
@@ -2355,6 +2377,69 @@ impl Netlist {
             caveats,
             elements,
             parasitics: self.def_parasitics(id),
+        })
+    }
+
+    /// The text of subckt `name` as written, from its `.subckt` line to
+    /// its `.ends` line, as a page of lines. The text stops at the line of
+    /// its last non-blank byte, so a definition with no `.ends` stops
+    /// before the `.end` line.
+    pub fn subckt_text(&self, name: &str, page: &Page) -> Result<SubcktText, QueryError> {
+        let id = self.subckt_by_name(name)?;
+        let def = &self.defs[id.idx()];
+        let file = &self.files[def.text.file as usize].text;
+        let (from, to) = (def.text.start as usize, def.text.end as usize);
+        let start = file[..from].rfind('\n').map_or(0, |n| n + 1);
+        let last = from + file[from..to].trim_end().len();
+        let end = file[last..].find('\n').map_or(file.len(), |n| last + n);
+        let text = &file[start..end];
+        let total = text.matches('\n').count() + 1;
+        let lines = Known {
+            it: text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l)),
+            left: total,
+        };
+        let lines = api::page(lines, page)?.map(str::to_owned);
+        let offset = page
+            .cursor
+            .as_deref()
+            .map_or(0, |c| c.trim().parse().unwrap_or(0));
+        let mut caveats = Vec::new();
+        let loc = LocIdx {
+            file: def.text.file,
+            line: def.text_line,
+        };
+        if self
+            .diags
+            .iter()
+            .any(|d| d.code == "missing_ends" && d.loc == Some(loc))
+        {
+            caveats.push(
+                "The definition has no `.ends` (diagnostic `missing_ends`): the text goes to the `.end` line or to the end of the file".to_owned(),
+            );
+        }
+        let includes = text
+            .split('\n')
+            .filter(|l| {
+                let l = l.trim_start().as_bytes();
+                [&b".inc"[..], b".lib"]
+                    .iter()
+                    .any(|k| l.len() >= k.len() && l[..k.len()].eq_ignore_ascii_case(k))
+            })
+            .count();
+        if includes > 0 {
+            caveats.push(format!(
+                "The text has {includes} `.include` or `.lib` line{}: this answer does not show the text of those files. `subckt_info` gives the elements that they add",
+                if includes == 1 { "" } else { "s" }
+            ));
+        }
+        Ok(SubcktText {
+            name: self.def_display(id),
+            loc: self.loc(loc),
+            first_line: def
+                .text_line
+                .saturating_add(u32::try_from(offset).unwrap_or(u32::MAX)),
+            lines,
+            caveats,
         })
     }
 

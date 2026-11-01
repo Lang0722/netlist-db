@@ -137,6 +137,19 @@ impl Netlist {
         })
     }
 
+    #[pyo3(signature = (name, limit=200, cursor=None))]
+    fn subckt_text(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        limit: i64,
+        cursor: Option<String>,
+    ) -> String {
+        run(py, || {
+            answer(page(limit, cursor).and_then(|p| self.inner.subckt_text(name, &p)))
+        })
+    }
+
     #[pyo3(signature = (name, limit=50, cursor=None))]
     fn instances_of(
         &self,

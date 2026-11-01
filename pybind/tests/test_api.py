@@ -44,6 +44,12 @@ def test_counts_match_rust():
     info = net.subckt_info("leaf")
     assert info["copies"] == 17
     assert net.instances_of("blk")["total"] == 2
+    t = net.subckt_text("leaf")
+    assert t["first_line"] == t["loc"]["line"] == 5
+    assert t["lines"]["items"] == [
+        ".subckt leaf a b", "rmk_leaf a b 1k", "mn a a b b nch w=1u l=1u", ".ends",
+    ]
+    assert t["caveats"] == []
 
 
 def test_resolve_param_chain():

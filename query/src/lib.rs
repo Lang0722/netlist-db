@@ -27,7 +27,7 @@ pub use api::{
     ChainStep, ChildCall, Conn, DEFAULT_LIMIT, DefParasitics, DeviceGroup, Diagnostic, DspfFile,
     ElementBrief, ElementInfo, ElementParams, Hop, InstanceRef, Level, LoadError, Loc, MAX_LIMIT,
     NameText, NetInfo, NetTrace, NetView, Page, Paged, Parasitics, PinNet, QueryError, Resolved,
-    StepKind, SubcktInfo, SubcktRow, SubcktSort, Summary, TraceDir,
+    StepKind, SubcktInfo, SubcktRow, SubcktSort, SubcktText, Summary, TraceDir,
 };
 pub use netlist_db::{LibOverride, TitleLine};
 
