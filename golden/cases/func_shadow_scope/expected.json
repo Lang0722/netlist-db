@@ -1,0 +1,40 @@
+{
+ "case": "func_shadow_scope",
+ "resistors": [
+  {
+   "path": "r3",
+   "value": 1000.0
+  },
+  {
+   "path": "r5",
+   "value": 4000.0
+  },
+  {
+   "path": "x1.rm",
+   "value": 16000.0
+  },
+  {
+   "path": "x2.rs",
+   "value": 7000.0
+  },
+  {
+   "path": "x4.rk",
+   "value": 1000.0
+  },
+  {
+   "path": "x6.rd",
+   "value": 8000.0
+  },
+  {
+   "path": "x2.xk.rk",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 7,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 5
+ },
+ "extra": {}
+}

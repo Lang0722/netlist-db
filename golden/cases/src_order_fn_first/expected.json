@@ -1,0 +1,15 @@
+{
+ "case": "src_order_fn_first",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) Undefined parameter or function definition \"dc\" for v1. Please enter a defined name.",
+  "order": "function_then_dc rejected",
+  "warning": "**warning** Too many parameters in power supply, ignored."
+ }
+}

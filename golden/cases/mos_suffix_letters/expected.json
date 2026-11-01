@@ -1,0 +1,18 @@
+{
+ "case": "mos_suffix_letters",
+ "resistors": [],
+ "totals": {
+  "resistors": 0,
+  "capacitors": 0,
+  "mosfets": 2,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "m1": {
+   "l": 2e-06,
+   "w": 1e-06
+  },
+  "token_2umos_read_as": 2e-06,
+  "source": ".option list l drawn 2.0000u / w drawn 1.0000u for m1 and m2; .op beta 50.0000u for both; no warning"
+ }
+}

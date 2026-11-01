@@ -1,0 +1,52 @@
+{
+ "case": "func_sticky_more_local",
+ "resistors": [
+  {
+   "path": "x1.xl.rc",
+   "value": 3000.0
+  },
+  {
+   "path": "x2.xl.rf",
+   "value": 2000.0
+  },
+  {
+   "path": "x2.xl.rg",
+   "value": 5000.0
+  },
+  {
+   "path": "x3.xl.rf",
+   "value": 2000.0
+  },
+  {
+   "path": "x3.xl.rg",
+   "value": 7000.0
+  },
+  {
+   "path": "x4.xl.rs",
+   "value": 2000.0
+  },
+  {
+   "path": "x5.xl.rs",
+   "value": 2000.0
+  },
+  {
+   "path": "x0.xm.xl.rc",
+   "value": 2000.0
+  },
+  {
+   "path": "x4.xl.xk.rn",
+   "value": 1000.0
+  },
+  {
+   "path": "x5.xl.xk.rk",
+   "value": 3000.0
+  }
+ ],
+ "totals": {
+  "resistors": 10,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 15
+ },
+ "extra": {}
+}

@@ -1,0 +1,13 @@
+{
+ "case": "hier_model_callee",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:4) Definition of model/subckt \"rmod\" is not found for the element \"x1\". Please specify a defined model/subckt name."
+ }
+}

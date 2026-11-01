@@ -1,0 +1,22 @@
+{
+ "case": "bjt_area",
+ "resistors": [],
+ "totals": {
+  "resistors": 0,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "bjts": 3,
+  "positional_after_model": [
+   "area"
+  ],
+  "ic": {
+   "q1": 0.0001360873,
+   "q2": 6.80436e-05,
+   "q3": 0.0001360873
+  },
+  "source": ".op bipolar ic at vbe 0.7, vce 1; model row qmod for q1"
+ }
+}

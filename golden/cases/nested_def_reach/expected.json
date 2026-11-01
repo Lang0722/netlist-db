@@ -1,0 +1,26 @@
+{
+ "case": "nested_def_reach",
+ "resistors": [
+  {
+   "path": "x1.xt.xn.ro",
+   "value": 5.0
+  },
+  {
+   "path": "x1.xu.xd.xc.rc",
+   "value": 3.0
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 6
+ },
+ "extra": {
+  "resolved_def": {
+   "x1.xt.xn": "only, nested in outer (t is a top-level def; 'only' has no top-level def)",
+   "x1.xu.xd": "deep, nested in outer (u is a top-level def)",
+   "x1.xu.xd.xc": "cell nested in u (nearest instance ancestor), not cell nested in outer (deep's text parent)"
+  }
+ }
+}

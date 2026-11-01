@@ -1,0 +1,198 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 04:08:51 2026
+ scientific notation:
+ a=10**-18  f=10**-15  p=10**-12  n=10**-9  u=10**-6
+ m=10**-3   k=10**3    x=10**6    g=10**9 
+
+
+ circuit parameter definitions
+  parameter          =  value 
+
+
+
+
+
+ constants  - tnom         kt           vt           gapsi        ni
+            298.15000    4.1163e-21    25.69184m     1.11562    1.2565e+16 
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * diode_area: bare numbers after the diode model name (area, then pj?)
+
+ ****** diode model parameters tnom=  25.000 temp=  25.000 ******
+ ********************************************************
+ *** common model parameters model name:   0:dmod    ****
+ ********************************************************
+
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+
+   1*** dc breakdown parameters ***
+       vb=   0.    volts        ibv=   1.00m amps   
+
+   2*** parasitic resistance parameters ***
+       rs=   0.    ohms   
+
+   3*** capacitance parameters ***
+       fc= 500.00m              fcs= 500.00m                m= 500.00m        
+     mjsw= 330.00m               pb= 800.00m volts        php= 800.00m volts  
+       tt=   0.    secs         cjo=   0.    f/area       cjp=   0.    f/pj   
+
+   4*** temperature effect parameters ***
+     tlev=   0.               tlevc=   0.                 tcv=   0.    v/deg k
+      trs=   0.    /deg         cta=   0.    /deg         ctp=   0.    /deg   
+      xti=   3.00            xtitun=   3.00               keg=   1.00         
+       eg=   1.11  ev          gap1= 702.00u  ev/deg     gap2=   1.11k  deg   
+     ttt1=   0.    /deg        ttt2=   0.    /deg2        tm1=   0.    /deg   
+      tm2=   0.    /deg2        tpb=   0.    v/deg k     tphp=   0.    v/deg k
+     tref=  25.00   deg c 
+
+   5*** noise parameters ***
+       kf=   0.                  af=   1.00         
+
+   ***  level   1  model parameters  ***
+
+    level=   1.00                is=  10.00f amps         jsw=  10.00n amps   
+        n=   1.00               nbv=   1.00                ik=   0.    amp    
+     area=   1.00                pj=   0.                 ikr=   0.    amp    
+    expli=   0.    amps      explir=   0.    amps        jtun=   0.    amps   
+   jtunsw=   0.    amps        ntun=  30.00         
+  
+ ******  
+ * diode_area: bare numbers after the diode model name (area, then pj?)
+
+ ****** circuit element summary tnom=  25.000 temp=  25.000 ******
+
+
+ **** independent sources
+
+     name         node1        node2      dc volt    ac mag    ac phase    type
+  v1  1                 0                  600.0000m    0.         0.      dc   
+  v2  2                 0                  600.0000m    0.         0.      dc   
+  v3  3                 0                  600.0000m    0.         0.      dc   
+  v4  4                 0                  600.0000m    0.         0.      dc   
+  v5  5                 0                  600.0000m    0.         0.      dc   
+
+
+ **** diodes
+
+  
+  
+                                                              
+ name                0:d1       0:d2       0:d3       0:d4    
+ node +              0:1        0:2        0:3        0:4     
+ node -              0:0        0:0        0:0        0:0     
+ model               0:dmod     0:dmod     0:dmod     0:dmod  
+ res eff             0.         0.         0.         0.      
+ cdsat eff          20.0000f   10.0000f   30.0000f   20.0000f 
+ capd eff            0.         0.         0.         0.      
+ poly cap                                                     
+ metal cap                                                    
+ ic                                                           
+  
+  
+                             
+ name                0:d5    
+ node +              0:5     
+ node -              0:0     
+ model               0:dmod  
+ res eff             0.      
+ cdsat eff          30.0000f 
+ capd eff            0.      
+ poly cap                    
+ metal cap                   
+ ic                          
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * diode_area: bare numbers after the diode model name (area, then pj?)
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage      node    =voltage      node    =voltage
+
+ +0:1       = 600.0000m 0:2       = 600.0000m 0:3       = 600.0000m
+ +0:4       = 600.0000m 0:5       = 600.0000m
+
+
+ **** voltage sources
+
+ subckt                                                         
+ element  0:v1       0:v2       0:v3       0:v4       0:v5      
+  volts    600.0000m  600.0000m  600.0000m  600.0000m  600.0000m
+  current -277.5999u -138.7999u -416.3998u -277.5999u -416.3998u
+  power    166.5599u   83.2800u  249.8399u  166.5599u  249.8399u
+
+     total voltage source power dissipation=  916.0796u       watts
+
+
+
+ **** diodes
+
+
+ subckt                                                         
+ element  0:d1       0:d2       0:d3       0:d4       0:d5      
+ model    0:dmod     0:dmod     0:dmod     0:dmod     0:dmod    
+  id       277.5999u  138.7999u  416.3998u  277.5999u  416.3998u
+  vd       600.0000m  600.0000m  600.0000m  600.0000m  600.0000m
+  req       92.5499   185.0998    61.6999    92.5499    61.6999 
+  cap        0.         0.         0.         0.         0.     
+
+
+
+
+          ***** job concluded
+ ******  
+ * diode_area: bare numbers after the diode model name (area, then pj?)
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       6 # elements   =      10
+  # resistors   =       0 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       5
+  # curr_srcs   =       0 # diodes     =       5 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.01           1           3
+  readin             0.01
+  errchk             0.01
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         97.40 megabytes
+           total cpu time            0.03 seconds
+           total elapsed time       30.69 seconds
+           job started at     04:08:51 11/01/2026
+           job ended   at     04:09:22 11/01/2026
+           job total runtime        30.69 seconds
+
+

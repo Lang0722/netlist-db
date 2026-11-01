@@ -1,0 +1,36 @@
+{
+ "case": "ops2",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 0.015625
+  },
+  {
+   "path": "r2",
+   "value": 0.015625
+  },
+  {
+   "path": "r3",
+   "value": 10.0
+  },
+  {
+   "path": "r4",
+   "value": 10.0
+  },
+  {
+   "path": "r5",
+   "value": 10.0
+  },
+  {
+   "path": "r6",
+   "value": 10.0
+  }
+ ],
+ "totals": {
+  "resistors": 6,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {}
+}

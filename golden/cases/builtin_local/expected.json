@@ -1,0 +1,44 @@
+{
+ "case": "builtin_local",
+ "resistors": [
+  {
+   "path": "x5.ra",
+   "value": 1000.0
+  },
+  {
+   "path": "x1.xk.rk",
+   "value": 2000.0
+  },
+  {
+   "path": "x2.xk.rk",
+   "value": 2000.0
+  },
+  {
+   "path": "x3.xk.rk2",
+   "value": 7000.0
+  },
+  {
+   "path": "x4.xk.rk2",
+   "value": 2000.0
+  },
+  {
+   "path": "x6.xk.ra",
+   "value": 1000.0
+  },
+  {
+   "path": "x7.xc.rh",
+   "value": 1000.0
+  },
+  {
+   "path": "x8.xc.rh",
+   "value": 6000.0
+  }
+ ],
+ "totals": {
+  "resistors": 8,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 15
+ },
+ "extra": {}
+}

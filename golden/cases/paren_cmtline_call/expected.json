@@ -1,0 +1,13 @@
+{
+ "case": "paren_cmtline_call",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:2) Illegal character in statement in column    8 : max(1k,*acommentline+3k)"
+ }
+}

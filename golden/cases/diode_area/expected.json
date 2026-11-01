@@ -1,0 +1,25 @@
+{
+ "case": "diode_area",
+ "resistors": [],
+ "totals": {
+  "resistors": 0,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "diodes": 5,
+  "positional_after_model": [
+   "area",
+   "pj"
+  ],
+  "id": {
+   "d1": 0.0002775999,
+   "d2": 0.0001387999,
+   "d3": 0.0004163998,
+   "d4": 0.0002775999,
+   "d5": 0.0004163998
+  },
+  "source": ".op diode id at vd 0.6; .option list cdsat eff 20f/10f/30f/20f/30f"
+ }
+}

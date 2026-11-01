@@ -1,0 +1,20 @@
+{
+ "case": "builtin_body_global_rev",
+ "resistors": [
+  {
+   "path": "x1.xc.rh",
+   "value": 7000.0
+  },
+  {
+   "path": "x2.xc.rh",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 4
+ },
+ "extra": {}
+}

@@ -1,0 +1,122 @@
+{
+ "case": "hier_empty_kinds",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  },
+  {
+   "path": "r2",
+   "value": 1000.0
+  },
+  {
+   "path": "r3",
+   "value": 1000.0
+  },
+  {
+   "path": "r4",
+   "value": 1000.0
+  },
+  {
+   "path": "r5",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.rk",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.rl",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.rn7",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.rd",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.re",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.rg",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.rv",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.ri",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.rf",
+   "value": 1000.0
+  },
+  {
+   "path": "x4.rh",
+   "value": 1000.0
+  },
+  {
+   "path": "x5.rk",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x5.rl",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x5.rn7",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x5.rd",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x5.re",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x5.rg",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x5.rv",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x5.ri",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x5.rf",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x5.rh",
+   "value": 500.0,
+   "m": 2.0
+  }
+ ],
+ "totals": {
+  "resistors": 25,
+  "capacitors": 2,
+  "mosfets": 0,
+  "subckt_instances": 6
+ },
+ "extra": {}
+}

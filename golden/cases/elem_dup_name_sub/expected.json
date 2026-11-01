@@ -1,0 +1,13 @@
+{
+ "case": "elem_dup_name_sub",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error**  above line attempts to redefine rc"
+ }
+}

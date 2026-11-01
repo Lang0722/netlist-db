@@ -1,0 +1,22 @@
+{
+ "case": "cap_value_model",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 1,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "order": "value_model",
+  "value_read": 0.0,
+  "value_token_read_as": "node",
+  "source": ".option list node2 1p, model cmod, cap eff poly; .op node list has node 1p",
+  "warning": "**warning** (deck.sp:5) Capacitance value for element c1 is 0.000. Capacitance should be a positive, non-zero value."
+ }
+}

@@ -1,0 +1,13 @@
+{
+ "case": "func_zero_args",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:2) syntax error at or before \")\" \"=\" \"'2'\""
+ }
+}

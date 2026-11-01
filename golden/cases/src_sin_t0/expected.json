@@ -1,0 +1,56 @@
+{
+ "case": "src_sin_t0",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  },
+  {
+   "path": "r2",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "node_voltages": {
+   "1": 1.2,
+   "2": 0.2
+  },
+  "sources": {
+   "v1": {
+    "type": "sin",
+    "op_value": 1.2,
+    "dc_volt_listed": 0.2,
+    "sin": [
+     0.2,
+     1.0,
+     1000000.0,
+     0.0,
+     0.0,
+     90.0
+    ]
+   },
+   "v2": {
+    "type": "sin",
+    "op_value": 0.2,
+    "dc_volt_listed": 0.2,
+    "sin": [
+     0.2,
+     1.0,
+     1000000.0,
+     1e-09,
+     0.0,
+     0.0
+    ]
+   }
+  },
+  "dc_rule": "value at t=0: v1 = offset + amplitude*sin(90 deg) = 1.2, while its .option list dc volt and the info line show 0.2; v2 (delay 1n) = offset 0.2",
+  "info": "**info** (deck.sp:3) DC voltage reset to initial transient source value in source 0:v1. new dc=0.2000D+00",
+  "source": ".option list independent sources (dc volt; sin offset, amplitude, frequency, delay, theta, phase); .op node voltages and voltage source volts"
+ }
+}

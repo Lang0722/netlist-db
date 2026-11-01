@@ -1,0 +1,33 @@
+{
+ "case": "hier_dotted_collision_deep",
+ "resistors": [
+  {
+   "path": "rt2",
+   "value": 1.0
+  },
+  {
+   "path": "rt1",
+   "value": 1.0
+  },
+  {
+   "path": "x0.xa.xb.xc.rl",
+   "value": 3.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 5
+ },
+ "extra": {
+  "unnamed_circuit_resistors": [
+   {
+    "circuit": 5,
+    "definition": "leafa",
+    "element": "rl",
+    "value": 2.0
+   }
+  ]
+ }
+}

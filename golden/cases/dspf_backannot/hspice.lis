@@ -1,0 +1,127 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sat Oct 31 21:58:14 2026
+ 
+ ****** Advanced Analog Library - P-2019.06-SP1-1 (Sep 27 2019) ****** 
+ 
+Total number of lines parsed: 1 
+ 
+Resource Usage for Parsing 
+CPU Time     0.00 sec   
+Peak Memory  0.02 Mb    
+ 
+runlvl= 3 sets ".opt sim_accuracy= 1"  
+ 
+Source Files 
+"deck.sp"    
+"inv.dspf"   
+ 
+6 unique instance models are loaded. 
+ 
+Resource Usage for Load Netlist Data 
+CPU Time     0.00 sec   
+Peak Memory  0.00 Mb    
+ 
+Netlist Statistics 
+Type      Count   
+nmos      1       
+pmos      1       
+resistor  2       
+vsrc      2       
+ 
+  ******  Summary of Possible Problems in Netlist  *************** 
+  Negative resistor              0   
+  Negative capacitor             0   
+  Negative inductor              0   
+  Unconnected node               0   
+  Dangling terminal              0   
+  Non-rail bulk terminal         0   
+  Floating MOS gate              0   
+  Floating MOS bulk              0   
+  Floating BJT substrate         0   
+  Floating controlled input      0   
+  Floating current source nodes  0   
+  Source loop                    0   
+ 
+Resource Usage for Netlist Check 
+CPU Time     0.00 sec   
+Peak Memory  0.00 Mb    
+ 
+Number of nodes: 7 
+ 
+Parasitic file: "inv.dspf" 
+DSPF 1.0  
+DESIGN "inv"  
+DIVIDER / 
+DELIMITER :  
+Warning: (inv.dspf:5)"BUSBIT []" not recognized 
+GROUND_NET VSS 
+Warning: (inv.dspf:7) 1st ".SUBCKT" statement is ignored 
+ 
+Parasitic parsing summary 
+file format              DSPF   
+Nets          parsed     2      
+              expanded   2      
+              error net  0      
+Resistor(s)   parsed     5      
+              written    5      
+Capacitor(s)  parsed     3      
+              written    3      
+MOSFET(s)     parsed     0      
+              written    0      
+New net(s)               5      
+ 
+new block partition summary 
+block with 1 net                     0    
+block with 2 nets                    0    
+block with 3 nets                    0    
+block with 4 nets                    0    
+block with 5 to 8 nets               0    
+block with 9 to 16 nets              1    
+block with 17 to 32 nets             0    
+block with 33 to 64 nets             0    
+block with more than64 nets          0    
+number of nodes in power rail block  12   
+number of nets in largest block      12   
+ 
+Resource Usage for DSPF/SPEF 
+CPU Time     0.00 sec   
+Peak Memory  0.00 Mb    
+ 
+No Shorted elements  
+ 
+Total number of nodes (including internal nodes): 12 
+ 
+Resource Usage for Netlist Data Compression 
+CPU Time     0.00 sec   
+Peak Memory  0.00 Mb    
+ 
+Simulation 
+ 
+OP: finished using direct method 
+ 
+Number of iterations for OP analysis: 7 
+ 
+Resource Usage for Operating Point 
+CPU Time     0.00 sec   
+Peak Memory  0.00 Mb    
+ 
+Operating Point wall time = 0 sec 
+ 
+          ***** job concluded 
+ 
+Total time      = 0.01 cpu sec 
+ 
+Total wall time = 0.00 sec 
+ 
+Total memory =    0.00 Mbytes 
+           job total runtime         0.00 seconds
+
+

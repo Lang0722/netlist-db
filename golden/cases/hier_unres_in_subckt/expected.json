@@ -1,0 +1,13 @@
+{
+ "case": "hier_unres_in_subckt",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:4) Definition of model/subckt \"only\" is not found for the element \"x2.xn\". Please specify a defined model/subckt name."
+ }
+}

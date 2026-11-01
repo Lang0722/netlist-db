@@ -1,0 +1,13 @@
+{
+ "case": "pe_scope_global",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) Undefined parameter or function definition \"b\" for a. Please enter a defined name."
+ }
+}

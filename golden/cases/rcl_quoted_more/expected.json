@@ -1,0 +1,28 @@
+{
+ "case": "rcl_quoted_more",
+ "resistors": [
+  {
+   "path": "r14",
+   "value": 2000.0
+  },
+  {
+   "path": "r15",
+   "value": 2000.0
+  },
+  {
+   "path": "r33",
+   "value": 1000.0
+  },
+  {
+   "path": "r35",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 2,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {}
+}

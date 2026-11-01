@@ -1,0 +1,41 @@
+{
+ "case": "pwl_repeat_td",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "node_voltages": {
+   "1": 0.3
+  },
+  "sources": {
+   "v1": {
+    "type": "pwl",
+    "dc": 0.3,
+    "pwl": [
+     [
+      0.0,
+      0.3
+     ],
+     [
+      1e-09,
+      1.0
+     ]
+    ],
+    "repeat_delay": 0.0,
+    "delay_time": 1e-09
+   }
+  },
+  "info": "**info** (deck.sp:3) DC voltage reset to initial transient source value in source 0:v1. new dc=0.3000D+00",
+  "warning": "**warning** has discontinuity at the junction of repeated pwl source . A rise/fall time of 1e-15 second is added",
+  "source": ".option list independent sources (dc volt, repeat delay, delay time, pwl points); .op node voltages"
+ }
+}

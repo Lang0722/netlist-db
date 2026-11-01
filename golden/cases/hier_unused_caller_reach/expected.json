@@ -1,0 +1,16 @@
+{
+ "case": "hier_unused_caller_reach",
+ "resistors": [
+  {
+   "path": "x1.xt.xn.ro",
+   "value": 5.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 3
+ },
+ "extra": {}
+}

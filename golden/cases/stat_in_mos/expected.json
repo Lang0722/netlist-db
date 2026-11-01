@@ -1,0 +1,13 @@
+{
+ "case": "stat_in_mos",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) \"agauss\" function cannot be defined in expressions directly. Please pre-define a parameter for it , then use the parameter in expressions."
+ }
+}

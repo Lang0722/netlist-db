@@ -1,0 +1,67 @@
+{
+ "case": "dspf_included",
+ "resistors": [
+  {
+   "path": "rload",
+   "value": 1000000.0
+  },
+  {
+   "path": "xi.r1",
+   "value": 10.0
+  },
+  {
+   "path": "xi.r2",
+   "value": 5.0
+  },
+  {
+   "path": "xi.r3",
+   "value": 5.0
+  },
+  {
+   "path": "xi.r4",
+   "value": 20.0
+  },
+  {
+   "path": "xi.r5",
+   "value": 20.0
+  }
+ ],
+ "totals": {
+  "resistors": 6,
+  "capacitors": 3,
+  "mosfets": 2,
+  "subckt_instances": 1
+ },
+ "extra": {
+  "dspf_cell": "inv",
+  "parasitic_resistors": 5,
+  "parasitic_capacitors": 3,
+  "parasitic_r_sum": 60.0,
+  "parasitic_c_sum": 8e-16,
+  "device_resistors": 1,
+  "nets": {
+   "a": {
+    "total_cap": 1.2e-15,
+    "r_count": 3,
+    "r_sum": 20.0,
+    "c_count": 2,
+    "c_sum": 3e-16,
+    "pins": 3
+   },
+   "y": {
+    "total_cap": 8e-16,
+    "r_count": 2,
+    "r_sum": 40.0,
+    "c_count": 1,
+    "c_sum": 5e-16,
+    "pins": 3
+   }
+  },
+  "instance_pin_nets": {
+   "mn1:g": "a",
+   "mp1:g": "a",
+   "mn1:d": "y",
+   "mp1:d": "y"
+  }
+ }
+}

@@ -1,0 +1,40 @@
+{
+ "case": "builtin_body_global",
+ "resistors": [
+  {
+   "path": "r4",
+   "value": 4000.0
+  },
+  {
+   "path": "r5",
+   "value": 3000.0
+  },
+  {
+   "path": "x3.r3",
+   "value": 1000.0
+  },
+  {
+   "path": "x6.rd",
+   "value": 6000.0
+  },
+  {
+   "path": "x7.rd",
+   "value": 12000.0
+  },
+  {
+   "path": "x1.xc.rh",
+   "value": 1000.0
+  },
+  {
+   "path": "x2.xc.rh",
+   "value": 7000.0
+  }
+ ],
+ "totals": {
+  "resistors": 7,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 7
+ },
+ "extra": {}
+}

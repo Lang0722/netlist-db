@@ -1,0 +1,496 @@
+{
+ "case": "long_defs_mult",
+ "resistors": [
+  {
+   "path": "rk",
+   "value": 1000.0
+  },
+  {
+   "path": "rh",
+   "value": 1000.0
+  },
+  {
+   "path": "rmeg",
+   "value": 1000.0
+  },
+  {
+   "path": "rd",
+   "value": 1000.0
+  },
+  {
+   "path": "rdk",
+   "value": 1000.0
+  },
+  {
+   "path": "rt",
+   "value": 1000.0
+  },
+  {
+   "path": "rb",
+   "value": 1000.0
+  },
+  {
+   "path": "xc0.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc1.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc2.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc3.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc4.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc5.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc6.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc7.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc8.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc9.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc10.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc11.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc12.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc13.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc14.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc15.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc16.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc17.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc18.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc19.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc20.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc21.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc22.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc23.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc24.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc25.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc26.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc27.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc28.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc29.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc30.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc31.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc32.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc33.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc34.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc35.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc36.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc37.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc38.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc39.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc40.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc41.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc42.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc43.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc44.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc45.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc46.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc47.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc48.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc49.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc50.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc51.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc52.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc53.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc54.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc55.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc56.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc57.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc58.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc59.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc60.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc61.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc62.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc63.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc64.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc65.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc66.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc67.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc68.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc69.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc70.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc71.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc72.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc73.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc74.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc75.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc76.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc77.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc78.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc79.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc80.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc81.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc82.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc83.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc84.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc85.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc86.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc87.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc88.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc89.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc90.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc91.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc92.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc93.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc94.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc95.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc96.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc97.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc98.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xc99.rc",
+   "value": 1000.0
+  },
+  {
+   "path": "xk.rc",
+   "value": 1.0,
+   "m": 1000.0
+  },
+  {
+   "path": "xh.rc",
+   "value": 2000.0,
+   "m": 0.5
+  },
+  {
+   "path": "xmeg.rc",
+   "value": 0.001,
+   "m": 1000000.0
+  },
+  {
+   "path": "xd.rverylongname_x",
+   "value": 7.0
+  },
+  {
+   "path": "xdk.rverylongname_x",
+   "value": 0.007,
+   "m": 1000.0
+  },
+  {
+   "path": "xtop_instance_name_very_long_123456789.rverylongname_x",
+   "value": 14.0,
+   "m": 0.5
+  },
+  {
+   "path": "xtop_instance_name_very_long_12345678b.rc",
+   "value": 0.5,
+   "m": 2000.0
+  }
+ ],
+ "totals": {
+  "resistors": 114,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 107
+ },
+ "extra": {
+  "m_instances": {
+   "xk": 1000.0,
+   "xh": 0.5,
+   "xmeg": 1000000.0,
+   "xdk": 1000.0,
+   "xtop_instance_name_very_long_123456789": 0.5,
+   "xtop_instance_name_very_long_12345678b": 2000.0
+  },
+  "directory_lines": {
+   "xk": "multiplier printed 1.00k",
+   "xh": "multiplier printed 500.00m",
+   "xmeg": "multiplier printed 1.00x",
+   "xd": "2 lines: number, path, definition / multiplier 1.00",
+   "xdk": "2 lines: number, path, definition / multiplier 1.00k",
+   "xtop_instance_name_very_long_123456789": "3 lines: number, path / definition / multiplier 500.00m",
+   "xtop_instance_name_very_long_12345678b": "2 lines: number, path / definition, multiplier 2.00k"
+  },
+  "listing_names": {
+   "xd.rverylongname_x": "element row 104:rverylon",
+   "xtop_instance_name_very_long_123456789.rverylongname_x": "subckt row xtop_insta, element row 106:rverylon"
+  }
+ }
+}

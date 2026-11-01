@@ -1,0 +1,14 @@
+{
+ "case": "brace_meas",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:6) syntax error at or before \"{a}\" \")\"",
+  "braces": "rejected in a .meas argument (syntax error)"
+ }
+}

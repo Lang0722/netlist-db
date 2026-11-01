@@ -1,0 +1,104 @@
+{
+ "case": "ops",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 14.0
+  },
+  {
+   "path": "r2",
+   "value": 64.0
+  },
+  {
+   "path": "r3",
+   "value": 6.0
+  },
+  {
+   "path": "r4",
+   "value": 6.0
+  },
+  {
+   "path": "r5",
+   "value": 9.0
+  },
+  {
+   "path": "r6",
+   "value": 2.0
+  },
+  {
+   "path": "r7",
+   "value": 5.0
+  },
+  {
+   "path": "r8",
+   "value": 4.0
+  },
+  {
+   "path": "r9",
+   "value": 11.0
+  },
+  {
+   "path": "r10",
+   "value": 11.0
+  },
+  {
+   "path": "r11",
+   "value": 10.0
+  },
+  {
+   "path": "r12",
+   "value": 2.0
+  },
+  {
+   "path": "r13",
+   "value": 11.0
+  },
+  {
+   "path": "r14",
+   "value": 11.0
+  },
+  {
+   "path": "r15",
+   "value": 10.0
+  },
+  {
+   "path": "r16",
+   "value": 3.0
+  },
+  {
+   "path": "r17",
+   "value": 5.0
+  },
+  {
+   "path": "r18",
+   "value": 3.0
+  },
+  {
+   "path": "r19",
+   "value": 18.0
+  },
+  {
+   "path": "r20",
+   "value": 11.0
+  },
+  {
+   "path": "r21",
+   "value": 2.0
+  },
+  {
+   "path": "r22",
+   "value": 1.4142
+  },
+  {
+   "path": "r23",
+   "value": 2.0
+  }
+ ],
+ "totals": {
+  "resistors": 23,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {}
+}

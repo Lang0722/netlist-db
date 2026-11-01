@@ -1,0 +1,28 @@
+{
+ "case": "func_three_local",
+ "resistors": [
+  {
+   "path": "x3.rw",
+   "value": 3000.0
+  },
+  {
+   "path": "x5.xm.r6",
+   "value": 7000.0
+  },
+  {
+   "path": "x5.xm.xl.r5",
+   "value": 7000.0
+  },
+  {
+   "path": "x7.xb.xc.xd.r7",
+   "value": 7000.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 8
+ },
+ "extra": {}
+}

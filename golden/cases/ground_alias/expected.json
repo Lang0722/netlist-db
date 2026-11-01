@@ -1,0 +1,45 @@
+{
+ "case": "ground_alias",
+ "resistors": [
+  {
+   "path": "r0",
+   "value": 1.0
+  },
+  {
+   "path": "r1",
+   "value": 2.0
+  },
+  {
+   "path": "r2",
+   "value": 4.0
+  },
+  {
+   "path": "r3",
+   "value": 8.0
+  },
+  {
+   "path": "r4",
+   "value": 16.0
+  },
+  {
+   "path": "xg.rs",
+   "value": 32.0
+  }
+ ],
+ "totals": {
+  "resistors": 6,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {
+  "ground_aliases": [
+   "0",
+   "gnd",
+   "gnd!",
+   "ground"
+  ],
+  "ground_case_insensitive": true,
+  "ground_inside_subckt": true
+ }
+}

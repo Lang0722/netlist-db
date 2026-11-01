@@ -1,0 +1,52 @@
+{
+ "case": "hier_dotted_names",
+ "resistors": [
+  {
+   "path": "rt1",
+   "value": 1.0
+  },
+  {
+   "path": "rt2",
+   "value": 1.0
+  },
+  {
+   "path": "rt3",
+   "value": 1.0
+  },
+  {
+   "path": "x0.aaa.rc",
+   "value": 2.0
+  },
+  {
+   "path": "x0.rw",
+   "value": 4.0
+  },
+  {
+   "path": "x0.rq",
+   "value": 1.0
+  },
+  {
+   "path": "x0.rm",
+   "value": 1.0
+  },
+  {
+   "path": "x0.xm.rc",
+   "value": 3.0
+  },
+  {
+   "path": "x0.xq.rc",
+   "value": 2.0
+  },
+  {
+   "path": "x0.xm.n.rc",
+   "value": 3.0
+  }
+ ],
+ "totals": {
+  "resistors": 10,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 5
+ },
+ "extra": {}
+}

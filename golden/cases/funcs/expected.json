@@ -1,0 +1,88 @@
+{
+ "case": "funcs",
+ "resistors": [
+  {
+   "path": "rsqrt",
+   "value": 2.0
+  },
+  {
+   "path": "rpow",
+   "value": 8.0
+  },
+  {
+   "path": "rpown",
+   "value": 2.0
+  },
+  {
+   "path": "rpowf",
+   "value": 1.0
+  },
+  {
+   "path": "rpowt",
+   "value": 4.0
+  },
+  {
+   "path": "rpwr",
+   "value": 6.0
+  },
+  {
+   "path": "rpwrf",
+   "value": 8.5858
+  },
+  {
+   "path": "rlog",
+   "value": 4.6052
+  },
+  {
+   "path": "rlog10",
+   "value": 2.0
+  },
+  {
+   "path": "rexp0",
+   "value": 1.0
+  },
+  {
+   "path": "rexp",
+   "value": 2.7183
+  },
+  {
+   "path": "rabs",
+   "value": 1.0
+  },
+  {
+   "path": "rmin",
+   "value": 1.0
+  },
+  {
+   "path": "rmax",
+   "value": 2.0
+  },
+  {
+   "path": "rint",
+   "value": 2.0
+  },
+  {
+   "path": "rintn",
+   "value": 8.0
+  },
+  {
+   "path": "rsgn",
+   "value": 9.0
+  },
+  {
+   "path": "rsign",
+   "value": 7.0
+  },
+  {
+   "path": "rf",
+   "value": 7.0
+  }
+ ],
+ "totals": {
+  "resistors": 19,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {}
+}

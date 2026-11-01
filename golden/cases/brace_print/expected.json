@@ -1,0 +1,14 @@
+{
+ "case": "brace_print",
+ "resistors": [],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "braces": "a .print output with {...} is ignored with a warning; the job runs",
+  "warning": "**warning** (deck.sp:6) .print is ignored because of syntax error at or before \"{a}\""
+ }
+}

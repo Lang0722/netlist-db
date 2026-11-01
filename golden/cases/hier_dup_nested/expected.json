@@ -1,0 +1,13 @@
+{
+ "case": "hier_dup_nested",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:6) duplicated subckt definition 'cell'"
+ }
+}

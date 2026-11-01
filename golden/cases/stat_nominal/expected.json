@@ -1,0 +1,30 @@
+{
+ "case": "stat_nominal",
+ "resistors": [
+  {
+   "path": "ra",
+   "value": 1000.0
+  },
+  {
+   "path": "rg",
+   "value": 2000.0
+  },
+  {
+   "path": "ru",
+   "value": 3000.0
+  },
+  {
+   "path": "rn",
+   "value": 4000.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "statistical_nominal": true
+ }
+}

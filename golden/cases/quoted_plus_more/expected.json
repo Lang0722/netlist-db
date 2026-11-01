@@ -1,0 +1,36 @@
+{
+ "case": "quoted_plus_more",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 4000.0
+  },
+  {
+   "path": "r2",
+   "value": 3000.0
+  },
+  {
+   "path": "r3",
+   "value": 6000.0
+  },
+  {
+   "path": "r4",
+   "value": 10000.0
+  },
+  {
+   "path": "x1.rc",
+   "value": 3000.0
+  },
+  {
+   "path": "x2.rc",
+   "value": 8000.0
+  }
+ ],
+ "totals": {
+  "resistors": 6,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 2
+ },
+ "extra": {}
+}

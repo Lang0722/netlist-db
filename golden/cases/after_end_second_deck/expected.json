@@ -1,0 +1,40 @@
+{
+ "case": "after_end_second_deck",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "after_end_runs": [
+   {
+    "run": 2,
+    "resistors": {
+     "r2": 2000.0
+    }
+   }
+  ],
+  "after_end": "a complete deck after .end runs as a second job",
+  "jobs": 2,
+  "second_job": {
+   "title": "* after_end_second_deck: second deck",
+   "resistors": {
+    "r2": 2000.0
+   },
+   "totals": {
+    "resistors": 1,
+    "capacitors": 0,
+    "mosfets": 0
+   },
+   "elements": 2
+  },
+  "source": "two 'job concluded' sections, each with its own job statistics summary (# elements = 2, # resistors = 1); the second job's headings print line 6 (the line after .end) as its title"
+ }
+}

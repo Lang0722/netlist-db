@@ -36,6 +36,14 @@ impl<'s, T: Builder<'s>> Builder<'s> for Vec<T> {
     }
 }
 
+impl<'s, T: Builder<'s>> Builder<'s> for Box<T> {
+    type Out = Box<T::Out>;
+    #[inline]
+    fn build(&self, file: &'s str) -> Self::Out {
+        Box::new((**self).build(file))
+    }
+}
+
 impl<'s, T: Builder<'s>> Builder<'s> for Option<T> {
     type Out = Option<T::Out>;
     #[inline]

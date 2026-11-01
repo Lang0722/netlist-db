@@ -1,0 +1,110 @@
+{
+ "case": "src_forms",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  },
+  {
+   "path": "r2",
+   "value": 1000.0
+  },
+  {
+   "path": "r3",
+   "value": 1000.0
+  },
+  {
+   "path": "r4",
+   "value": 1000.0
+  },
+  {
+   "path": "r5",
+   "value": 1000.0
+  },
+  {
+   "path": "r6",
+   "value": 1000.0
+  },
+  {
+   "path": "r7",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 7,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "node_voltages": {
+   "1": 1.2,
+   "2": 1.0,
+   "3": 1.2,
+   "4": 0.0,
+   "5": 2.0,
+   "6": 1.0,
+   "7": 0.3
+  },
+  "sources": {
+   "v1": {
+    "type": "dc",
+    "dc": 1.2
+   },
+   "v2": {
+    "type": "pulse",
+    "dc": 1.0,
+    "pulse": [
+     0.0,
+     1.0,
+     0.0,
+     1e-09,
+     1e-09,
+     5e-09,
+     1e-08
+    ]
+   },
+   "v3": {
+    "type": "dc",
+    "dc": 1.2,
+    "ac_mag": 1.0,
+    "ac_phase": 0.0
+   },
+   "v4": {
+    "type": "pulse",
+    "dc": 0.0,
+    "pulse": [
+     0.0,
+     1.0,
+     0.0,
+     1e-09,
+     1e-09,
+     5e-09,
+     1e-08
+    ]
+   },
+   "v5": {
+    "type": "dc",
+    "dc": 2.0
+   },
+   "i1": {
+    "type": "dc",
+    "dc": 0.001
+   },
+   "v7": {
+    "type": "pulse",
+    "dc": 0.3,
+    "pulse": [
+     0.3,
+     1.0,
+     0.0,
+     1e-09,
+     1e-09,
+     5e-09,
+     1e-08
+    ]
+   }
+  },
+  "source": ".option list independent sources (dc volt, ac mag, ac phase, type, pulse values); .op node voltages"
+ }
+}

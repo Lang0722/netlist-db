@@ -1,0 +1,366 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sat Oct 31 21:58:15 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * hier_counts: 3 levels, several call sites, an unused subckt, m=2 on an x line
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x1.                             blk                1.00 
+        2 x2.                             blk                1.00 
+        3 x3.                             mid                1.00 
+        4 x1.xm1.                         mid                1.00 
+        5 x1.xm2.                         mid                2.00 
+        6 x1.xl0.                         leaf               1.00 
+        7 x2.xm1.                         mid                1.00 
+        8 x2.xm2.                         mid                2.00 
+        9 x2.xl0.                         leaf               1.00 
+       10 x3.xl1.                         leaf               1.00 
+       11 x3.xl2.                         leaf               1.00 
+       12 x3.xl3.                         leaf               1.00 
+       13 x1.xm1.xl1.                     leaf               1.00 
+       14 x1.xm1.xl2.                     leaf               1.00 
+       15 x1.xm1.xl3.                     leaf               1.00 
+       16 x1.xm2.xl1.                     leaf               2.00 
+       17 x1.xm2.xl2.                     leaf               2.00 
+       18 x1.xm2.xl3.                     leaf               2.00 
+       19 x2.xm1.xl1.                     leaf               1.00 
+       20 x2.xm1.xl2.                     leaf               1.00 
+       21 x2.xm1.xl3.                     leaf               1.00 
+       22 x2.xm2.xl1.                     leaf               2.00 
+       23 x2.xm2.xl2.                     leaf               2.00 
+       24 x2.xm2.xl3.                     leaf               2.00 
+ ******  
+ * hier_counts: 3 levels, several call sites, an unused subckt, m=2 on an x line
+
+ ****** mos   model parameters tnom=  25.000 temp=  25.000 ******
+ ***************************************************************************
+ *** common model parameters  model name:   0:nch      model type:nmos   ***
+ ***************************************************************************
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+
+   1*** geometry parameters ***
+       ld=   0.    meters      lmlt=   1.00                wd=   0.    meters 
+     wmlt=   1.00                xl=   0.    meters        xw=   0.    meters 
+     lref=   0.    meters      wref=   0.    meters      lref=   0.    meters 
+     wref=   0.    meters     xlref=   0.    meters     xwref=   0.    meters 
+     lmin=   0.    meters      wmin=   0.    meters      lmax=   0.    meters 
+     wmax=   0.    meters 
+
+   2*** threshold voltage parameters ***
+      vto= 133.88m volts        nss=   0.    1/cm**2      tpg=   1.00         
+      phi= 579.84m volts      gamma= 527.63m v**0.5      bulk=  gnd           
+    ngate=   0.    cm**3       nsub= 1.0e+15 1/cm**3   delvto=   0.    volts  
+
+   3*** gate overlap capacitance parameters ***
+     cgbo=   0.    f/meter     cgdo=   0.    f/meter     cgso=   0.    f/meter
+     meto=   0.    meters 
+
+   4*** gate capacitance parameters ***
+    capop=   2.00               cf1=   0.    volts        cf2= 100.00m volts  
+      cf3=   1.00  volts        cf4=  50.00               cf5= 666.67m        
+      cf6= 500.00               xqc= 500.00m              tox= 100.00n meters 
+      cox= 345.31u f/m**2 
+
+   5*** diffusion parasitic parameters ***
+      acm=   0.                  is=  10.00f amps          js=   0.    a/m**2 
+      jsw=   0.    amp/m        nds=   1.00               cbd=   0.    farad  
+      cbs=   0.    farad         cj= 101.85u f/m**2      cjsw=   0.    f/m    
+   cjgate=   0.    f/m           mj= 500.00m             mjsw= 330.00m        
+       pb= 800.00m volts        php= 800.00m volts         tt=   0.    secs   
+     hdif=   0.    meters      ldif=   0.    meters        rd=   0.    ohms   
+       rs=   0.    ohms         rsh=   0.    ohms/sq       fc=   0.           
+    alpha=   0.                 vcr=   0.    volts      iirat=   0.           
+      rdc=   0.    ohms         rsc=   0.    ohms           n=   1.00         
+     vnds=  -1.00  volts  
+
+   6*** temperature effect parameters ***
+     tlev=   0.               tlevc=   0.                  eg=   1.11  ev     
+     gap1= 702.00u ev/deg      gap2=   1.11k deg          xti=   0.           
+      bex=  -1.50               tcv=   0.    v/deg k      trd=   0.    /deg   
+      trs=   0.    /deg         cta=   0.    /deg         ctp=   0.    /deg   
+
+   7*** noise parameters ***
+       kf=   0.                  af=   1.00              nlev=   2.00         
+   gdsnoi=   1.00         
+
+   ***  level  1  model parameters  ***
+
+   lambda=   0.    /v            kp=  20.72u a/v**2 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * hier_counts: 3 levels, several call sites, an unused subckt, m=2 on an x line
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+     node    =voltage       node    =voltage       node    =voltage
+
+ + 0:1       =   1.0000   0:t1      = 247.1167m  0:t2      = 253.0634m
+ + 0:t3      = 103.1114m  1:n1      = 298.3646m  1:n2      = 347.0086m
+ + 1:n3      = 264.1281m  2:n1      = 303.9043m  2:n2      = 352.1627m
+ + 2:n3      = 269.9395m  3:n1      = 112.9338m  3:n2      = 113.8159m
+ + 3:n3      = 114.6964m  4:n1      = 306.0340m  4:n2      = 306.7228m
+ + 4:n3      = 307.4103m  5:n1      = 354.1429m  5:n2      = 354.7837m
+ + 5:n3      = 355.4233m  7:n1      = 311.5127m  7:n2      = 312.1961m
+ + 7:n3      = 312.8781m  8:n1      = 359.2403m  8:n2      = 359.8760m
+ + 8:n3      = 360.5105m
+
+
+ **** voltage sources
+
+ subckt              
+ element   0:v1      
+  volts       1.0000 
+  current   -19.0043m
+  power      19.0043m
+
+     total voltage source power dissipation=   19.0043m       watts
+
+
+
+ **** resistors
+
+ subckt                                        x1          x1        
+ element   0:rt1       0:rt2       0:rt3       1:rmk_blk   1:rs1     
+  r value    31.0000     32.0000     33.0000      3.0000k    21.0000 
+  v drop    247.1167m   253.0634m   103.1114m   752.8833m    51.2479m
+  current     7.9715m     7.9082m     3.1246m   250.9611u     2.4404m
+  power       1.9699m     2.0013m   322.1805u   188.9444u   125.0641u
+
+ subckt    x1          x1          x2          x2          x2        
+ element   1:rs2       1:rs3       2:rmk_blk   2:rs1       2:rs2     
+  r value    22.0000     23.0000      3.0000k    21.0000     22.0000 
+  v drop     99.8919m    17.0114m   746.9366m    50.8409m    99.0993m
+  current     4.5405m   739.6261u   248.9789u     2.4210m     4.5045m
+  power     453.5637u    12.5821u   185.9714u   123.0857u   446.3941u
+
+ subckt    x2          x3          x3          x3          x3        
+ element   2:rs3       3:rmk_mid   3:rs1       3:rs2       3:rs3     
+  r value    23.0000      2.0000k    11.0000     12.0000     13.0000 
+  v drop     16.8761m   896.8886m     9.8224m    10.7046m    11.5850m
+  current   733.7426u   448.4443u   892.9430u   892.0471u   891.1529u
+  power      12.3827u   402.2046u     8.7708u     9.5490u    10.3240u
+
+ subckt    x1.xm1      x1.xm1      x1.xm1      x1.xm1      x1.xm2    
+ element   4:rmk_mid   4:rs1       4:rs2       4:rs3       5:rmk_mid 
+  r value     2.0000k    11.0000     12.0000     13.0000      1.0000k
+  v drop    701.6354m     7.6694m     8.3582m     9.0457m   652.9914m
+  current   350.8177u   697.2157u   696.5189u   695.8235u   652.9914u
+  power     246.1461u     5.3472u     5.8217u     6.2942u   426.3977u
+
+ subckt    x1.xm2      x1.xm2      x1.xm2      x1.xl0      x2.xm1    
+ element   5:rs1       5:rs2       5:rs3       6:rmk_leaf  7:rmk_mid 
+  r value     5.5000      6.0000      6.5000      1.0000k     2.0000k
+  v drop      7.1343m     7.7751m     8.4146m   735.8719m   696.0957m
+  current     1.2971m     1.2958m     1.2946m   735.8719u   348.0478u
+  power       9.2542u    10.0754u    10.8932u   541.5075u   242.2746u
+
+ subckt    x2.xm1      x2.xm1      x2.xm1      x2.xm2      x2.xm2    
+ element   7:rs1       7:rs2       7:rs3       8:rmk_mid   8:rs1     
+  r value    11.0000     12.0000     13.0000      1.0000k     5.5000 
+  v drop      7.6084m     8.2918m     8.9738m   647.8373m     7.0776m
+  current   691.6737u   690.9825u   690.2926u   647.8373u     1.2868m
+  power       5.2625u     5.7295u     6.1946u   419.6932u     9.1078u
+
+ subckt    x2.xm2      x2.xm2      x2.xl0      x3.xl1      x3.xl2    
+ element   8:rs2       8:rs3       9:rmk_leaf 10:rmk_leaf 11:rmk_leaf
+  r value     6.0000      6.5000      1.0000k     1.0000k     1.0000k
+  v drop      7.7133m     8.3478m   730.0605m   887.0662m   886.1841m
+  current     1.2856m     1.2843m   730.0605u   887.0662u   886.1841u
+  power       9.9160u    10.7209u   532.9884u   786.8865u   785.3222u
+
+ subckt    x3.xl3      x1.xm1.xl1  x1.xm1.xl2  x1.xm1.xl3  x1.xm2.xl1
+ element  12:rmk_leaf 13:rmk_leaf 14:rmk_leaf 15:rmk_leaf 16:rmk_leaf
+  r value     1.0000k     1.0000k     1.0000k     1.0000k   500.0000 
+  v drop    885.3036m   693.9660m   693.2772m   692.5897m   645.8571m
+  current   885.3036u   693.9660u   693.2772u   692.5897u     1.2917m
+  power     783.7625u   481.5889u   480.6333u   479.6805u   834.2627u
+
+ subckt    x1.xm2.xl2  x1.xm2.xl3  x2.xm1.xl1  x2.xm1.xl2  x2.xm1.xl3
+ element  17:rmk_leaf 18:rmk_leaf 19:rmk_leaf 20:rmk_leaf 21:rmk_leaf
+  r value   500.0000    500.0000      1.0000k     1.0000k     1.0000k
+  v drop    645.2163m   644.5767m   688.4873m   687.8039m   687.1219m
+  current     1.2904m     1.2892m   688.4873u   687.8039u   687.1219u
+  power     832.6080u   830.9583u   474.0147u   473.0742u   472.1365u
+
+ subckt    x2.xm2.xl1  x2.xm2.xl2  x2.xm2.xl3
+ element  22:rmk_leaf 23:rmk_leaf 24:rmk_leaf
+  r value   500.0000    500.0000    500.0000 
+  v drop    640.7597m   640.1240m   639.4895m
+  current     1.2815m     1.2802m     1.2790m
+  power     821.1459u   819.5174u   817.8937u
+
+
+
+ **** mosfets
+
+
+ subckt    x1.xl0      x2.xl0      x3.xl1      x3.xl2      x3.xl3    
+ element   6:mn        9:mn       10:mn       11:mn       12:mn      
+ model     0:nch       0:nch       0:nch       0:nch       0:nch     
+ region    Saturation  Saturation  Saturation  Saturation  Saturation
+  id          3.7542u     3.6820u     5.8768u     5.8630u     5.8493u
+  ibs         0.          0.          0.          0.          0.     
+  ibd        -7.3587f    -7.3006f    -8.8707f    -8.8618f    -8.8530f
+  vgs       735.8719m   730.0605m   887.0662m   886.1841m   885.3036m
+  vds       735.8719m   730.0605m   887.0662m   886.1841m   885.3036m
+  vbs         0.          0.          0.          0.          0.     
+  vth       133.8819m   133.8819m   133.8819m   133.8819m   133.8819m
+  vdsat     601.9900m   596.1786m   753.1843m   752.3021m   751.4217m
+  vod       601.9900m   596.1786m   753.1843m   752.3021m   751.4217m
+  beta       20.7189u    20.7189u    20.7189u    20.7189u    20.7189u
+  gam eff   527.6252m   527.6252m   527.6252m   527.6252m   527.6252m
+  gm         12.4725u    12.3521u    15.6051u    15.5868u    15.5686u
+  gds         0.          0.          0.          0.          0.     
+  gmb         4.3211u     4.2794u     5.4064u     5.4001u     5.3938u
+  cdtot     3.388e-19   3.361e-19   4.084e-19   4.080e-19   4.076e-19
+  cgtot     233.4066a   233.4308a   232.9175a   232.9197a   232.9219a
+  cstot     230.2107a   230.2107a   230.2107a   230.2107a   230.2107a
+  cbtot       2.8570a     2.8840a     2.2983a     2.3010a     2.3036a
+  cgs       230.2107a   230.2107a   230.2107a   230.2107a   230.2107a
+  cgd       3.388e-19   3.361e-19   4.084e-19   4.080e-19   4.076e-19
+
+
+
+ subckt    x1.xm1.xl1  x1.xm1.xl2  x1.xm1.xl3  x1.xm2.xl1  x1.xm2.xl2
+ element  13:mn       14:mn       15:mn       16:mn       17:mn      
+ model     0:nch       0:nch       0:nch       0:nch       0:nch     
+ region    Saturation  Saturation  Saturation  Saturation  Saturation
+  id          3.2497u     3.2417u     3.2337u     5.4308u     5.4172u
+  ibs         0.          0.          0.          0.          0.     
+  ibd        -6.9397f    -6.9328f    -6.9259f   -12.9171f   -12.9043f
+  vgs       693.9660m   693.2772m   692.5897m   645.8571m   645.2163m
+  vds       693.9660m   693.2772m   692.5897m   645.8571m   645.2163m
+  vbs         0.          0.          0.          0.          0.     
+  vth       133.8819m   133.8819m   133.8819m   133.8819m   133.8819m
+  vdsat     560.0841m   559.3952m   558.7078m   511.9751m   511.3343m
+  vod       560.0841m   559.3952m   558.7078m   511.9751m   511.3343m
+  beta       20.7189u    20.7189u    20.7189u    41.4377u    41.4377u
+  gam eff   527.6252m   527.6252m   527.6252m   527.6252m   527.6252m
+  gm         11.6043u    11.5900u    11.5758u    21.2151u    21.1885u
+  gds         0.          0.          0.          0.          0.     
+  gmb         4.0203u     4.0154u     4.0104u     7.3500u     7.3408u
+  cdtot     3.195e-19   3.192e-19   3.189e-19   5.947e-19   5.941e-19
+  cgtot     233.5937a   233.5970a   233.6003a   467.6971a   467.7046a
+  cstot     230.2107a   230.2107a   230.2107a   460.4215a   460.4215a
+  cbtot       3.0634a     3.0670a     3.0707a     6.6809a     6.6889a
+  cgs       230.2107a   230.2107a   230.2107a   460.4215a   460.4215a
+  cgd       3.195e-19   3.192e-19   3.189e-19   5.947e-19   5.941e-19
+
+
+
+ subckt    x1.xm2.xl3  x2.xm1.xl1  x2.xm1.xl2  x2.xm1.xl3  x2.xm2.xl1
+ element  18:mn       19:mn       20:mn       21:mn       22:mn      
+ model     0:nch       0:nch       0:nch       0:nch       0:nch     
+ region    Saturation  Saturation  Saturation  Saturation  Saturation
+  id          5.4037u     3.1864u     3.1786u     3.1708u     5.3232u
+  ibs         0.          0.          0.          0.          0.     
+  ibd       -12.8915f    -6.8849f    -6.8780f    -6.8712f   -12.8152f
+  vgs       644.5767m   688.4873m   687.8039m   687.1219m   640.7597m
+  vds       644.5767m   688.4873m   687.8039m   687.1219m   640.7597m
+  vbs         0.          0.          0.          0.          0.     
+  vth       133.8819m   133.8819m   133.8819m   133.8819m   133.8819m
+  vdsat     510.6948m   554.6053m   553.9219m   553.2399m   506.8777m
+  vod       510.6948m   554.6053m   553.9219m   553.2399m   506.8777m
+  beta       41.4377u    20.7189u    20.7189u    20.7189u    41.4377u
+  gam eff   527.6252m   527.6252m   527.6252m   527.6252m   527.6252m
+  gm         21.1620u    11.4908u    11.4766u    11.4625u    21.0039u
+  gds         0.          0.          0.          0.          0.     
+  gmb         7.3316u     3.9810u     3.9761u     3.9712u     7.2768u
+  cdtot     5.936e-19   3.170e-19   3.167e-19   3.164e-19   5.900e-19
+  cgtot     467.7120a   233.6203a   233.6237a   233.6271a   467.7570a
+  cstot     460.4215a   230.2107a   230.2107a   230.2107a   460.4215a
+  cbtot       6.6970a     3.0926a     3.0963a     3.1000a     6.7455a
+  cgs       460.4215a   230.2107a   230.2107a   230.2107a   460.4215a
+  cgd       5.936e-19   3.170e-19   3.167e-19   3.164e-19   5.900e-19
+
+
+
+ subckt    x2.xm2.xl2  x2.xm2.xl3
+ element  23:mn       24:mn      
+ model     0:nch       0:nch     
+ region    Saturation  Saturation
+  id          5.3099u     5.2965u
+  ibs         0.          0.     
+  ibd       -12.8025f   -12.7898f
+  vgs       640.1240m   639.4895m
+  vds       640.1240m   639.4895m
+  vbs         0.          0.     
+  vth       133.8819m   133.8819m
+  vdsat     506.2420m   505.6076m
+  vod       506.2420m   505.6076m
+  beta       41.4377u    41.4377u
+  gam eff   527.6252m   527.6252m
+  gm         20.9775u    20.9512u
+  gds         0.          0.     
+  gmb         7.2677u     7.2586u
+  cdtot     5.895e-19   5.889e-19
+  cgtot     467.7646a   467.7722a
+  cstot     460.4215a   460.4215a
+  cbtot       6.7537a     6.7618a
+  cgs       460.4215a   460.4215a
+  cgd       5.895e-19   5.889e-19
+
+
+
+
+          ***** job concluded
+ ******  
+ * hier_counts: 3 levels, several call sites, an unused subckt, m=2 on an x line
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =      26 # elements   =      71
+  # resistors   =      48 # capacitors =       5 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =      17 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.01           1           5
+  readin             0.02
+  errchk             0.02
+  setup              0.01
+  output             0.00
+
+
+           peak memory used         97.08 megabytes
+           total cpu time            0.05 seconds
+           total elapsed time       30.12 seconds
+           job started at     21:58:15 10/31/2026
+           job ended   at     21:58:45 10/31/2026
+           job total runtime        30.12 seconds
+
+

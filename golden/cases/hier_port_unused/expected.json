@@ -1,0 +1,20 @@
+{
+ "case": "hier_port_unused",
+ "resistors": [
+  {
+   "path": "rt1",
+   "value": 1.0
+  },
+  {
+   "path": "x1.rc",
+   "value": 2.0
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {}
+}

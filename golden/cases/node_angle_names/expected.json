@@ -1,0 +1,32 @@
+{
+ "case": "node_angle_names",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  },
+  {
+   "path": "r2",
+   "value": 1000.0
+  },
+  {
+   "path": "r3",
+   "value": 2000.0
+  },
+  {
+   "path": "r4",
+   "value": 2000.0
+  },
+  {
+   "path": "x1.rc",
+   "value": 4000.0
+  }
+ ],
+ "totals": {
+  "resistors": 5,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {}
+}

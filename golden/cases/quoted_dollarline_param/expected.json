@@ -1,0 +1,13 @@
+{
+ "case": "quoted_dollarline_param",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) string misses dexter quotation mark, error is  before or at \"'a\""
+ }
+}

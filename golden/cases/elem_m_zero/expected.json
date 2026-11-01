@@ -1,0 +1,13 @@
+{
+ "case": "elem_m_zero",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:8) Multiplication factor(M) for the element r3 cannot be < or = zero. Enter a valid M value. **error** (deck.sp:3) Multiplication factor(M) for the element x1.rc cannot be < or = zero. Enter a valid M value."
+ }
+}

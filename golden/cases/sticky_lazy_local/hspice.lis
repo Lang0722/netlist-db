@@ -1,0 +1,152 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 16:44:31 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * sticky_lazy_local: texts that an earlier instance does not evaluate, and function bodies (parhier=local)
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x0.                             w1                 1.00 
+        2 x1.                             cf1                1.00 
+        3 x2.                             w2                 1.00 
+        4 x3.                             cf2                1.00 
+        5 x4.                             w3                 1.00 
+        6 x5.                             cf3                1.00 
+        7 x6.                             w4                 1.00 
+        8 x7.                             cf4                1.00 
+        9 x8.                             w5                 1.00 
+       10 x9.                             cf5                1.00 
+       11 x10.                            cy                 1.00 
+       12 x12.                            cz                 1.00 
+       13 x0.xl.                          leafp              1.00 
+       14 x1.xl.                          leafp              1.00 
+       15 x2.xl.                          leafq              1.00 
+       16 x3.xl.                          leafq              1.00 
+       17 x4.xc.                          ch                 1.00 
+       18 x5.xc.                          ch                 1.00 
+       19 x6.xc.                          ck                 1.00 
+       20 x7.xc.                          ck                 1.00 
+       21 x8.xl.                          leafu              1.00 
+       22 x9.xl.                          leafu              1.00 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * sticky_lazy_local: texts that an earlier instance does not evaluate, and function bodies (parhier=local)
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+     node    =voltage       node    =voltage       node    =voltage
+
+ + 0:10      =   1.0000   0:11      =   1.0000   0:12      =   1.0000 
+ + 0:13      =   1.0000   0:14      =   1.0000   0:15      =   1.0000 
+ + 0:16      =   1.0000   0:17      =   1.0000   0:18      =   1.0000 
+ + 0:19      =   1.0000   0:20      =   1.0000   0:21      =   1.0000 
+ + 0:22      =   1.0000 
+
+
+ **** voltage sources
+
+ subckt                                                              
+ element   0:v10       0:v11       0:v12       0:v13       0:v14     
+  volts       1.0000      1.0000      1.0000      1.0000      1.0000 
+  current  -200.0000u  -333.3333u  -200.0000u  -500.0000u  -500.0000u
+  power     200.0000u   333.3333u   200.0000u   500.0000u   500.0000u
+
+ subckt                                                              
+ element   0:v15       0:v16       0:v17       0:v18       0:v19     
+  volts       1.0000      1.0000      1.0000      1.0000      1.0000 
+  current  -333.3333u  -200.0000u  -333.3333u  -200.0000u  -500.0000u
+  power     333.3333u   200.0000u   333.3333u   200.0000u   500.0000u
+
+ subckt                                      
+ element   0:v20       0:v21       0:v22     
+  volts       1.0000      1.0000      1.0000 
+  current  -333.3333u  -333.3333u  -200.0000u
+  power     333.3333u   333.3333u   200.0000u
+
+     total voltage source power dissipation=    4.1667m       watts
+
+
+
+ **** resistors
+
+ subckt                x10         x12         x0.xl       x1.xl     
+ element   0:r11      11:ry       12:rz       13:rp       14:rp      
+  r value     3.0000k     3.0000k     5.0000k     5.0000k     3.0000k
+  v drop      1.0000      1.0000      1.0000      1.0000      1.0000 
+  current   333.3333u   333.3333u   200.0000u   200.0000u   333.3333u
+  power     333.3333u   333.3333u   200.0000u   200.0000u   333.3333u
+
+ subckt    x2.xl       x3.xl       x4.xc       x5.xc       x6.xc     
+ element  15:rq       16:rq       17:rh       18:rh       19:rk      
+  r value     5.0000k     2.0000k     2.0000k     3.0000k     5.0000k
+  v drop      1.0000      1.0000      1.0000      1.0000      1.0000 
+  current   200.0000u   500.0000u   500.0000u   333.3333u   200.0000u
+  power     200.0000u   500.0000u   500.0000u   333.3333u   200.0000u
+
+ subckt    x7.xc       x8.xl       x9.xl     
+ element  20:rk       21:ru       22:ru      
+  r value     3.0000k     5.0000k     2.0000k
+  v drop      1.0000      1.0000      1.0000 
+  current   333.3333u   200.0000u   500.0000u
+  power     333.3333u   200.0000u   500.0000u
+
+
+          ***** job concluded
+ ******  
+ * sticky_lazy_local: texts that an earlier instance does not evaluate, and function bodies (parhier=local)
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =      14 # elements   =      26
+  # resistors   =      13 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =      13
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  readin             0.01
+  errchk             0.01
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         97.48 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       30.42 seconds
+           job started at     16:44:31 11/01/2026
+           job ended   at     16:45:01 11/01/2026
+           job total runtime        30.42 seconds
+
+

@@ -1,0 +1,13 @@
+{
+ "case": "hier_reentry",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error**  subcircuit aa               is defined recursively"
+ }
+}

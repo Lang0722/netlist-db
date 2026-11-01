@@ -1,0 +1,13 @@
+{
+ "case": "dollar_override",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:7) Undefined parameter or function definition \"rval $ c\" for x1.w. Please enter a defined name."
+ }
+}

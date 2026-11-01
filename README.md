@@ -112,6 +112,127 @@ print: 11.334µs
 </html>
 </details>
 
+## LLM query tool
+
+A real netlist is too large for the context of an LLM. The crate
+`netlist-query` (`query/`) parses an HSPICE deck once and answers small
+questions about it, in JSON, in pages:
+
+- Which subcircuits the deck defines, and how many instances each one has
+  in the expanded hierarchy (`list_subckts`, `subckt_info`, `instances_of`).
+- What is inside a subcircuit: ports, defaults, `.param` lines, devices by
+  type, the subcircuits it calls (`subckt_info`).
+- The value of a parameter or of an element parameter, through the
+  hierarchy, with the chain of definitions that gave it (`resolve_param`,
+  `resolve_element`).
+- Which pins are on a net, and where the net goes through ports
+  (`net_info`, `trace_net`).
+- DSPF parasitic files: included as netlist text, or given with
+  `.option sim_dspf`. Parasitic R and C are not devices. A DSPF net is one
+  logical net, with its parasitic sums.
+
+The same queries are available in Rust (`netlist_query::Netlist`), in Python
+(`pybind/`, module `netlist_db`) and as an MCP server (`mcp_server/`). The
+expected behavior comes from HSPICE P-2019.06 runs: `golden/cases` holds the
+decks and listings, and `golden/NOTES.md` records each finding.
+
+### Install
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install maturin pytest "mcp>=2,<3"
+(cd pybind && ../.venv/bin/maturin develop --release)
+.venv/bin/pip install -e mcp_server
+```
+
+### Python
+
+```python
+import netlist_db
+
+# a golden deck: `x1` calls `parvspar`; `whowins` is 4 at the top level,
+# 3 on the X line, 1 and 5 in the subckt
+net = netlist_db.load("golden/cases/parhier_global/deck.sp")  # OSError if unreadable
+print(net.summary()["expanded_devices"])        # {'resistor': 1, 'vsource': 1}
+for row in net.list_subckts(sort="copies", limit=5)["items"]:
+    print(row["name"], row["copies"])           # parvspar 1
+print(net.resolve_param("x1", "whowins")["value"])  # 4.0 (parhier=global)
+pins = net.net_info("x1", "a")       # {"total": ..., "connections": {"items": [...], "next_cursor": ...}}
+err = net.subckt_info("nosuch")      # {"error": {"kind": "not_found", "message": ..., "suggestions": [...]}}
+```
+
+A query that fails gives a `dict` with the key `error`, so use
+`answer.get("value")` when a name can be missing.
+
+### MCP
+
+```sh
+claude mcp add netlist-db -- /path/to/netlist-db/.venv/bin/python -m netlist_mcp
+```
+
+Other clients start the same command on stdio. `load_netlist` returns a
+handle, and the other tools take it first. See `mcp_server/README.md`.
+
+### How to read the answers
+
+- An instance path is the lowercase instance names, joined by `.`
+  (`x1.xinv.m3`). `""` is the top level. HSPICE finds an `X` line's subckt
+  along the instance path, so one `X` line can call different nested
+  definitions in different instances.
+- Parameters follow `.option parhier`. The default is `global`: a top-level
+  `.param` wins over an `X`-line override or a subckt default. With
+  `parhier=local`, the definition nearest the element wins.
+- `caveats` says what makes an answer less certain: an `X` line with no
+  visible definition, a deck that HSPICE rejects, a value from an `.alter`
+  block (answers describe the first run), a total that is a lower bound.
+  Read them.
+- `diagnostics` lists the problems of the load. An `error` diagnostic is
+  usually a form that HSPICE rejects.
+
+### Limits
+
+- Model-card parameters are text only: the tool does not compute model
+  values.
+- An element letter that the parser does not read (for example `E`, `G`,
+  `B`) is counted by its letter, and its nets are marked
+  `connectivity_incomplete`. So are the nets of a definition with an
+  element line that a load error skipped (for example `G1 … POLY(2) …`).
+- Verilog-A modules (`.hdl`) and encrypted regions (`.prot`) are not read.
+  In a deck with a `.prot` region, the load checks of undefined names are
+  off, and a name that only the region defines has no value.
+- The DSPF scanner reads lines: a `*|` record or a parasitic value on a `+`
+  line is not read (the sum of the values is then `null`, with a caveat).
+  An R or C line after a `*|NET` block that touches no node of the block is
+  a device (Warning `dspf_device_in_block`).
+- Some decks that HSPICE rejects load with no Error. `golden/NOTES.md`,
+  "Known differences", lists them with the reason for each. A query that
+  reaches such a line usually gives the reason.
+
+### Speed and memory
+
+`query/tests/perf.rs` (run it with `timeout 180 cargo test --release -p
+netlist-query --test perf -- --ignored --test-threads=1 --nocapture`) loads
+a deck of 1,000 subckts with 102 devices each, called 10 times each (10,000
+instances, 1.02M expanded devices, 114,000 lines). The decks come from
+`query/benches/gen_big.py`. On an Apple M1 Pro (release build):
+
+| Measure | Result | Gate |
+|---|---|---|
+| Load | 0.08 s | < 1 s |
+| `list_subckts` (by copies) | 0.2 ms | < 10 ms |
+| `resolve_element("x5_3.m7")` | 0.5–0.6 ms | < 10 ms |
+| `net_info("x5_3", "n4")` | 0.02 ms | < 10 ms |
+| Peak memory, base deck | 79 MB | |
+| Peak memory, one more level (10x the instances, about 10% more lines) | 91–93 MB (1.15–1.18x) | < 1.3x |
+| Peak memory, two more levels (1.11M instances) vs the same lines with the groups unused (10,000 instances) | 104–106 MB vs 104–105 MB (1.00–1.01x) | < 1.1x |
+
+The memory follows the input lines, not the expanded hierarchy: with the
+same lines, 1.11M expanded instances need the same memory as 10,000. A
+flat deck of 1M resistors loads in 0.5 s with 405 MB. A generated 33 MB
+DSPF (100,000 nets, 400,000 parasitic R, 400,000 parasitic C, 100,000
+MOSFETs) loads in 0.84 s. The same text with no `*|DSPF` line loads in
+0.53 s.
+
 ## Regression
 ``` bash
 cargo install cargo-regression # install for first time

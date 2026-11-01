@@ -1,0 +1,13 @@
+{
+ "case": "hier_top_nested_only",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:11) Definition of model/subckt \"only\" is not found for the element \"x2\". Please specify a defined model/subckt name."
+ }
+}

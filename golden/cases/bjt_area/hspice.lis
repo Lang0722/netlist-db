@@ -1,0 +1,224 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 04:11:02 2026
+ scientific notation:
+ a=10**-18  f=10**-15  p=10**-12  n=10**-9  u=10**-6
+ m=10**-3   k=10**3    x=10**6    g=10**9 
+
+
+ circuit parameter definitions
+  parameter          =  value 
+
+
+
+
+
+ constants  - tnom         kt           vt           gapsi        ni
+            298.15000    4.1163e-21    25.69184m     1.11562    1.2565e+16 
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * bjt_area: a bare number after the bjt model name (area?)
+
+ ****** bjt   model parameters tnom=  25.000 temp=  25.000 ******
+
+ ************************************************************************
+ *** bjt model parameters   model name:   0:qmod     model type:npn   ***
+ ************************************************************************
+
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+
+   1*** basic dc parameters ***
+    level=   1.00                bf= 100.00                br=   1.00         
+      brs=   0.                bulk=  gnd                  is= 1.0e-16 amps   
+      iss=   0.    amps          nf=   1.00                nr=   1.00         
+       ns=   1.00               ibe=   0.    amps         ibc=   0.    amps   
+     subs=   1.00             expli=   0.    amps   
+
+   2*** low current beta degradation effect parameters ***
+      isc=   0.    amps         ise=   0.    amps          nc=   2.00         
+       ne=   1.50         
+
+   3*** base width modulation parameters ***
+      vaf=   0.    volts        var=   0.    volts  
+
+   4*** high current beta degradation effect parameters ***
+      ikf=   0.    amps         nkf= 500.00m              ikr=   0.    amps   
+
+   5*** parasitic resistor parameters ***
+      irb=   0.    amps          rb=   0.    ohms         rbm=   0.    ohms   
+       re=   0.    ohms          rc=   0.    ohms         rcc=   0.    ohms   
+       vo=   0.    volts      gamma=   0.           
+
+   6*** junction capacitor parameters ***
+     cbcp=   0.    farad       cbep=   0.    farad       ccsp=   0.    farad  
+      cjc=   0.    farad        cje=   0.    farad        cjs=   0.    farad  
+       fc= 500.00m              mjc= 330.00m              mje= 330.00m        
+      mjs= 500.00m              vjc= 750.00m volts        vje= 750.00m volts  
+      vjs= 750.00m volts       xcjc=   1.00               qco=   0.    coul   
+     dcap=  -1.00         
+
+   7*** transit time parameters ***
+      itf=   0.    amps         ptf=   0.    deg k         tf=   0.    secs   
+       tr=   0.    secs         vtf=   0.                 xtf=   0.           
+
+   8*** temperature compensation parameters ***
+     tlev=   0.               tlevc=   0.                tre1=   0.    /deg   
+     tre2=   0.    /deg2       trb1=   0.    /deg        trc1=   0.    /deg   
+     trb2=   0.    /deg2       trm1=   0.    /deg         xtb=   0.           
+     trm2=   0.    /deg2        xti=   3.00               cte=   0.    /deg   
+      ctc=   0.    /deg         cts=   0.    /deg        trc2=   0.    /deg2  
+     tref=  25.00   deg c       bex=   2.42              bexv=   1.90         
+    tirb1=   0.    /deg       tirb2=   0.    /deg2      tikf1=   0.    /deg   
+    tikr1=   0.    /deg       tikr2=   0.    /deg2      tvaf1=   0.    /deg   
+    tvaf2=   0.    /deg2      tvar1=   0.    /deg       tvar2=   0.    /deg2  
+     ttf1=   0.    /deg        ttf2=   0.    /deg2      titf1=   0.    /deg   
+    titf2=   0.    /deg2       ttr1=   0.    /deg        ttr2=   0.    /deg2  
+     tbf1=   0.    /deg        tbf2=   0.    /deg2       tbr1=   0.    /deg   
+     tbr2=   0.    /deg2       tnf1=   0.    /deg        tnf2=   0.    /deg2  
+     tnr1=   0.    /deg        tnr2=   0.    /deg2       tne1=   0.    /deg   
+     tne2=   0.    /deg2       tnc1=   0.    /deg        tnc2=   0.    /deg2  
+     tns1=   0.    /deg        tns2=   0.    /deg2      tmje1=   0.    /deg   
+    tmje2=   0.    /deg2      tmjc1=   0.    /deg       tmjc2=   0.    /deg2  
+    tmjs1=   0.    /deg       tmjs2=   0.    /deg2       tvje=   0.    v/deg  
+     tvjc=   0.    v/deg       tvjs=   0.    v/deg         eg=   1.11  ev     
+
+   9*** noise parameters ***
+       kf=   0.                  af=   1.00         
+ ******  
+ * bjt_area: a bare number after the bjt model name (area?)
+
+ ****** circuit element summary tnom=  25.000 temp=  25.000 ******
+
+
+ **** independent sources
+
+     name         node1        node2      dc volt    ac mag    ac phase    type
+  vb  b                 0                  700.0000m    0.         0.      dc   
+  vc  c                 0                    1.0000     0.         0.      dc   
+  vc2  c2                0                    1.0000     0.         0.      dc   
+  vc3  c3                0                    1.0000     0.         0.      dc   
+  ve  e                 0                    0.         0.         0.      dc   
+
+
+ **** bipolar junction transistors
+
+  
+  
+                                                
+ element name        0:q1      0:q2      0:q3   
+ collector           0:c       0:c2      0:c3   
+ base                0:b       0:b       0:b    
+ emitter             0:e       0:e       0:e    
+ bulk                0:0       0:0       0:0    
+ model               0:qmod    0:qmod    0:qmod 
+ area                2.0000    1.0000    2.0000 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * bjt_area: a bare number after the bjt model name (area?)
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage      node    =voltage      node    =voltage
+
+ +0:b       = 700.0000m 0:c       =   1.0000  0:c2      =   1.0000 
+ +0:c3      =   1.0000  0:e       =   0.     
+
+
+ **** voltage sources
+
+ subckt                                                         
+ element  0:vb       0:vc       0:vc2      0:vc3      0:ve      
+  volts    700.0000m    1.0000     1.0000     1.0000     0.     
+  current   -3.4022u -136.0873u  -68.0436u -136.0873u  343.6203u
+  power      2.3815u  136.0873u   68.0436u  136.0873u    0.     
+
+     total voltage source power dissipation=  342.5997u       watts
+
+
+
+ **** bipolar junction transistors
+
+
+ subckt                                   
+ element  0:q1       0:q2       0:q3      
+ model    0:qmod     0:qmod     0:qmod    
+ region    FwdActive  FwdActive  FwdActive
+  ib         1.3609u  680.4363n    1.3609u
+  ic       136.0873u   68.0436u  136.0873u
+  vbe      700.0000m  700.0000m  700.0000m
+  vce        1.0000     1.0000     1.0000 
+  vbc     -300.0000m -300.0000m -300.0000m
+  vs        -1.0000    -1.0000    -1.0000 
+  power    137.0399u   68.5199u  137.0399u
+  betad    100.0000   100.0000   100.0000 
+  gm         5.2969m    2.6485m    5.2969m
+  rpi       18.8789k   37.7579k   18.8789k
+  rx         0.         0.         0.     
+  ro       1.500e+15  3.000e+15  1.500e+15
+  cpi        0.         0.         0.     
+  cmu        0.         0.         0.     
+  cbx        0.         0.         0.     
+  ccs        0.         0.         0.     
+  betaac   100.0000   100.0000   100.0000 
+  ft       843.0286g  421.5143g  843.0286g
+
+
+
+
+          ***** job concluded
+ ******  
+ * bjt_area: a bare number after the bjt model name (area?)
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       6 # elements   =       8
+  # resistors   =       0 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       5
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       3
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.01           1           3
+  readin             0.01
+  errchk             0.01
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         97.18 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       28.36 seconds
+           job started at     04:11:02 11/01/2026
+           job ended   at     04:11:30 11/01/2026
+           job total runtime        28.36 seconds
+
+

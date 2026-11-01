@@ -1,0 +1,13 @@
+{
+ "case": "dup_subckt",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:5) duplicated subckt definition 'inv'"
+ }
+}

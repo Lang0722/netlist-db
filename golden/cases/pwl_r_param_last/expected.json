@@ -1,0 +1,41 @@
+{
+ "case": "pwl_r_param_last",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "node_voltages": {
+   "1": 0.3
+  },
+  "sources": {
+   "v1": {
+    "type": "pwl",
+    "dc": 0.3,
+    "pwl": [
+     [
+      0.0,
+      0.3
+     ],
+     [
+      1e-09,
+      0.3
+     ]
+    ],
+    "repeat_delay": 0.0
+   }
+  },
+  "r_read_as": "the repeat flag (repeat delay 0), not the value 2 of .param r: the PWL keeps 3 values, and HSPICE gives its last time point the value 0.3 with a warning",
+  "warning": "**warning** Element        0:v1               is missing terminal voltage 0.30000     used by HSPICE.",
+  "info": "**info** (deck.sp:4) DC voltage reset to initial transient source value in source 0:v1. new dc=0.3000D+00",
+  "source": ".option list independent sources (dc volt, repeat delay, pwl points); .op node voltages"
+ }
+}

@@ -1,0 +1,92 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 04:27:51 2026
+ scientific notation:
+ a=10**-18  f=10**-15  p=10**-12  n=10**-9  u=10**-6
+ m=10**-3   k=10**3    x=10**6    g=10**9 
+
+
+ circuit parameter definitions
+  parameter          =  value 
+
+
+
+
+
+ constants  - tnom         kt           vt           gapsi        ni
+            298.15000    4.1163e-21    25.69184m     1.11562    1.2565e+16 
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * res_value_model: resistor value, then model name (r1 1 0 2k rmod)
+
+ ****** res model parameters tnom=  25.000 temp=  25.000 ******
+ *********************************
+ ***  model name:   0:rmod    ****
+ *********************************
+
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+    level=   0.                   w=   0.    meters        dw=   0.    meters 
+        l=   0.    meters       dlr=   0.    meters      tc1r=   0.    /deg   
+     tc2r=   0.    /deg2       tref=  25.00  deg k       tc1c=   0.    /deg   
+     tc2c=   0.    /deg2       bulk=  gnd              shrink=   1.00         
+    scale=   1.00               res=   0.    ohms         cap=   0.    farad  
+      rac=   0.    ohms         rsh=   0.    ohm/sq       cox=   0.    f/m**2 
+    capsw=   0.    f/m        thick=   0.    meters    cratio= 500.00m        
+       di=   0.               noise=   1.00              wmin=   0.    meters 
+     wmax=   1.00m meters      lmin=   0.    meters      lmax=   1.00m meters 
+       kf=   0.                  af=   2.00                lf=   1.00         
+       wf=   1.00                ef=   1.00         
+  
+  **error** (deck.sp:5) Element in r1 has three nodes defined,  element must have two nodes
+
+          ***** job aborted
+ ******  
+ * res_value_model: resistor value, then model name (r1 1 0 2k rmod)
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       3 # elements   =       2
+  # resistors   =       1 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           0
+  readin             0.01
+  errchk             0.00
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         98.98 megabytes
+           total cpu time            0.01 seconds
+           total elapsed time       30.17 seconds
+           job started at     04:27:51 11/01/2026
+           job ended   at     04:28:21 11/01/2026
+           job total runtime        30.17 seconds
+
+

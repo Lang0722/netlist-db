@@ -1,0 +1,19 @@
+{
+ "case": "mos_kw_and_positional",
+ "resistors": [],
+ "totals": {
+  "resistors": 0,
+  "capacitors": 0,
+  "mosfets": 3,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "m1": {
+   "l": 3e-06,
+   "w": 1e-06
+  },
+  "l_winner": "keyword (the last value)",
+  "warning": "**warning** (deck.sp:10) Duplicate parameter l is set. The last one overrides previous ones.",
+  "source": ".option list l drawn / w drawn; .op beta 33.3333u (m1) = m3 (l=3u), m2 (l=2u) 50.0000u"
+ }
+}

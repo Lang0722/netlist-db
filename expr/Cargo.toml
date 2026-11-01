@@ -1,0 +1,9 @@
+[package]
+name = "netlist-expr"
+description = "HSPICE numbers and expressions: Pratt parser and evaluator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]

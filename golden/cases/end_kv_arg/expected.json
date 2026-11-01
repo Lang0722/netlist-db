@@ -1,0 +1,28 @@
+{
+ "case": "end_kv_arg",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "after_end_runs": [
+   {
+    "run": 2,
+    "resistors": {
+     "r2": 2000.0
+    }
+   }
+  ],
+  "end_read_as": "`.end x=1` ends the first deck, with no warning: the lines after it run as a second job",
+  "jobs": 2,
+  "source": "two 'job concluded' sections, each with # resistors = 1: r1 in the first job, r2 in the second (extra.after_end_runs)"
+ }
+}

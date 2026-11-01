@@ -37,8 +37,10 @@ mod span;
 
 use alloc::borrow::Cow;
 use ast::ASTBuilder;
+pub use err::{ParseError, ParseErrorInner};
 use indexmap::IndexMap;
-pub use span::{FileId, ParsedId};
+pub use parser::{LibOverride, ParseOptions, TitleLine};
+pub use span::{FileId, ParsedId, Pos, Span};
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -46,6 +48,9 @@ pub struct Parsed {
     pub top_ids: Vec<span::ParsedId>,
     pub id2idx: HashMap<span::FileId, span::ParsedId>,
     pub inner: Vec<(span::FileId, ast::ASTBuilder)>,
+    /// One entry for each `ParseOptions::lib_override`, in order: `true`
+    /// when it changed the section of at least one `.lib` call.
+    pub lib_override_matched: Vec<bool>,
 }
 #[derive(Debug)]
 pub struct Files {
@@ -73,6 +78,16 @@ pub struct AST<'s> {
     pub instance: Vec<instance::Instance<'s>>,
     pub model: Vec<ast::Model<'s>>,
     pub param: Vec<ast::KeyValue<'s>>,
+    /// `.param` function definitions
+    pub param_func: Vec<ast::ParamFunc<'s>>,
+    /// `.global` node names
+    pub global: Vec<Cow<'s, str>>,
+    /// The first and the last line of each `.prot` … `.unprot` region (the
+    /// text in it is not parsed)
+    pub protected: Vec<(u32, u32)>,
+    /// The number of `.alter` lines: the runs after the first one. The
+    /// statements of the `.alter` blocks are in this AST too.
+    pub alter_runs: usize,
     pub option: Vec<(Cow<'s, str>, Option<ast::Value<'s>>)>,
     /// transient initial conditions
     /// https://eda-cpu1.eias.junzhuo.site/~junzhuo/hspice/index.htm#page/hspice_14/ic.htm
@@ -129,130 +144,155 @@ pub struct AST<'s> {
 //     }
 // }
 
+/// What [`ast::ASTBuilder::build`] reads from the whole parse, and its
+/// error flag.
+struct BuildCtx<'s, 'p> {
+    files: &'s Files,
+    parsed_inner: &'p [(FileId, ASTBuilder)],
+    has_err: bool,
+    /// The files being built (by `ParsedId`), the top file first, each
+    /// with the include line in it that is followed: an include of one of
+    /// them is an include cycle.
+    reading: Vec<(usize, Option<Pos>)>,
+}
+
 impl ast::ASTBuilder {
-    #[expect(clippy::too_many_arguments)]
+    /// Adds the statements of this file (or `.subckt` body) to `ast`.
+    /// `depth` is the number of `.subckt` bodies around it, counted across
+    /// `.include` lines: an included file is inside the body that includes
+    /// it (golden `include_in_subckt`). A `.subckt` deeper than
+    /// [`parser::MAX_NESTING`] is one `NestingTooDeep` error, and its
+    /// definition is skipped. The parser limits the depth in each file, so
+    /// only an include chain can go deeper; this keeps the recursion short.
+    /// An include of a file that is being built (an include cycle) is one
+    /// `CircularDefinition` error at that include line, and is not
+    /// followed.
+    ///
+    /// The child ASTs are built in place in `ast.subckt`, so that a level of
+    /// recursion uses little stack.
     fn build<'s>(
         &self,
         ast: &mut AST<'s>,
-        has_err: &mut bool,
-        file_id: &span::FileId,
-        parsed_id: span::ParsedId,
-        files: &'s Files,
-        parsed_id2idx: &HashMap<FileId, ParsedId>,
-        parsed_inner: &Vec<(FileId, ASTBuilder)>,
+        cx: &mut BuildCtx<'s, '_>,
+        file_id: &FileId,
+        parsed_id: ParsedId,
+        depth: usize,
     ) {
-        use builder::Builder as _;
-        fn build_local<'s>(
-            local_ast: &ast::LocalAST,
-            ast: &mut AST<'s>,
-            has_err: &mut bool,
-            file: &'s str,
-            file_id: &span::FileId,
-            parsed_id: span::ParsedId,
-            files: &'s Files,
-            parsed_id2idx: &HashMap<FileId, ParsedId>,
-            parsed_inner: &Vec<(FileId, ASTBuilder)>,
-        ) {
-            fn build_subckt<'s>(
-                s: &ast::SubcktBuilder,
-                has_err: &mut bool,
-                file: &'s str,
-                file_id: &span::FileId,
-                parsed_id: span::ParsedId,
-                files: &'s Files,
-                parsed_id2idx: &HashMap<FileId, ParsedId>,
-                parsed_inner: &Vec<(FileId, ASTBuilder)>,
-            ) -> Subckt<'s> {
-                let mut ast = AST::default();
-                s.ast.build(
-                    &mut ast,
-                    has_err,
-                    file_id,
-                    parsed_id,
-                    files,
-                    parsed_id2idx,
-                    parsed_inner,
-                );
-                Subckt {
-                    name: s.name.build(file),
-                    ports: s.ports.build(file),
-                    params: s.params.build(file),
-                    ast,
-                }
-            }
-            ast.subckt.extend(local_ast.subckt.iter().map(|s| {
-                let subckt = build_subckt(
-                    s,
-                    has_err,
-                    file,
-                    file_id,
-                    parsed_id,
-                    files,
-                    parsed_id2idx,
-                    parsed_inner,
-                );
-                (subckt.name.to_lowercase(), subckt)
-            }));
-            ast.instance
-                .extend(local_ast.instance.iter().map(|b| b.build(file)));
-            ast.model
-                .extend(local_ast.model.iter().map(|b| b.build(file)));
-            ast.param
-                .extend(local_ast.param.iter().map(|b| b.build(file)));
-            ast.option
-                .extend(local_ast.option.iter().map(|b| b.build(file)));
-            ast.general
-                .extend(local_ast.general.iter().map(|b| b.build(file)));
-            ast.data
-                .extend(local_ast.data.iter().map(|b| b.build(file)));
-            ast.init_condition
-                .extend(local_ast.init_condition.iter().map(|b| b.build(file)));
-            ast.nodeset
-                .extend(local_ast.nodeset.iter().map(|b| b.build(file)));
-            ast.unknwon
-                .extend(local_ast.unknwon.iter().map(|b| b.build(file)));
-            for e in &local_ast.errors {
-                e.report(has_err, file_id, file);
-            }
-        }
-        let file = &files.inner[parsed_id.0];
+        let file: &'s str = &cx.files.inner[parsed_id.0];
         for seg in &self.segments {
             match seg {
                 ast::Segment::Local(local_ast) => {
-                    build_local(
-                        local_ast,
-                        ast,
-                        has_err,
-                        file,
-                        file_id,
-                        parsed_id,
-                        files,
-                        parsed_id2idx,
-                        parsed_inner,
-                    );
-                }
-                ast::Segment::Include(ast_res) => {
-                    let ast_res = ast_res.get().unwrap();
-                    match ast_res {
-                        Ok(parsed_id) => {
-                            let (file_id, _ast) = &parsed_inner[parsed_id.0];
-                            _ast.build(
-                                ast,
-                                has_err,
-                                file_id,
-                                *parsed_id,
-                                files,
-                                parsed_id2idx,
-                                parsed_inner,
-                            );
+                    for s in &local_ast.subckt {
+                        if depth >= parser::MAX_NESTING {
+                            let err = err::ParseErrorInner::NestingTooDeep {
+                                keyword: err::def_keyword(file, s.name.start),
+                                subckt: file[&s.name].to_owned(),
+                                limit: parser::MAX_NESTING,
+                            };
+                            let pos = Pos {
+                                start: s.name.start,
+                                line_num: s.name.line_num,
+                            };
+                            err.with(Some(pos)).report(&mut cx.has_err, file_id, file);
+                            continue;
                         }
-                        Err(e) => {
-                            e.report(has_err, file_id, file);
-                        }
+                        let child = new_subckt(&mut ast.subckt, s, file);
+                        s.ast.build(child, cx, file_id, parsed_id, depth + 1);
                     }
+                    build_statements(local_ast, ast, &mut cx.has_err, file, file_id);
                 }
+                ast::Segment::Include { res, pos } => match res.get().unwrap() {
+                    Ok(id) => {
+                        if let Some(last) = cx.reading.last_mut() {
+                            last.1 = *pos;
+                        }
+                        // The parser reads a file once, so it does not see
+                        // a cycle: this walk does, and does not follow it.
+                        if let Some(k) = cx.reading.iter().position(|&(r, _)| r == id.0) {
+                            let chain = cx
+                                .reading
+                                .iter()
+                                .map(|&(r, at)| (cx.parsed_inner[r].0.clone(), at))
+                                .collect();
+                            err::ParseErrorInner::CircularDefinition(chain, k)
+                                .with(*pos)
+                                .report(&mut cx.has_err, file_id, file);
+                            continue;
+                        }
+                        cx.reading.push((id.0, None));
+                        let (file_id, _ast) = &cx.parsed_inner[id.0];
+                        _ast.build(ast, cx, file_id, *id, depth);
+                        cx.reading.pop();
+                    }
+                    Err(e) => e.report(&mut cx.has_err, file_id, file),
+                },
+                ast::Segment::Alter { .. } => ast.alter_runs += 1,
             }
         }
+    }
+}
+
+/// Adds `s` to `subckt` with an empty AST (a later definition with the same
+/// name, in any letter case, replaces an earlier one), and returns that AST.
+/// It is not inlined, so the `Subckt` value is not in the frame of the
+/// recursive `ASTBuilder::build`.
+#[inline(never)]
+fn new_subckt<'s, 'a>(
+    subckt: &'a mut IndexMap<String, Subckt<'s>>,
+    s: &ast::SubcktBuilder,
+    file: &'s str,
+) -> &'a mut AST<'s> {
+    use builder::Builder as _;
+    let name = s.name.build(file);
+    let (idx, _) = subckt.insert_full(
+        name.to_lowercase(),
+        Subckt {
+            name,
+            ports: s.ports.build(file),
+            params: s.params.build(file),
+            ast: AST::default(),
+        },
+    );
+    &mut subckt[idx].ast
+}
+
+/// Adds the statements of `local_ast`, except its `.subckt` definitions, to
+/// `ast`, and reports its errors. It is not inlined, so its values are not
+/// in the frame of the recursive `ASTBuilder::build`.
+#[inline(never)]
+fn build_statements<'s>(
+    local_ast: &ast::LocalAST,
+    ast: &mut AST<'s>,
+    has_err: &mut bool,
+    file: &'s str,
+    file_id: &FileId,
+) {
+    use builder::Builder as _;
+    ast.instance
+        .extend(local_ast.instance.iter().map(|b| b.build(file)));
+    ast.model
+        .extend(local_ast.model.iter().map(|b| b.build(file)));
+    ast.param
+        .extend(local_ast.param.iter().map(|b| b.build(file)));
+    ast.param_func
+        .extend(local_ast.param_func.iter().map(|b| b.build(file)));
+    ast.global
+        .extend(local_ast.global.iter().map(|b| b.build(file)));
+    ast.protected.extend(local_ast.protected.iter().copied());
+    ast.option
+        .extend(local_ast.option.iter().map(|b| b.build(file)));
+    ast.general
+        .extend(local_ast.general.iter().map(|b| b.build(file)));
+    ast.data
+        .extend(local_ast.data.iter().map(|b| b.build(file)));
+    ast.init_condition
+        .extend(local_ast.init_condition.iter().map(|b| b.build(file)));
+    ast.nodeset
+        .extend(local_ast.nodeset.iter().map(|b| b.build(file)));
+    ast.unknwon
+        .extend(local_ast.unknwon.iter().map(|b| b.build(file)));
+    for e in &local_ast.errors {
+        e.report(has_err, file_id, file);
     }
 }
 
@@ -260,19 +300,18 @@ impl Files {
     #[inline]
     pub fn build(&self, parsed: Parsed) -> (AST<'_>, bool) {
         let mut ast = AST::default();
-        let mut has_err = false;
+        let mut cx = BuildCtx {
+            files: self,
+            parsed_inner: &parsed.inner,
+            has_err: false,
+            reading: Vec::new(),
+        };
         for top_id in parsed.top_ids {
             let (file_id, _ast) = &parsed.inner[top_id.0];
-            _ast.build(
-                &mut ast,
-                &mut has_err,
-                file_id,
-                top_id,
-                self,
-                &parsed.id2idx,
-                &parsed.inner,
-            );
+            cx.reading.push((top_id.0, None));
+            _ast.build(&mut ast, &mut cx, file_id, top_id, 0);
+            cx.reading.pop();
         }
-        (ast, has_err)
+        (ast, cx.has_err)
     }
 }

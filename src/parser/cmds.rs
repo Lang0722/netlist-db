@@ -6,6 +6,7 @@ use crate::{
 use super::super::parser::utils::{loss_sep, multiline_sep, name, name_str, v, value};
 use nom::{
     IResult, Parser,
+    branch::alt,
     character::char,
     combinator::{map, map_res, opt},
     multi::many1,
@@ -54,8 +55,9 @@ pub(super) fn nodeset(
 ) -> IResult<LocatedSpan, impl Iterator<Item = (Span, ValueBuilder, Option<Span>)>> {
     #[inline]
     fn node_volt(i: LocatedSpan) -> IResult<LocatedSpan, (Span, ValueBuilder)> {
+        // `V(node)=val` or `node val`
         map(
-            (name, loss_sep, opt(char('=')), loss_sep, value),
+            (alt((v, name)), loss_sep, opt(char('=')), loss_sep, value),
             |(node, _, _, _, val)| (node, val),
         )
         .parse_complete(i)

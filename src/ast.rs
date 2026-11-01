@@ -4,7 +4,7 @@ use crate::{
     err::ParseError,
     instance::InstanceBuilder,
     self_builder,
-    span::{ParsedId, Span},
+    span::{ParsedId, Pos, Span},
 };
 use netlist_macros::Builder;
 
@@ -40,6 +40,15 @@ self_builder!(GeneralCmd);
 pub struct GeneralBuilder {
     pub cmd: GeneralCmd,
     pub tokens: Vec<TokenBuilder>,
+}
+
+/// A `.param` function definition: `.param f(a,b)='a*b'`.
+#[derive(Debug, Clone, Builder)]
+pub struct ParamFuncBuilder {
+    pub name: Span,
+    pub args: Vec<Span>,
+    /// The expression, without its quotes.
+    pub body: Span,
 }
 
 #[derive(Debug, Clone, Builder)]
@@ -152,6 +161,13 @@ pub struct LocalAST {
     pub instance: Vec<InstanceBuilder>,
     pub model: Vec<ModelBuilder>,
     pub param: Vec<KeyValueBuilder>,
+    /// `.param` function definitions
+    pub param_func: Vec<ParamFuncBuilder>,
+    /// `.global` node names
+    pub global: Vec<Span>,
+    /// The first and the last line of each `.prot`/`.protect` …
+    /// `.unprot`/`.unprotect` region. The text in it is not parsed.
+    pub protected: Vec<(u32, u32)>,
     pub option: Vec<(Span, Option<ValueBuilder>)>,
     pub data: Vec<DataBuilder>,
     pub general: Vec<GeneralBuilder>,
@@ -159,6 +175,11 @@ pub struct LocalAST {
     pub nodeset: Vec<(Span, ValueBuilder, Option<Span>)>,
     pub unknwon: Vec<UnknwonBuilder>,
     pub errors: Vec<ParseError>,
+    /// The lines of the `.end` statements of a file that is not a top
+    /// file (an `.include` file or a `.lib` section). HSPICE ignores them,
+    /// with a warning, and reads the lines after them (golden
+    /// `end_in_include`); so does the parse.
+    pub ignored_end: Vec<u32>,
 }
 
 impl LocalAST {
@@ -167,29 +188,78 @@ impl LocalAST {
             && self.instance.is_empty()
             && self.model.is_empty()
             && self.param.is_empty()
+            && self.param_func.is_empty()
+            && self.global.is_empty()
+            && self.protected.is_empty()
             && self.option.is_empty()
             && self.data.is_empty()
             && self.general.is_empty()
+            && self.init_condition.is_empty()
+            && self.nodeset.is_empty()
             && self.unknwon.is_empty()
             && self.errors.is_empty()
+            && self.ignored_end.is_empty()
     }
 }
 
 #[derive(Debug)]
 pub enum Segment {
     Local(Box<LocalAST>),
-    Include(Arc<OnceLock<Result<ParsedId, ParseError>>>),
+    /// An `.include` or `.lib <file> <section>` line: the parse of that
+    /// file or section, and the position of the line (at its end).
+    Include {
+        res: Arc<OnceLock<Result<ParsedId, ParseError>>>,
+        pos: Option<Pos>,
+    },
+    /// An `.alter` line. The segments after it, up to the next `Alter`,
+    /// belong to that `.alter` run. `index` counts the `.alter` lines of
+    /// the file from 1 (`.alter` #1 describes the second run).
+    Alter {
+        index: usize,
+        pos: Option<Pos>,
+    },
 }
+
+/// What the parse did with line 1 of a top file (see
+/// `ParseOptions::title_line`).
+#[derive(Debug, Clone)]
+pub struct TitleLineInfo {
+    /// Line 1, without its line end.
+    pub line: Span,
+    /// `true` when line 1 is the title line and was not parsed.
+    pub skipped: bool,
+    /// One sentence: what was done with line 1, and why.
+    pub message: String,
+}
+
+/// The `.end` line of a top file. HSPICE does not read the lines after it
+/// (golden `after_end`), so the parse stops there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AfterEnd {
+    /// The line of `.end`.
+    pub line: u32,
+    /// The lines after `.end` that are not empty, not comments and not in
+    /// a `.lib <section>` block (which a `.lib` call reads).
+    pub lines: u32,
+}
+
 #[derive(Debug, Default)]
 pub struct ASTBuilder {
     pub segments: Vec<Segment>,
+    /// Set for a top file whose line 1 has text, when the parse looked for
+    /// a title line (`TitleLine::Auto` or `TitleLine::Yes`).
+    pub title: Option<TitleLineInfo>,
+    /// Set for a top file with an `.end` line.
+    pub after_end: Option<AfterEnd>,
+    /// The first line with bytes that are not UTF-8, when the file (or
+    /// the `.lib` section) has such bytes. They are read as U+FFFD, and the
+    /// statements are kept.
+    pub non_utf8: Option<u32>,
 }
 
 impl ASTBuilder {
     pub fn new() -> Self {
-        Self {
-            segments: Vec::new(),
-        }
+        Self::default()
     }
 }
 

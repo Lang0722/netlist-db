@@ -1,0 +1,102 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 21:51:59 2026
+  
+             
+ Info:'Recovered resistors' occurs 1 times
+ Summary of recovered resistors to avoid V loop:
+ -----------------------
+ |Location  |Resistor  |
+ |----------+----------|
+ |deck.sp:10|r3        |
+ -----------------------
+              
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * probe_prot_param: a .param and a .model inside a .prot region, used outside it
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage
+
+ +0:1       =   1.0000 
+
+
+ **** voltage sources
+
+ subckt             
+ element  0:v1      
+  volts      1.0000 
+  current -100.0000k
+  power    100.0000k
+
+     total voltage source power dissipation=  100.0000k       watts
+
+
+
+ **** resistors
+
+ subckt                        
+ element  0:r1       0:r2      
+  r value    1.0000k    2.0000k
+  v drop     1.0000     1.0000 
+  current    1.0000m  500.0000u
+  power      1.0000m  500.0000u
+
+
+          ***** job concluded
+ ******  
+ * probe_prot_param: a .param and a .model inside a .prot region, used outside it
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       2 # elements   =       4
+  # resistors   =       3 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  readin             0.01
+  errchk             0.01
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         98.57 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       30.04 seconds
+           job started at     21:51:59 11/01/2026
+           job ended   at     21:52:29 11/01/2026
+           job total runtime        30.04 seconds
+
+

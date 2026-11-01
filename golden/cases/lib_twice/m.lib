@@ -1,0 +1,8 @@
+* m.lib: section tt holds a .subckt, a .model and a .param
+.lib tt
+.subckt cell a b
+rc a b 1k
+.ends
+.model rmod r
+.param pl=1k
+.endl tt

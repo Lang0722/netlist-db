@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netlist-mcp"
+version = "0.1.0"
+description = "MCP server over netlist_db: small, paged answers about HSPICE netlists for LLMs"
+requires-python = ">=3.10"
+license = "MIT"
+# `netlist_db` is the binding of this repository (`pybind/`, built with
+# maturin), not the PyPI package of that name (the upstream parser), so it
+# is not a dependency here; the server checks it at start
+dependencies = ["mcp>=2,<3"]
+
+[project.scripts]
+netlist-mcp = "netlist_mcp.server:main"
+
+[tool.setuptools]
+packages = ["netlist_mcp"]

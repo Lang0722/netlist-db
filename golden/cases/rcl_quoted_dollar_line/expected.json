@@ -1,0 +1,13 @@
+{
+ "case": "rcl_quoted_dollar_line",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) Illegal character in statement in column    8 : rval*2 $ c **error** (deck.sp:3)  Number is improperly formed in column  10 : rval*2 $ c"
+ }
+}

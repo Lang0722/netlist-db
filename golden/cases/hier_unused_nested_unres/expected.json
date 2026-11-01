@@ -1,0 +1,16 @@
+{
+ "case": "hier_unused_nested_unres",
+ "resistors": [
+  {
+   "path": "x1.ro",
+   "value": 5.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {}
+}

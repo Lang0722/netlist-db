@@ -1,0 +1,14 @@
+{
+ "case": "lib_twice",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (m.lib:3) duplicated subckt definition 'cell'",
+  "second_lib_call": "loaded again"
+ }
+}
