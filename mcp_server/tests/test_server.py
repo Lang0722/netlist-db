@@ -35,6 +35,8 @@ def test_load_then_list():
     assert t["lines"]["total"] == 10
     t2 = call("subckt_text", handle=h, name="mid", cursor=t["lines"]["next_cursor"])
     assert t2["first_line"] == 11 and t2["lines"]["items"][-1] == ".ends"
+    n = call("net_info", handle=h, scope_path="", net="x1.xm1.n1")
+    assert (n["scope"], n["net"]) == ("x1.xm1", "n1")
 
 
 def test_handle_reuse():

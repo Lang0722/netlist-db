@@ -180,6 +180,11 @@ handle, and the other tools take it first. See `mcp_server/README.md`.
   (`x1.xinv.m3`). `""` is the top level. HSPICE finds an `X` line's subckt
   along the instance path, so one `X` line can call different nested
   definitions in different instances.
+- `net_info` and `trace_net` also take an HSPICE full node name, such as
+  `x1.xm1.n1` from a listing or a waveform, as the net, with the scope
+  path `""`. When the scope has no net with that name, the name is split
+  at its last `.` into an instance path and a net, as HSPICE splits an
+  element path.
 - Parameters follow `.option parhier`. The default is `global`: a top-level
   `.param` wins over an `X`-line override or a subckt default. With
   `parhier=local`, the definition nearest the element wins.

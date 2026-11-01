@@ -63,6 +63,15 @@ def test_resolve_param_chain():
     assert net.element_info("x1.r1")["kind"] == "resistor"
 
 
+def test_full_node_name():
+    net = golden("hier_counts")
+    i = net.net_info("", "x1.xm1.n1")
+    assert (i["scope"], i["net"], i["def"]) == ("x1.xm1", "n1", "mid")
+    assert "full node name" in i["caveats"][0]
+    t = net.trace_net("", "x1.xm1.xl1.a", direction="up", depth=3)
+    assert t["scope"] == "x1.xm1.xl1" and t["hops"]["total"] == 3
+
+
 def test_error_is_dict():
     net = golden("hier_counts")
     e = net.subckt_info("lef")

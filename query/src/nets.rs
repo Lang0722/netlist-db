@@ -422,7 +422,76 @@ impl Netlist {
     /// the nodes of a DSPF net, or one node. `parasitics` comes from the
     /// `*|NET` block of the net (included, or `.option sim_dspf` for this
     /// scope).
+    ///
+    /// `net` can also be an HSPICE full node name below the scope
+    /// (`x1.xm1.n1`, see [`Netlist::full_name`]).
     pub fn net_info(
+        &self,
+        scope_path: &str,
+        net: &str,
+        view: NetView,
+        page_req: &Page,
+    ) -> Result<NetInfo, QueryError> {
+        self.full_name(scope_path, net, view, page_req)
+            .map(|(info, _)| info)
+    }
+
+    /// [`Netlist::net_info`] for `net` in `scope_path`. When the scope has
+    /// no net `net` and `net` holds a `.`, `net` is an HSPICE full node
+    /// name below the scope (`x1.xm1.n1`): it is split at its last `.`
+    /// into an instance path, below `scope_path`, and a net of that
+    /// instance. HSPICE splits an element path in this way (golden
+    /// `elem_dotted_name_collision`); for a node it was not probed, and a
+    /// caveat says how the name was read. Returns the answer, and the net
+    /// that it is for (`info.scope` is its scope path).
+    fn full_name(
+        &self,
+        scope_path: &str,
+        net: &str,
+        view: NetView,
+        page_req: &Page,
+    ) -> Result<(NetInfo, String), QueryError> {
+        let asked = net.trim();
+        let err = match self.net_at(scope_path, asked, view, page_req) {
+            Ok(info) => return Ok((info, asked.to_owned())),
+            // only a net that the scope does not have (`net_at` names it
+            // `net in ...`), not a scope path that names no instance
+            Err(e @ QueryError::NotFound { .. }) if matches!(&e, QueryError::NotFound { what, .. } if what.starts_with("net in ")) => {
+                e
+            }
+            Err(e) => return Err(e),
+        };
+        let Some((inst, local)) = asked
+            .rsplit_once('.')
+            .filter(|(i, l)| !i.trim().is_empty() && !l.trim().is_empty())
+        else {
+            return Err(err);
+        };
+        let scope = scope_path.trim();
+        let full = if scope.is_empty() || scope == "." {
+            inst.trim().to_owned()
+        } else {
+            format!("{scope}.{}", inst.trim())
+        };
+        let local = local.trim();
+        // the name has a `.` and is no net of the scope: a full name, so
+        // the errors of that reading are the useful ones
+        let mut info = self.net_at(&full, local, view, page_req)?;
+        info.caveats
+            .insert(0, Self::full_name_note(asked, local, &info.scope));
+        Ok((info, local.to_owned()))
+    }
+
+    /// The caveat of [`Netlist::full_name`] for `asked` read as net
+    /// `local` of the instance `info.scope`.
+    fn full_name_note(asked: &str, local: &str, scope: &str) -> String {
+        format!(
+            "`{asked}` is read as an HSPICE full node name: net `{local}` of instance `{scope}`"
+        )
+    }
+
+    /// [`Netlist::net_info`] for `net` as written in `scope_path`.
+    fn net_at(
         &self,
         scope_path: &str,
         net: &str,
@@ -581,18 +650,21 @@ impl Netlist {
         depth: u32,
         page_req: &Page,
     ) -> Result<NetTrace, QueryError> {
-        let asked = net.trim();
-        // the start net must exist in the scope
-        let info = self.net_info(
+        // the start net must exist in the scope; it can be a full node name
+        let (info, local) = self.full_name(
             scope_path,
-            asked,
+            net,
             NetView::Logical,
             &Page {
                 limit: 0,
                 cursor: None,
             },
         )?;
-        let (links, mut caveats) = self.chain(scope_path)?;
+        let asked = local.as_str();
+        let (links, mut caveats) = self.chain(&info.scope)?;
+        if asked != net.trim() {
+            caveats.insert(0, Self::full_name_note(net.trim(), asked, &info.scope));
+        }
         let start = links.last().expect("the chain has the root").node.clone();
         let key = self.logical(start.scope.def, self.asked_key(asked)).0;
         let (down, up) = match dir {

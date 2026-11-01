@@ -482,3 +482,116 @@ fn port_that_is_global() {
         i.caveats
     );
 }
+
+#[test]
+fn full_node_names() {
+    let net = load(repo("golden/cases/hier_counts/deck.sp"));
+    let local = info(&net, "x1.xm1", "n1");
+    for (scope, name) in [("", "x1.xm1.n1"), ("", " X1.XM1.N1 "), ("x1", "xm1.n1")] {
+        let full = info(&net, scope, name);
+        assert_eq!((full.scope.as_str(), full.net.as_str()), ("x1.xm1", "n1"));
+        assert_eq!(full.def, "mid");
+        assert_eq!(pins(&full), pins(&local));
+        assert!(
+            full.caveats[0].contains("read as an HSPICE full node name"),
+            "{:?}",
+            full.caveats
+        );
+        assert_eq!(full.caveats[1..], local.caveats[..]);
+    }
+    // a port of a deep instance
+    let port = info(&net, "", "x1.xm1.xl1.a");
+    assert_eq!(
+        (port.scope.as_str(), port.def.as_str()),
+        ("x1.xm1.xl1", "leaf")
+    );
+    assert!(port.is_port);
+    // a name of the scope as written is not split
+    assert!(info(&net, "x1.xm1", "n1").caveats.is_empty());
+    // the errors of the full-name reading
+    match net.net_info("", "x1.xm1.n9", NetView::Logical, &all()) {
+        Err(QueryError::NotFound {
+            what, suggestions, ..
+        }) => {
+            assert_eq!(what, "net in `mid`");
+            assert!(suggestions.iter().any(|s| s == "n1"), "{suggestions:?}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        net.net_info("", "x1.xm9.n1", NetView::Logical, &all()),
+        Err(QueryError::NotFound { .. })
+    ));
+    match net.net_info("", "x1.rs1.n1", NetView::Logical, &all()) {
+        Err(QueryError::BadArgument(msg)) => {
+            assert!(msg.contains("not a subckt instance"), "{msg}")
+        }
+        other => panic!("{other:?}"),
+    }
+    // a name with no instance part, or no net part, is not split
+    for bad in [".n1", "x1."] {
+        match net.net_info("", bad, NetView::Logical, &all()) {
+            Err(QueryError::NotFound { what, .. }) => assert_eq!(what, "net in `(top level)`"),
+            other => panic!("{bad}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn full_node_names_with_dotted_instances() {
+    // instance names with a `.`: the path is found as HSPICE names the
+    // instances (golden `hier_dotted_names`)
+    let net = load(repo("golden/cases/hier_dotted_names/deck.sp"));
+    let i = info(&net, "", "x0.xm.n.a");
+    assert_eq!((i.scope.as_str(), i.def.as_str()), ("x0.xm.n", "cell3"));
+    let i = info(&net, "", "x0.xm.a");
+    assert_eq!((i.scope.as_str(), i.def.as_str()), ("x0.xm", "cell3"));
+    let i = info(&net, "", "x0.n1");
+    assert_eq!((i.scope.as_str(), i.def.as_str()), ("x0", "wrap"));
+    assert_eq!(pins(&i), owned(&[("xq", "b"), ("rq", "1")]));
+    let i = info(&net, "", "x0.aaa.b");
+    assert_eq!((i.scope.as_str(), i.def.as_str()), ("x0.aaa", "cell"));
+    // a net of the scope with a `.` in its name comes first
+    let (_deck, net) = load_text(
+        "full_names_literal",
+        "* t\n.subckt cell a b\nr1 a b 1\n.ends\nx1.n a 0 cell\nr3 x1.n 0 1\n",
+    );
+    let lit = info(&net, "", "x1.n");
+    assert_eq!(pins(&lit), owned(&[("r3", "1")]));
+    assert!(lit.caveats.is_empty(), "{:?}", lit.caveats);
+    let i = info(&net, "", "x1.n.b");
+    assert_eq!(
+        (i.scope.as_str(), pins(&i)),
+        ("x1.n", owned(&[("r1", "2")]))
+    );
+}
+
+#[test]
+fn trace_from_a_full_node_name() {
+    let net = load(repo("golden/cases/hier_counts/deck.sp"));
+    let t = net
+        .trace_net("", "x1.xm1.xl1.a", TraceDir::Up, 3, &all())
+        .unwrap();
+    assert_eq!((t.scope.as_str(), t.net.as_str()), ("x1.xm1.xl1", "a"));
+    let local = net
+        .trace_net("x1.xm1.xl1", "a", TraceDir::Up, 3, &all())
+        .unwrap();
+    assert_eq!(t.hops, local.hops);
+    assert_eq!(t.hops.total, 3);
+    assert_eq!(t.hops.items[2].to_net, "1");
+    assert!(
+        t.caveats[0].contains("read as an HSPICE full node name"),
+        "{:?}",
+        t.caveats
+    );
+    assert_eq!(t.caveats[1..], local.caveats[..]);
+    let rel = net
+        .trace_net("x1", "xm1.a", TraceDir::Down, 1, &all())
+        .unwrap();
+    assert_eq!(rel.scope, "x1.xm1");
+    assert_eq!(rel.hops.total, 3);
+    assert!(
+        net.trace_net("", "x1.xm1.n9", TraceDir::Up, 3, &all())
+            .is_err()
+    );
+}

@@ -63,6 +63,9 @@ Rules for all tools:
   given.
 - An instance path is the lowercase instance names, joined by `.`
   (`x1.xinv.m3`). `""` is the top level.
+- `net_info` and `trace_net` also take an HSPICE full node name as `net`
+  (`x1.xm1.n1`, with `scope_path` `""`). The answer names the instance in
+  `scope`, and a caveat says how the name was read.
 - A list comes in pages. Give `next_cursor` back as `cursor`. `limit` is at
   most 500.
 - An error is a JSON object with one key, `error`, that holds `kind`,

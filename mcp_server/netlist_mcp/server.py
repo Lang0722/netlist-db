@@ -249,7 +249,7 @@ def net_info(
     limit: int = 50,
     cursor: Optional[str] = None,
 ) -> str:
-    """The pins on net `net` in the instance `scope_path` (`""`: the top level), with their roles (MOSFET `d g s b`, `X` lines by port name), paged; DSPF parasitics of the net. `view`: `logical` (a DSPF net as one net, without parasitic R/C) or `physical` (the nodes as written)."""
+    """The pins on net `net` in the instance `scope_path` (`""`: the top level), with their roles (MOSFET `d g s b`, `X` lines by port name), paged; DSPF parasitics of the net. `view`: `logical` (a DSPF net as one net, without parasitic R/C) or `physical` (the nodes as written). `net` can be an HSPICE full node name such as `x1.xm1.n1` with `scope_path` `""`: the answer gives the instance in `scope`."""
     return _call(handle, "net_info", scope_path, net, view, limit, _opt(cursor))
 
 
@@ -263,7 +263,7 @@ def trace_net(
     limit: int = 50,
     cursor: Optional[str] = None,
 ) -> str:
-    """Where net `net` of the instance `scope_path` goes through ports: `down` into instances, `up` to the parent, or `both`, up to `depth` steps, nearest first, paged. Ground and `.global` nets are not followed (they connect by name)."""
+    """Where net `net` of the instance `scope_path` goes through ports: `down` into instances, `up` to the parent, or `both`, up to `depth` steps, nearest first, paged. Ground and `.global` nets are not followed (they connect by name). `net` can be an HSPICE full node name such as `x1.xm1.n1` with `scope_path` `""`."""
     return _call(handle, "trace_net", scope_path, net, direction, depth, limit, _opt(cursor))
 
 
