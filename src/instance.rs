@@ -28,6 +28,10 @@ pub enum InstanceCtxBuilder {
     BJT(BJTBuilder),
     Diode(DiodeBuilder),
     Subckt(SubcktBuilder),
+    /// `E`/`F`/`G`/`H` controlled source
+    ControlledSource(ControlledSourceBuilder),
+    /// `K` mutual inductor
+    MutualInductor(MutualInductorBuilder),
     Unknown {
         r#type: u8,
         nodes: Vec<Span>,
@@ -73,6 +77,14 @@ impl<'s> InstanceCtx<'s> {
                 (d.nplus.to_lowercase(), &d.nplus),
             ]),
             InstanceCtx::Subckt(x) => nodes.extend(x.nodes.iter().map(|s| (s.to_lowercase(), s))),
+            InstanceCtx::ControlledSource(c) => {
+                nodes.extend([(c.n1.to_lowercase(), &c.n1), (c.n2.to_lowercase(), &c.n2)]);
+                for (p, n) in &c.ctrl_nodes {
+                    nodes.extend([(p.to_lowercase(), p), (n.to_lowercase(), n)]);
+                }
+            }
+            // `K` couples two inductors: it has no nodes of its own
+            InstanceCtx::MutualInductor(_) => {}
             InstanceCtx::Unknown {
                 r#type: _,
                 nodes: _nodes,
@@ -81,23 +93,44 @@ impl<'s> InstanceCtx<'s> {
         }
     }
 }
+/// ``` spice
+/// Rxxx n1 n2 [mname] [R=]resistance [TC1=val] [M=val] ...
+/// ```
 #[derive(Debug, Clone, Builder)]
 pub struct ResistorBuilder {
     pub n1: Span,
     pub n2: Span,
     pub value: ValueBuilder,
+    /// model name, if given
+    pub mname: Option<Span>,
+    /// other parameters, e.g. `M=2 TC1=1e-3`
+    pub params: Vec<KeyValueBuilder>,
 }
+/// ``` spice
+/// Cxxx n1 n2 [mname] [C=]capacitance [M=val] ...
+/// ```
 #[derive(Debug, Clone, Builder)]
 pub struct CapacitorBuilder {
     pub n1: Span,
     pub n2: Span,
     pub value: ValueBuilder,
+    /// model name, if given
+    pub mname: Option<Span>,
+    /// other parameters, e.g. `M=2`
+    pub params: Vec<KeyValueBuilder>,
 }
+/// ``` spice
+/// Lxxx n1 n2 [L=]inductance [mname] [M=val] ...
+/// ```
 #[derive(Debug, Clone, Builder)]
 pub struct InductorBuilder {
     pub n1: Span,
     pub n2: Span,
     pub value: ValueBuilder,
+    /// model name, if given
+    pub mname: Option<Span>,
+    /// other parameters, e.g. `M=2`
+    pub params: Vec<KeyValueBuilder>,
 }
 #[derive(Debug, Clone, Builder)]
 pub struct SubcktBuilder {
@@ -143,6 +176,9 @@ pub enum VoltageSourceBuilder {
     Params(Vec<KeyValueBuilder>),
     Value(ValueBuilder),
     PWL(PWLBuilder),
+    /// Any other combination, e.g. `DC 0 AC 1 PULSE(0 1 0 1n 1n 5n 10n)`
+    /// (boxed, to keep every element small)
+    Spec(Box<SourceSpecBuilder>),
 }
 #[derive(Debug, Clone, Builder)]
 pub struct CurrentBuilder {
@@ -155,6 +191,39 @@ pub enum CurrentSourceBuilder {
     Params(Vec<KeyValueBuilder>),
     Value(ValueBuilder),
     PWL(PWLBuilder),
+    /// Any other combination, e.g. `DC 0 AC 1 PULSE(0 1 0 1n 1n 5n 10n)`
+    /// (boxed, to keep every element small)
+    Spec(Box<SourceSpecBuilder>),
+}
+/// Independent source:
+/// ``` spice
+/// Vxxx n+ n- [[DC] dcval] [tranfun] [AC [=] acmag [acphase]] [M=val] ...
+/// ```
+#[derive(Debug, Clone, Default, Builder)]
+pub struct SourceSpecBuilder {
+    pub dc: Option<ValueBuilder>,
+    pub ac: Option<ACBuilder>,
+    pub tran: Option<TranSourceBuilder>,
+    /// other parameters, e.g. `M=2`
+    pub params: Vec<KeyValueBuilder>,
+}
+/// `AC acmag [acphase]`
+#[derive(Debug, Clone, Builder)]
+pub struct ACBuilder {
+    pub mag: ValueBuilder,
+    pub phase: Option<ValueBuilder>,
+}
+/// Transient function of an independent source
+#[derive(Debug, Clone, Builder)]
+pub enum TranSourceBuilder {
+    PWL(PWLBuilder),
+    /// `PULSE`, `SIN`, `EXP`, `SFFM`, `AM`, `PAT`, `LFSR`:
+    /// the function name, its positional arguments and its `key=value` arguments
+    Func {
+        name: Span,
+        args: Vec<ValueBuilder>,
+        params: Vec<KeyValueBuilder>,
+    },
 }
 #[derive(Debug, Clone, Builder)]
 pub struct TimeValuePointBuilder {
@@ -195,3 +264,57 @@ pub enum EdgeType {
 }
 
 self_builder!(EdgeType);
+
+/// Which of the four controlled sources an element is
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlledKind {
+    /// `E`: voltage-controlled voltage source
+    E,
+    /// `F`: current-controlled current source
+    F,
+    /// `G`: voltage-controlled current source
+    G,
+    /// `H`: current-controlled voltage source
+    H,
+}
+self_builder!(ControlledKind);
+
+/// `E`/`F`/`G`/`H` controlled source:
+/// ``` spice
+/// Exxx n+ n- [VCVS] in+ in- gain [MAX=val] ...
+/// Exxx n+ n- [VCVS] POLY(ndim) in1+ in1- ... p0 p1 ...
+/// Exxx n+ n- VOL='expr'
+/// Fxxx n+ n- [CCCS] vsrc gain
+/// Hxxx n+ n- [CCVS] POLY(ndim) vsrc1 ... p0 p1 ...
+/// ```
+#[derive(Debug, Clone, Builder)]
+pub struct ControlledSourceBuilder {
+    pub kind: ControlledKind,
+    /// output nodes
+    pub n1: Span,
+    pub n2: Span,
+    /// `VCVS`, `VCCS`, `CCCS`, `CCVS`, `VCR` or `VCCAP`, if given
+    pub keyword: Option<Span>,
+    /// `POLY(ndim)`
+    pub poly: Option<usize>,
+    /// controlling node pairs (`E`, `G`)
+    pub ctrl_nodes: Vec<(Span, Span)>,
+    /// controlling voltage sources (`F`, `H`)
+    pub ctrl_sources: Vec<Span>,
+    /// the gain, or the polynomial coefficients
+    pub coeffs: Vec<ValueBuilder>,
+    /// e.g. `VOL='...'`, `CUR='...'`, `MAX=1`
+    pub params: Vec<KeyValueBuilder>,
+}
+
+/// ``` spice
+/// Kxxx Lyyy Lzzz [K=]coupling
+/// ```
+#[derive(Debug, Clone, Builder)]
+pub struct MutualInductorBuilder {
+    /// the coupled inductors (element names, not nodes)
+    pub l1: Span,
+    pub l2: Span,
+    pub coupling: ValueBuilder,
+    pub params: Vec<KeyValueBuilder>,
+}
