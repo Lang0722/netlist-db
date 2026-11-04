@@ -147,11 +147,56 @@ impl fmt::Display for Subckt<'_> {
 pub struct DefaultFmt;
 impl SpiceFmt for DefaultFmt {}
 
+/// An optimization parameter value, `OPTxxx(init, min, max)`: written without
+/// quotes (in quotes, it would be a call to a function named `OPTxxx`)
+fn is_opt_call(expr: &str) -> bool {
+    let name_len = expr
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(expr.len());
+    let (name, rest) = expr.split_at(name_len);
+    name.get(..3).is_some_and(|p| p.eq_ignore_ascii_case("opt"))
+        && rest.trim_start().starts_with('(')
+        && rest.ends_with(')')
+}
+
+/// A file name: in single quotes, in double quotes if it has a `'`, or as
+/// written if it has both (it was not quoted then)
+struct QuotedPath<'a>(&'a str);
+impl fmt::Display for QuotedPath<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.0.contains('\''), self.0.contains('"')) {
+            (false, _) => write!(f, "'{}'", self.0),
+            (true, false) => write!(f, "\"{}\"", self.0),
+            (true, true) => write!(f, "{}", self.0),
+        }
+    }
+}
+
 pub trait SpiceFmt: Sized {
     fn value<W: fmt::Write>(&self, t: &ast::Value<'_>, f: &mut W) -> fmt::Result {
         match t {
             ast::Value::Num(float) => write!(f, "{}", FloatDisplay(*float)),
+            // a list of numbers (`TC=0,0`) or an optimization parameter
+            ast::Value::Expr(expr) if parser::is_number_list(expr) || is_opt_call(expr) => {
+                write!(f, "{expr}")
+            }
+            // a quote inside (`agauss(0,0,'2*p1')`): not in single quotes
+            ast::Value::Expr(expr) if expr.contains('\'') => {
+                if parser::is_formula_text(expr) {
+                    write!(f, "{expr}")
+                } else {
+                    write!(f, "\"{expr}\"")
+                }
+            }
             ast::Value::Expr(expr) => write!(f, "'{expr}'"),
+        }
+    }
+    /// A value naming a file (`PWLFILE=...`): without quotes, so that a
+    /// `str(param)` stays a function call
+    fn file_value<W: fmt::Write>(&self, t: &ast::Value<'_>, f: &mut W) -> fmt::Result {
+        match t {
+            ast::Value::Expr(expr) if !expr.contains(char::is_whitespace) => write!(f, "{expr}"),
+            t => self.value(t, f),
         }
     }
     fn key_value<W: fmt::Write>(&self, t: &ast::KeyValue<'_>, f: &mut W) -> fmt::Result {
@@ -168,7 +213,7 @@ pub trait SpiceFmt: Sized {
     }
     fn data_files<W: fmt::Write>(&self, t: &ast::DataFiles<'_>, f: &mut W) -> fmt::Result {
         display_multiline(f, t.files.iter(), |file, f| {
-            write!(f, "+ FILE='{}'", file.file)?;
+            write!(f, "+ FILE={}", QuotedPath(&file.file))?;
             display_inline(
                 f,
                 file.pname_col_num.iter(),
@@ -180,7 +225,7 @@ pub trait SpiceFmt: Sized {
         write!(
             f,
             "{}",
-            OptionDispaly(&t.out, |out, f| write!(f, "\n+ OUT='{out}'")),
+            OptionDispaly(&t.out, |out, f| write!(f, "\n+ OUT={}", QuotedPath(out))),
         )
     }
     fn data<W: fmt::Write>(&self, t: &ast::Data<'_>, f: &mut W) -> fmt::Result {
@@ -255,11 +300,19 @@ pub trait SpiceFmt: Sized {
         display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn voltage<W: fmt::Write>(&self, t: &instance::Voltage<'_>, f: &mut W) -> fmt::Result {
-        write!(f, "{} {} ", t.n1, t.n2)?;
+        write!(f, "{} {}", t.n1, t.n2)?;
+        if matches!(&t.source, instance::VoltageSource::Params(p) if p.is_empty()) {
+            return Ok(());
+        }
+        write!(f, " ")?;
         self.voltage_source(&t.source, f)
     }
     fn current<W: fmt::Write>(&self, t: &instance::Current<'_>, f: &mut W) -> fmt::Result {
-        write!(f, "{} {} ", t.n1, t.n2)?;
+        write!(f, "{} {}", t.n1, t.n2)?;
+        if matches!(&t.source, instance::CurrentSource::Params(p) if p.is_empty()) {
+            return Ok(());
+        }
+        write!(f, " ")?;
         self.current_source(&t.source, f)
     }
     fn voltage_source<W: fmt::Write>(
@@ -354,6 +407,10 @@ pub trait SpiceFmt: Sized {
             ' ',
             1,
         )?;
+        if let Some(file) = &t.pwlfile {
+            write!(f, "\n+ PWLFILE=")?;
+            self.file_value(file, f)?;
+        }
         for (key, value) in [
             ("R", &t.repeat),
             ("TD", &t.delay),
@@ -404,6 +461,9 @@ pub trait SpiceFmt: Sized {
         if let Some(n) = t.poly {
             write!(f, " POLY({n})")?;
         }
+        if let Some(pwl) = &t.pwl {
+            write!(f, " {}({})", pwl.function, pwl.ndim)?;
+        }
         for (p, n) in &t.ctrl_nodes {
             write!(f, " {p} {n}")?;
         }
@@ -411,7 +471,34 @@ pub trait SpiceFmt: Sized {
             write!(f, " {vsrc}")?;
         }
         display_inline(f, t.coeffs.iter(), |t, f| self.value(t, f), ' ', false)?;
-        display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
+        let Some(pwl) = &t.pwl else {
+            return display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false);
+        };
+        // `DELTA=` goes before the points
+        let (delta, params): (Vec<_>, Vec<_>) = t
+            .params
+            .iter()
+            .partition(|kv| kv.k.eq_ignore_ascii_case("DELTA"));
+        display_inline(
+            f,
+            delta.into_iter(),
+            |t, f| self.key_value(t, f),
+            ' ',
+            false,
+        )?;
+        for (x, y) in &pwl.points {
+            write!(f, " ")?;
+            self.value(x, f)?;
+            write!(f, ",")?;
+            self.value(y, f)?;
+        }
+        display_inline(
+            f,
+            params.into_iter(),
+            |t, f| self.key_value(t, f),
+            ' ',
+            false,
+        )
     }
     fn mutual_inductor<W: fmt::Write>(
         &self,
@@ -520,6 +607,10 @@ pub trait SpiceFmt: Sized {
         display_inline(f, t.tokens.iter(), |t, f| self.token(t, f), ' ', false)
     }
     fn ast<W: fmt::Write>(&self, t: &AST<'_>, f: &mut W) -> fmt::Result {
+        // the first line is the title (every other item starts on a new line)
+        if let Some(title) = &t.title {
+            write!(f, "{title}")?;
+        }
         if !t.option.is_empty() {
             write!(f, "\n.OPTION ",)?;
             display_wrap(

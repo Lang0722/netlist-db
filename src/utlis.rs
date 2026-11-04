@@ -1,9 +1,18 @@
 use crate::{Subckt, instance::InstanceCtx};
 use indexmap::IndexMap;
 use itertools::Itertools as _;
-use std::{borrow::Cow, collections::HashMap, iter::once, ops::Deref as _};
+use std::{borrow::Cow, collections::HashMap, iter::once, ops::Deref as _, ptr};
+
+/// [`Subckt::append`] follows the instance hierarchy at most this deep
+pub const MAX_HIERARCHY_DEPTH: usize = 256;
 
 impl<'s> Subckt<'s> {
+    /// Walk the hierarchy under the subckt `cktname`: collect its internal
+    /// nodes (with their instance paths) and the top-level subckts it uses.
+    ///
+    /// Errors: the instance path of a subckt that is not defined, or of a
+    /// subckt that instantiates itself (directly or through other subckts),
+    /// which used to recurse until the stack overflowed.
     pub fn append<'a>(
         cktname: &str,
         need_skip: impl Copy + Fn(&str) -> bool,
@@ -12,11 +21,56 @@ impl<'s> Subckt<'s> {
         internal_nodes: &mut Vec<String>,
         append_subckts: &mut Vec<&'a Self>,
     ) -> Result<(), String> {
+        Self::append_inner(
+            cktname,
+            need_skip,
+            inst_path,
+            include_subckts,
+            internal_nodes,
+            append_subckts,
+            &mut Vec::new(),
+        )
+    }
+    /// `expanding`: the subckts being expanded, from the top down
+    fn append_inner<'a>(
+        cktname: &str,
+        need_skip: impl Copy + Fn(&str) -> bool,
+        inst_path: &mut Vec<&'a Cow<'s, str>>,
+        include_subckts: &mut Vec<&'a IndexMap<String, Self>>,
+        internal_nodes: &mut Vec<String>,
+        append_subckts: &mut Vec<&'a Self>,
+        expanding: &mut Vec<&'a Self>,
+    ) -> Result<(), String> {
         if need_skip(cktname) {
             return Ok(());
         }
+        let path = |inst_path: &[&Cow<'s, str>]| {
+            inst_path
+                .iter()
+                .map(|inst| (*inst).deref())
+                .chain(once(cktname))
+                .join(".")
+        };
         for (idx, include) in include_subckts.iter().enumerate().rev() {
             if let Some(ckt) = include.get(&cktname.to_lowercase()) {
+                if let Some(pos) = expanding.iter().position(|s| ptr::eq(*s, ckt)) {
+                    let cycle = expanding[pos..]
+                        .iter()
+                        .map(|s| s.name.deref())
+                        .chain(once(ckt.name.deref()))
+                        .join(" -> ");
+                    return Err(format!(
+                        "{}: subckt `{}` instantiates itself ({cycle})",
+                        path(inst_path),
+                        ckt.name
+                    ));
+                }
+                if expanding.len() >= MAX_HIERARCHY_DEPTH {
+                    return Err(format!(
+                        "{}: the hierarchy is more than {MAX_HIERARCHY_DEPTH} levels deep",
+                        path(inst_path)
+                    ));
+                }
                 let mut nodes_map =
                     ckt.ast
                         .instance
@@ -38,29 +92,28 @@ impl<'s> Subckt<'s> {
                     append_subckts.push(ckt);
                 }
                 include_subckts.push(&ckt.ast.subckt);
+                expanding.push(ckt);
                 for inst in &ckt.ast.instance {
                     if let InstanceCtx::Subckt(ckt) = &inst.ctx {
                         inst_path.push(&inst.name);
-                        Self::append(
+                        Self::append_inner(
                             &ckt.cktname,
                             need_skip,
                             inst_path,
                             include_subckts,
                             internal_nodes,
                             append_subckts,
+                            expanding,
                         )?;
                         inst_path.pop();
                     }
                 }
+                expanding.pop();
                 include_subckts.pop();
                 return Ok(());
             }
         }
-        Err(inst_path
-            .iter()
-            .map(|inst| (*inst).deref())
-            .chain(once(cktname))
-            .join("."))
+        Err(path(inst_path))
     }
     // fn flatten_instances(
     //     &self,

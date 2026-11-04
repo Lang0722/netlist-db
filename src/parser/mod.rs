@@ -15,8 +15,14 @@ use indexmap::IndexMap;
 use manager::ParseManager;
 use nom::IResult;
 use regex::Regex;
-use std::{mem, path::PathBuf, sync::OnceLock};
+use std::{
+    mem,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
+pub use utils::MAX_SUBCKT_DEPTH;
 use utils::local_ast;
+pub(crate) use utils::{is_formula_text, is_number_list};
 
 use super::{
     Files, Parsed,
@@ -30,7 +36,8 @@ use crate::{
 const BEGIN_TITLE: &str = ".TITLE";
 
 /// Parse statements until the end of the input, or until `.ends` when
-/// `in_subckt` is set. Returns the AST and whether a `.ends` closed it.
+/// `in_subckt` is set. `depth` is the number of `.subckt` definitions around
+/// the input. Returns the AST and whether a `.ends` closed it.
 #[inline]
 pub fn ast(
     manager: Arc<ParseManager>,
@@ -38,12 +45,13 @@ pub fn ast(
     work_dir: PathBuf,
     mut i: LocatedSpan,
     in_subckt: bool,
+    depth: usize,
 ) -> IResult<LocatedSpan, (ASTBuilder, bool)> {
     let mut ast = ASTBuilder::new();
     loop {
         let _ast;
         let reason;
-        (i, (_ast, reason)) = local_ast(i, &loaded, &manager, &work_dir, in_subckt)?;
+        (i, (_ast, reason)) = local_ast(i, &loaded, &manager, &work_dir, in_subckt, depth)?;
         if !_ast.is_empty() {
             ast.segments.push(Segment::Local(Box::new(_ast)));
         }
@@ -52,11 +60,7 @@ pub fn ast(
                 let res = Arc::new(OnceLock::new());
                 ast.segments.push(Segment::Include(res.clone()));
                 let manager_clone = manager.clone();
-                let file_path = if file_name.is_absolute() {
-                    file_name.to_path_buf()
-                } else {
-                    work_dir.join(file_name)
-                };
+                let file_path = include_path(&work_dir, file_name);
                 let include_pos = Pos::new(i);
                 let mut loaded = loaded.clone();
                 if let Some((_, _include_pos)) = loaded.last_mut() {
@@ -72,12 +76,89 @@ pub fn ast(
     }
 }
 
+/// The path of an included file. A Windows path (`.\models\nmos.sp`) that is
+/// not found as written is also tried with `/`.
+fn include_path(work_dir: &Path, file_name: &Path) -> PathBuf {
+    let join = |name: &Path| {
+        if name.is_absolute() {
+            name.to_path_buf()
+        } else {
+            work_dir.join(name)
+        }
+    };
+    let path = join(file_name);
+    if let Some(name) = file_name.to_str()
+        && name.contains('\\')
+        && !path.exists()
+    {
+        let unix = join(Path::new(&name.replace('\\', "/")));
+        if unix.exists() {
+            return unix;
+        }
+    }
+    path
+}
+
+/// Read a netlist as text: remove UTF-8 byte order marks (also from inside a
+/// file, e.g. one made by joining files), turn lone CR line ends (classic
+/// Mac OS) into LF, and read bytes that are not UTF-8 (e.g. a `µ` written in
+/// Latin-1) as Latin-1, with a warning, instead of rejecting the whole file.
+fn decode(bytes: Vec<u8>) -> (String, Option<ParseError>) {
+    let (mut text, note) = match String::from_utf8(bytes) {
+        Ok(text) => (text, None),
+        Err(e) => {
+            let bytes = e.into_bytes();
+            let mut text = String::with_capacity(bytes.len() + bytes.len() / 8);
+            let mut invalid = 0_usize;
+            let mut first_line = 0;
+            for chunk in bytes.utf8_chunks() {
+                text.push_str(chunk.valid());
+                for &b in chunk.invalid() {
+                    if invalid == 0 {
+                        first_line = text.matches('\n').count() + 1;
+                    }
+                    invalid += 1;
+                    text.push(char::from(b));
+                }
+            }
+            let note = ParseErrorInner::Encoding(format!(
+                "The file is not valid UTF-8: {invalid} byte(s) were read as Latin-1 \
+                 (the first one on line {first_line})"
+            ))
+            .with(None);
+            (text, Some(note))
+        }
+    };
+    if text.contains('\u{feff}') {
+        text = text.replace('\u{feff}', "");
+    }
+    let bytes = text.as_bytes();
+    if text
+        .match_indices('\r')
+        .any(|(idx, _)| bytes.get(idx + 1) != Some(&b'\n'))
+    {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            out.push(if c == '\r' && chars.peek() != Some(&'\n') {
+                '\n'
+            } else {
+                c
+            });
+        }
+        text = out;
+    }
+    (text, note)
+}
+
 async fn _include(
     manager: Arc<ParseManager>,
     mut loaded: IndexMap<FileId, Option<Pos>>,
     file_id: FileId,
     include_pos: Option<Pos>,
 ) -> Result<ParsedId, (FileId, ParseError)> {
+    // (a top-level file is not included from anywhere)
+    let top_level = include_pos.is_none();
     let mut file_path = file_id.path().to_path_buf();
     if let Some(idx) = loaded.get_index_of(&file_id) {
         return Err((
@@ -87,17 +168,32 @@ async fn _include(
     } else {
         loaded.insert(file_id.clone(), include_pos);
     }
-    if let Some(parsed_id) = manager.file_storage.lock().await.existed(&file_id) {
-        return Ok(parsed_id);
-    }
-    let contents = match tokio::fs::read_to_string(&file_path).await {
-        Ok(contents) => contents,
-        Err(e) => return Err((file_id, ParseErrorInner::with(e.into(), include_pos))),
+    // Claim the file before reading it: a file included from several places
+    // at once is read and parsed once.
+    let parsed_id = {
+        let mut storage = manager.file_storage.lock().await;
+        if let Some(parsed_id) = storage.existed(&file_id) {
+            return Ok(parsed_id);
+        }
+        storage.new_file(file_id.clone())
+    };
+    // (a file that cannot be read is released, so that each include of it
+    // reports the error)
+    let release = async |file_id: &FileId| {
+        manager.file_storage.lock().await.id2idx.remove(file_id);
+    };
+    let (contents, encoding_note) = match tokio::fs::read(&file_path).await {
+        Ok(bytes) => decode(bytes),
+        Err(e) => {
+            release(&file_id).await;
+            return Err((file_id, ParseErrorInner::with(e.into(), include_pos)));
+        }
     };
     let (line_off_set, file_ctx) = if let FileId::Section { path: _, section } = file_id.clone() {
         if let Some((file_ctx, line_off_set)) = match_lib(&contents, &section) {
             (line_off_set, file_ctx)
         } else {
+            release(&file_id).await;
             return Err((
                 file_id,
                 ParseErrorInner::NoLibSection {
@@ -111,17 +207,30 @@ async fn _include(
         (0, contents)
     };
     let file_ctx = join_continued_lines(file_ctx);
-    let parsed_id = manager.file_storage.lock().await.new_file(file_id);
-    let i = span(&file_ctx, line_off_set);
+    let mut i = span(&file_ctx, line_off_set);
     // get dir
     file_path.pop();
     #[cfg(test)]
     assert!(file_path.is_dir());
 
-    let res = match ast(manager.clone(), loaded, file_path, i, false) {
+    let mut head = LocalAST::default();
+    head.errors.extend(encoding_note);
+    if top_level && matches!(file_id, FileId::Include { .. }) {
+        if let Some((rest, title, element)) = utils::title_line(i) {
+            if element {
+                head.errors.push(ParseErrorInner::TitleIsElement.record(i));
+            }
+            head.title = Some(title);
+            i = rest;
+        }
+    }
+    let mut res = match ast(manager.clone(), loaded, file_path, i, false, 0) {
         Ok((_, (res, _))) => res,
         Err(e) => error2ast(e.into()),
     };
+    if !head.is_empty() {
+        res.segments.insert(0, Segment::Local(Box::new(head)));
+    }
     manager
         .file_storage
         .lock()

@@ -64,6 +64,19 @@ pub enum ParseErrorInner {
     /// A parser task failed
     #[error("{0}")]
     Internal(String),
+    /// `.subckt` nested deeper than the limit; the enclosing one is closed
+    #[error("`.subckt` nested more than {0} levels deep")]
+    TooDeep(usize),
+    /// A block encrypted for HSPICE (`.prot freelib`), skipped
+    #[error("Encrypted block of {lines} line(s) skipped")]
+    Encrypted { lines: usize },
+    /// The file is not valid UTF-8; it was read anyway
+    #[error("{0}")]
+    Encoding(String),
+    /// The first line of a top-level file, read as its title (as in HSPICE),
+    /// is also a well-formed element
+    #[error("The title line is also an element")]
+    TitleIsElement,
 }
 
 impl ParseErrorInner {
@@ -81,7 +94,13 @@ impl ParseErrorInner {
     pub fn is_warning(&self) -> bool {
         matches!(
             self,
-            Self::Unknown(_) | Self::StrayEnds | Self::DuplicateSubckt(_) | Self::NonHspice(_)
+            Self::Unknown(_)
+                | Self::StrayEnds
+                | Self::DuplicateSubckt(_)
+                | Self::NonHspice(_)
+                | Self::Encrypted { .. }
+                | Self::Encoding(_)
+                | Self::TitleIsElement
         )
     }
 }
@@ -211,6 +230,28 @@ impl ParseError {
                     ParseErrorInner::Unsupported(msg) => ("Error", msg.clone()),
                     ParseErrorInner::NonHspice(msg) => ("Warning", msg.clone()),
                     ParseErrorInner::Internal(msg) => ("InternalError", msg.clone()),
+                    ParseErrorInner::TooDeep(max) => (
+                        "Error",
+                        format!(
+                            "`.subckt` nested more than {max} levels deep (is an `.ends` missing?); \
+                             the enclosing `.subckt` is closed here"
+                        ),
+                    ),
+                    ParseErrorInner::Encrypted { lines } => (
+                        "Warning",
+                        format!(
+                            "Encrypted block (`.prot freelib`) of {lines} line(s) skipped: \
+                             only HSPICE can read it"
+                        ),
+                    ),
+                    ParseErrorInner::Encoding(msg) => ("Warning", msg.clone()),
+                    ParseErrorInner::TitleIsElement => (
+                        "Warning",
+                        "HSPICE reads the first line of the netlist as its title, so this \
+                         element is not part of the circuit; start the file with a comment \
+                         line (`*`) if it should be"
+                            .to_owned(),
+                    ),
                     ParseErrorInner::CircularDefinition(index_set, idx) => {
                         struct FileDisplay<'a>(&'a FileId, &'a Option<Pos>);
                         impl fmt::Display for FileDisplay<'_> {

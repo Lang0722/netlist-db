@@ -153,6 +153,9 @@ pub struct SubcktBuilder {
 /// The `.include` and `.lib file tt` will be directly evaluated
 #[derive(Debug, Default)]
 pub struct LocalAST {
+    /// the title: the first line of a top-level file, unless it is blank, a
+    /// comment or a dot-command
+    pub title: Option<Span>,
     pub subckt: Vec<SubcktBuilder>,
     pub instance: Vec<InstanceBuilder>,
     pub model: Vec<ModelBuilder>,
@@ -168,7 +171,8 @@ pub struct LocalAST {
 
 impl LocalAST {
     pub fn is_empty(&self) -> bool {
-        self.subckt.is_empty()
+        self.title.is_none()
+            && self.subckt.is_empty()
             && self.instance.is_empty()
             && self.model.is_empty()
             && self.param.is_empty()

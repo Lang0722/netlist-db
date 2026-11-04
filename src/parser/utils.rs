@@ -7,12 +7,12 @@ use indexmap::IndexMap;
 use nom::{
     IResult, Input, Parser,
     branch::alt,
-    bytes::complete::{tag, tag_no_case, take, take_till, take_while, take_while1},
+    bytes::complete::{tag, tag_no_case, take_till, take_while, take_while1},
     character::{char, complete::digit1},
-    combinator::{map, map_res, opt, recognize, success, verify},
+    combinator::{eof, map, map_res, opt, recognize, verify},
     error::ErrorKind,
     multi::{many0, many1},
-    sequence::{delimited, preceded},
+    sequence::preceded,
 };
 use regex::Regex;
 
@@ -51,7 +51,26 @@ pub(super) fn space_newline(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan>
 /// end with `\` or `\\` were already joined when the file was read.)
 #[inline]
 pub(super) fn continuation(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    if !may_continue(i.fragment()) {
+        return Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Char)));
+    }
     map((comment_space_newline, char('+'), space), |_| ()).parse_complete(i)
+}
+
+/// A quick test, true whenever [`continuation`] may match at `s`: after the
+/// spaces comes a `+` or a comment, or a line break and then a line that
+/// starts with `+`, a comment, or is blank. (Most statements end with a line
+/// break followed by the next statement: this avoids parsing it.)
+#[inline]
+fn may_continue(s: &str) -> bool {
+    let s = s.trim_start_matches([' ', '\t', '\r']);
+    match s.as_bytes().first() {
+        Some(b'+' | b'*' | b'$') => true,
+        Some(b'\n') => s[1..]
+            .trim_start_matches([' ', '\t', '\r'])
+            .starts_with(['+', '*', '$', '\n']),
+        _ => false,
+    }
 }
 
 #[inline]
@@ -61,9 +80,18 @@ pub(super) fn multiline_sep<'a, T>(
     alt((preceded(space1, f), preceded(continuation, f)))
 }
 
+/// Spaces, or a continuation (`+`) line with the comments and line breaks
+/// before it
 #[inline]
 pub(super) fn loss_sep(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
-    alt((recognize(continuation), space)).parse_complete(i)
+    let (j, s) = space(i)?;
+    // (a continuation can only start with one of these, after the spaces)
+    if j.fragment().starts_with(['\n', '$', '*', '+']) {
+        if let Ok(ok) = recognize(continuation).parse_complete(i) {
+            return Ok(ok);
+        }
+    }
+    Ok((j, s))
 }
 
 #[inline]
@@ -134,14 +162,37 @@ pub(super) fn float(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
     }
 }
 
+/// A number with an optional scale factor. A number too large for `f64`
+/// (`1e999`) is not a number here: it is kept as written, as an expression.
 #[inline]
 pub(super) fn float_unit(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
-    map((float, opt(unit)), |(f, u)| match u {
+    let (rest, f) = map((float, opt(unit)), |(f, u)| match u {
         Some(Unit::Factor(u)) => f * u,
         Some(Unit::DB) => 10.0_f64.powf(f / 20.0),
         None => f,
     })
-    .parse_complete(i)
+    .parse_complete(i)?;
+    if f.is_finite() {
+        Ok((rest, f))
+    } else {
+        Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Float)))
+    }
+}
+
+/// Whether `s` is an unquoted expression as a whole, such as
+/// `agauss(0,0,'2*p1')`
+pub(crate) fn is_formula_text(s: &str) -> bool {
+    formula(crate::span::span(s, 0)).is_ok_and(|(rest, _)| rest.is_empty())
+}
+
+/// Whether `s` is a list of numbers separated by commas, such as `0,0` in
+/// `TC=0,0`; it is printed without quotes.
+pub(crate) fn is_number_list(s: &str) -> bool {
+    s.contains(',')
+        && s.split(',').all(|item| {
+            let i = crate::span::span(item, 0);
+            float_unit(i).is_ok_and(|(rest, _)| rest.is_empty())
+        })
 }
 
 #[inline]
@@ -163,8 +214,22 @@ fn is_key(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 fn is_name(c: char) -> bool {
-    // `<>` (bus bits) and `!` (global nets) are common in CDL netlists
-    c.is_alphanumeric() || "/_.+-*^:@%#[]<>!|".contains(c)
+    // `<>` (bus bits) and `!` (global nets) are common in CDL netlists, `~`
+    // (inverted signals) in netlists written by schematic editors
+    c.is_alphanumeric() || "/_.+-*^:@%#[]<>!|~".contains(c)
+}
+
+/// A name: [`is_name`] characters, but not starting with `*`, which starts an
+/// inline comment (`cload out gnd 1000f *output loading`)
+#[inline]
+fn name_span(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
+    if i.fragment().starts_with('*') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            i,
+            ErrorKind::TakeWhile1,
+        )));
+    }
+    take_while1(is_name).parse_complete(i)
 }
 fn is_formula(c: char) -> bool {
     c.is_alphanumeric() || "/_.+-*^:".contains(c)
@@ -180,10 +245,32 @@ pub(super) fn path(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     .parse_complete(i)
 }
 
-/// `"text"`, on one line
+/// The text between the quote `q` at the start of `i` and the matching quote.
+/// The text may go on over `+` continuation lines, but not past the end of
+/// the statement: a quote that is not closed is an error, instead of taking
+/// in the lines up to the next quote in the file.
+fn quoted(i: LocatedSpan, q: char) -> IResult<LocatedSpan, LocatedSpan> {
+    let (j, _) = char(q).parse_complete(i)?;
+    let s: &str = j.fragment();
+    let mut from = 0;
+    while let Some(off) = s[from..].find([q, '\n']) {
+        let pos = from + off;
+        if s[pos..].starts_with(q) {
+            return Ok((j.take_from(pos + q.len_utf8()), j.take(pos)));
+        }
+        let next_line = s[pos + 1..].trim_start_matches([' ', '\t', '\r']);
+        if !next_line.starts_with('+') {
+            break;
+        }
+        from = pos + 1;
+    }
+    Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Char)))
+}
+
+/// `"text"`
 #[inline]
 fn dquote(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
-    delimited(char('"'), take_till(|c| c == '"' || c == '\n'), char('"')).parse_complete(i)
+    quoted(i, '"')
 }
 
 #[inline]
@@ -209,7 +296,7 @@ pub(super) fn path_str(i: LocatedSpan) -> IResult<LocatedSpan, &str> {
 
 #[inline]
 pub(super) fn name_char(i: LocatedSpan) -> IResult<LocatedSpan, (u8, Span)> {
-    map(take_while1(is_name), |s: LocatedSpan| {
+    map(name_span, |s: LocatedSpan| {
         (s.fragment().as_bytes()[0], s.into())
     })
     .parse_complete(i)
@@ -217,23 +304,90 @@ pub(super) fn name_char(i: LocatedSpan) -> IResult<LocatedSpan, (u8, Span)> {
 
 #[inline]
 pub(super) fn name(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
-    map(take_while1(is_name), |s: LocatedSpan| s.into()).parse_complete(i)
+    map(name_span, |s: LocatedSpan| s.into()).parse_complete(i)
 }
 
 #[inline]
 pub(super) fn name_str(i: LocatedSpan) -> IResult<LocatedSpan, (&str, Span)> {
-    map(take_while1(is_name), |s: LocatedSpan| {
+    map(name_span, |s: LocatedSpan| {
         let _s: &str = s.fragment();
         (_s, s.into())
     })
     .parse_complete(i)
 }
 
+/// Between the names of a node list: white space, a continuation line, or
+/// `(`, `)` and `,`, which HSPICE also reads as delimiters:
+/// `X1 (a b) sub`, `X2 a b sub (w=1 l=2)`, `E1 o 0 (p,n) 1`, `.SUBCKT (via) a b`.
+pub(super) fn node_sep(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    let mut j = i;
+    loop {
+        let s = j.fragment().as_bytes();
+        match s.first() {
+            Some(b' ' | b'\t' | b'\r') => {
+                let n = s
+                    .iter()
+                    .position(|b| !matches!(b, b' ' | b'\t' | b'\r'))
+                    .unwrap_or(s.len());
+                j = j.take_from(n);
+            }
+            Some(b'(' | b')' | b',') => j = j.take_from(1),
+            // (a continuation can only start with one of these)
+            Some(b'\n' | b'$' | b'*' | b'+') => match continuation(j) {
+                Ok((k, ())) => j = k,
+                Err(_) => break,
+            },
+            _ => break,
+        }
+    }
+    if j.location_offset() == i.location_offset() {
+        Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Space)))
+    } else {
+        Ok((j, ()))
+    }
+}
+
+/// `)` closing a list of nodes in parentheses, as in `V1 (a 0) 1`; the white
+/// space after it is left for the next separator
+pub(super) fn close_parens(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    if !i
+        .fragment()
+        .trim_start_matches([' ', '\t', '\r'])
+        .starts_with(')')
+    {
+        return Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Char)));
+    }
+    map((space, char(')'), many0((space, char(')')))), |_| ()).parse_complete(i)
+}
+
+/// `)` (or `,`) closing a node or parameter list, as in `X2 a b sub (w=1 l=2)`
+pub(super) fn trailing_delims(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    // (a quick test first: most lists end with a line break or a comment)
+    let next = i.fragment().trim_start_matches([' ', '\t', '\r']);
+    if !next.starts_with(['(', ')', ',', '\n', '+']) {
+        return Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Char)));
+    }
+    let (j, ()) = node_sep(i)?;
+    let skipped = &i.fragment()[..j.location_offset() - i.location_offset()];
+    if skipped.contains(['(', ')', ',']) {
+        Ok((j, ()))
+    } else {
+        Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Char)))
+    }
+}
+
 /// An unquoted expression: formula characters, plus balanced `( ... )`
-/// groups such as `agauss(0,1,3)` or `2*(a+b)`.
+/// groups such as `agauss(0,1,3)` or `2*(a+b)`. It does not start with `*`,
+/// which starts an inline comment.
 #[inline]
 pub(super) fn formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     let s: &str = i.fragment();
+    if s.starts_with('*') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            i,
+            ErrorKind::TakeWhile1,
+        )));
+    }
     let mut end = 0;
     while let Some(c) = s[end..].chars().next() {
         if is_formula(c) {
@@ -257,9 +411,10 @@ pub(super) fn formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     }
 }
 
-/// Length of the `( ... )` group at the start of `s`, skipping quoted text;
-/// `None` if it is not closed on the same line.
+/// Length of the `( ... )` group at the start of `s` (which starts with `(`),
+/// skipping quoted text; `None` if it is not closed on the same line.
 fn balanced_group(s: &str) -> Option<usize> {
+    debug_assert!(s.starts_with('('));
     let mut depth = 0_usize;
     let mut quoted = false;
     for (idx, c) in s.char_indices() {
@@ -281,17 +436,13 @@ fn balanced_group(s: &str) -> Option<usize> {
 
 #[inline]
 pub(super) fn unquote(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
-    map(
-        delimited(char('\''), take_till(|c| c == '\''), take(1_usize)),
-        |s: LocatedSpan| s.into(),
-    )
-    .parse_complete(i)
+    map(|i| quoted(i, '\''), |s: LocatedSpan| s.into()).parse_complete(i)
 }
 
 #[inline]
 pub(super) fn unquote_str(i: LocatedSpan) -> IResult<LocatedSpan, &str> {
     map(
-        delimited(char('\''), take_till(|c| c == '\''), take(1_usize)),
+        |i| quoted(i, '\''),
         |s: LocatedSpan| {
             let _s: &str = s.fragment();
             _s
@@ -313,8 +464,14 @@ pub(super) fn comment_space_newline(i: LocatedSpan) -> IResult<LocatedSpan, Loca
             opt(comment),
             opt((
                 char('\n'),
-                // continue empty line
-                opt((space, char('+'), space, opt(comment), char('\n'))),
+                // an empty continuation line (also the last line of the input)
+                opt((
+                    space,
+                    char('+'),
+                    space,
+                    opt(comment),
+                    alt((map(char('\n'), |_| ()), map(eof, |_| ()))),
+                )),
             )),
         )),
         |s| !s.is_empty(),
@@ -324,8 +481,19 @@ pub(super) fn comment_space_newline(i: LocatedSpan) -> IResult<LocatedSpan, Loca
 
 #[inline]
 pub(super) fn value(i: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
-    if let Ok((i, s)) = unquote.parse_complete(i) {
-        return Ok((i, ValueBuilder::Expr(s)));
+    match i.fragment().as_bytes().first() {
+        Some(b'\'') => {
+            if let Ok((i, s)) = unquote.parse_complete(i) {
+                return Ok((i, ValueBuilder::Expr(s)));
+            }
+        }
+        // HSPICE also delimits expressions with double quotes: `size="2"`
+        Some(b'"') => {
+            if let Ok((i, s)) = dquote.parse_complete(i) {
+                return Ok((i, ValueBuilder::Expr(s.into())));
+            }
+        }
+        _ => {}
     }
     match (float_unit.parse_complete(i), formula.parse_complete(i)) {
         (Ok((i_num, num)), Ok((i_formula, formula))) => {
@@ -353,14 +521,68 @@ impl<'a, T, P> MyParser<'a, T> for P where
 {
 }
 
+/// `= value`; the value may be on the next (continuation) line: `Lo=\n+ 3.4e-7`
 #[inline]
 pub(super) fn equal<'a, T, F: MyParser<'a, T>>(f: F) -> impl MyParser<'a, T> {
-    map((space, char('='), space, f), |(_, _, _, v)| v)
+    map((space, char('='), loss_sep, f), |(_, _, _, v)| v)
+}
+
+/// The value of a `key=value` parameter. A list of numbers (`TC=0,0`) is
+/// kept as one expression.
+#[inline]
+fn assigned_value(start: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
+    let (mut i, mut v) = value(start)?;
+    if matches!(v, ValueBuilder::Num(_)) {
+        let mut list = false;
+        while let Ok((j, _)) = (char(','), float_unit).parse_complete(i) {
+            i = j;
+            list = true;
+        }
+        if list {
+            v = ValueBuilder::Expr(raw_span(start, i));
+        }
+    }
+    Ok((i, v))
 }
 
 #[inline]
 pub(super) fn key_value(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
-    map((name, equal(value)), |(k, v)| KeyValueBuilder { k, v }).parse_complete(i)
+    let (i, (k, _, _, _)) = (name, space, char('='), loss_sep).parse_complete(i)?;
+    let (i, v) = assigned_value(i)?;
+    Ok((i, KeyValueBuilder { k, v }))
+}
+
+/// One assignment of a `.param` statement: `name=value`; a function
+/// `name(a,b)='expr'` (the key is `name(a,b)`); or an optimization parameter
+/// `name=OPTxxx(init, min, max)` (the value is `OPTxxx(init, min, max)`).
+fn param_assignment(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
+    let (mut i, mut k) = name(i)?;
+    if i.fragment().starts_with('(') {
+        if let Some(len) = balanced_group(i.fragment()) {
+            k.end += len;
+            i = i.take_from(len);
+        }
+    }
+    let (i, _) = (space, char('='), loss_sep).parse_complete(i)?;
+    let (mut rest, mut v) = assigned_value(i)?;
+    if let ValueBuilder::Expr(e) = v {
+        let word = span_text(i, e);
+        if word.starts_with(|c: char| c.is_ascii_alphabetic())
+            && word.chars().all(|c| c.is_alphanumeric() || c == '_')
+        {
+            let (group, _) = space(rest)?;
+            if group.fragment().starts_with('(') {
+                if let Some(len) = balanced_group(group.fragment()) {
+                    rest = group.take_from(len);
+                    v = ValueBuilder::Expr(Span {
+                        end: rest.location_offset(),
+                        ..e
+                    });
+                }
+            }
+        }
+    }
+    Ok((rest, KeyValueBuilder { k, v }))
 }
 
 #[inline]
@@ -450,10 +672,14 @@ pub(super) fn ports_params(
 ) -> IResult<LocatedSpan, (Vec<Span>, Vec<KeyValueBuilder>)> {
     map(
         (
-            many1(multiline_sep(name)),
-            opt((equal(value), many0_dummyfirst(multiline_sep(key_value)))),
+            many1(preceded(node_sep, name)),
+            opt((
+                equal(value),
+                many0_dummyfirst(preceded(node_sep, key_value)),
+            )),
+            opt(trailing_delims),
         ),
-        |(mut ports, _params)| match _params {
+        |(mut ports, _params, _)| match _params {
             Some((first_value, mut params)) => {
                 let first_key = ports.pop().unwrap();
                 params[0] = KeyValueBuilder {
@@ -467,166 +693,179 @@ pub(super) fn ports_params(
     )
     .parse_complete(i)
 }
-#[inline]
-pub(super) fn data(mut i: LocatedSpan) -> IResult<LocatedSpan, DataBuilder> {
-    #[inline]
-    fn enddata(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
-        map_res((char('.'), key_str), |(_, (key, _))| {
-            if key.to_uppercase().as_str() == "ENDDATA" {
-                Ok(())
-            } else {
-                // TODO: error information?
-                Err(())
-            }
-        })
-        .parse_complete(i)
+/// Between the items of a `.data` block: white space, comments and line
+/// breaks. When the block ends with `.enddata` (`multi_line`), its rows do not
+/// need a leading `+` (HSPICE reads them up to `.enddata`); otherwise only `+`
+/// continuation lines belong to it.
+fn data_sep(i: LocatedSpan, multi_line: bool) -> IResult<LocatedSpan, ()> {
+    if !multi_line {
+        return alt((continuation, map(space1, |_| ()))).parse_complete(i);
     }
+    let s: &str = i.fragment();
+    let mut idx = 0;
+    let mut line_start = false;
+    while let Some(c) = s[idx..].chars().next() {
+        match c {
+            ' ' | '\t' | '\r' => idx += 1,
+            '\n' => {
+                idx += 1;
+                line_start = true;
+            }
+            '+' if line_start => {
+                idx += 1;
+                line_start = false;
+            }
+            '*' | '$' => idx += s[idx..].find('\n').unwrap_or(s.len() - idx),
+            _ => break,
+        }
+    }
+    if idx == 0 {
+        Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Space)))
+    } else {
+        Ok((i.take_from(idx), ()))
+    }
+}
+
+/// A separator of a `.data` block
+type DataSep = for<'a> fn(LocatedSpan<'a>) -> IResult<LocatedSpan<'a>, ()>;
+
+/// Whether `.enddata` closes the `.data` block at `i` (before any other `.data`)
+fn has_enddata(i: LocatedSpan) -> bool {
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?im)^[ \t+]*\.(enddata|data)\b").unwrap());
+    RE.captures(i.fragment())
+        .is_some_and(|caps| caps[1].eq_ignore_ascii_case("enddata"))
+}
+
+#[inline]
+fn enddata(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    map_res((char('.'), key_str), |(_, (key, _))| {
+        if key.eq_ignore_ascii_case("ENDDATA") {
+            Ok(())
+        } else {
+            Err(())
+        }
+    })
+    .parse_complete(i)
+}
+
+/// ``` spice
+/// .DATA name pname1 pname2 ...
+/// + val11 val12 ...
+/// .ENDDATA
+/// .DATA name MER|LAM
+/// + FILE='file1' p1=1 p2=3 [OUT='out']
+/// .ENDDATA
+/// ```
+/// The rows may also be written without `+`.
+#[inline]
+pub(super) fn data(i: LocatedSpan) -> IResult<LocatedSpan, DataBuilder> {
+    let sep: DataSep = if has_enddata(i) {
+        |i| data_sep(i, true)
+    } else {
+        |i| data_sep(i, false)
+    };
     #[inline]
-    fn data_files(i: LocatedSpan) -> IResult<LocatedSpan, DataFilesBuilder> {
-        #[inline]
-        fn file(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
+    fn data_files(i: LocatedSpan, sep: DataSep) -> IResult<LocatedSpan, DataFilesBuilder> {
+        let keyed = move |key: &'static str| {
             map_res(
-                (multiline_sep(name_str), equal(path)),
-                |((key, _), path)| {
-                    if key.to_uppercase().as_str() == "FILE" {
+                (preceded(sep, name_str), equal(path)),
+                move |((k, _), path)| {
+                    if k.eq_ignore_ascii_case(key) {
                         Ok(path)
                     } else {
                         Err(())
                     }
                 },
             )
-            .parse_complete(i)
-        }
-        #[inline]
-        fn out(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
-            map_res(
-                (multiline_sep(name_str), equal(path)),
-                |((key, _), path)| {
-                    if key.to_uppercase().as_str() == "OUT" {
-                        Ok(path)
-                    } else {
-                        Err(())
-                    }
-                },
-            )
-            .parse_complete(i)
-        }
-        #[inline]
-        fn pname_col_num(i: LocatedSpan) -> IResult<LocatedSpan, PnameColNumBuilder> {
-            map_res(
-                (multiline_sep(name_str), equal(integer)),
-                |((pname_str, pname), col_num)| {
-                    let binding = pname_str.to_uppercase();
-                    let s = binding.as_str();
-                    if s != "FILE" && s != "OUT" {
-                        Ok(PnameColNumBuilder { pname, col_num })
-                    } else {
-                        Err(())
-                    }
-                },
-            )
-            .parse_complete(i)
-        }
+        };
+        let pname_col_num = map_res(
+            (preceded(sep, name_str), equal(integer)),
+            |((pname_str, pname), col_num)| {
+                if pname_str.eq_ignore_ascii_case("FILE") || pname_str.eq_ignore_ascii_case("OUT") {
+                    Err(())
+                } else {
+                    Ok(PnameColNumBuilder { pname, col_num })
+                }
+            },
+        );
         map(
             (
                 many1(map(
-                    (file, many1(pname_col_num)),
+                    (keyed("FILE"), many1(pname_col_num)),
                     |(file, pname_col_num)| DataFileBuilder {
                         file,
                         pname_col_num,
                     },
                 )),
-                opt(out),
-                space_newline,
+                opt(keyed("OUT")),
+                sep,
                 enddata,
             ),
             |(files, out, _, _)| DataFilesBuilder { files, out },
         )
         .parse_complete(i)
     }
-    let name;
-    (i, name) = multiline_sep(key).parse_complete(i)?;
-    let first;
-    let first_str;
-    (i, (first_str, first)) = multiline_sep(name_str).parse_complete(i)?;
-    match first_str.to_uppercase().as_str() {
-        "MER" => {
-            return data_files.parse_complete(i).map(|(i, data_files)| {
-                (
-                    i,
-                    DataBuilder {
-                        name,
-                        values: DataValuesBuilder::MER(data_files),
-                    },
-                )
-            });
-        }
-        "LAM" => {
-            return data_files.parse_complete(i).map(|(i, data_files)| {
-                (
-                    i,
-                    DataBuilder {
-                        name,
-                        values: DataValuesBuilder::LAM(data_files),
-                    },
-                )
-            });
-        }
-        _ => {}
+    let (i, name) = preceded(sep, key).parse_complete(i)?;
+    let (i, (first_str, first)) = preceded(sep, name_str).parse_complete(i)?;
+    if first_str.eq_ignore_ascii_case("MER") || first_str.eq_ignore_ascii_case("LAM") {
+        let (i, files) = data_files(i, sep)?;
+        let values = if first_str.eq_ignore_ascii_case("MER") {
+            DataValuesBuilder::MER(files)
+        } else {
+            DataValuesBuilder::LAM(files)
+        };
+        return Ok((i, DataBuilder { name, values }));
     }
+    // the parameter names, up to the first number (or `DATAFORM`)
     let mut params = vec![first];
+    let mut end = i;
+    let mut dataform = false;
     loop {
-        match multiline_sep(float_unit).parse_complete(i) {
-            Ok((_i, first_n)) => {
-                return map(
-                    (
-                        many0_dummyfirst(multiline_sep(float_unit)),
-                        opt(preceded(comment_space_newline, enddata)),
-                    ),
-                    |(mut values, _)| {
-                        values[0] = first_n;
-                        values
-                    },
-                )
-                .parse_complete(_i)
-                .map(|(i, values)| {
-                    (
-                        i,
-                        DataBuilder {
-                            name,
-                            values: DataValuesBuilder::InlineNum { params, values },
-                        },
-                    )
-                });
-            }
-            Err(_) => {
-                let param;
-                let param_str;
-                (i, (param_str, param)) = multiline_sep(name_str).parse_complete(i)?;
-                if param_str.to_uppercase().as_str() == "DATAFORM" {
-                    return map(
-                        (
-                            many1(multiline_sep(value)),
-                            opt(preceded(comment_space_newline, enddata)),
-                        ),
-                        |(values, _)| values,
-                    )
-                    .parse_complete(i)
-                    .map(|(i, values)| {
-                        (
-                            i,
-                            DataBuilder {
-                                name,
-                                values: DataValuesBuilder::InlineExpr { params, values },
-                            },
-                        )
-                    });
-                } else {
-                    params.push(param);
-                }
-            }
+        let Ok((j, ())) = sep(end) else { break };
+        if enddata(j).is_ok() || float_unit(j).is_ok() {
+            break;
+        }
+        let Ok((k, (param_str, param))) = name_str(j) else {
+            break;
+        };
+        end = k;
+        if param_str.eq_ignore_ascii_case("DATAFORM") {
+            dataform = true;
+            break;
+        }
+        params.push(param);
+    }
+    // the values, up to `.enddata`
+    let mut nums = Vec::new();
+    let mut exprs = Vec::new();
+    while let Ok((j, ())) = sep(end) {
+        if let Ok((k, ())) = enddata(j) {
+            end = k;
+            break;
+        }
+        if dataform {
+            let Ok((k, v)) = value(j) else { break };
+            exprs.push(v);
+            end = k;
+        } else {
+            let Ok((k, v)) = float_unit(j) else { break };
+            nums.push(v);
+            end = k;
         }
     }
+    let values = if dataform {
+        DataValuesBuilder::InlineExpr {
+            params,
+            values: exprs,
+        }
+    } else {
+        DataValuesBuilder::InlineNum {
+            params,
+            values: nums,
+        }
+    };
+    Ok((end, DataBuilder { name, values }))
 }
 
 /// ``` spice
@@ -642,31 +881,12 @@ pub(super) fn model(i: LocatedSpan) -> IResult<LocatedSpan, ModelBuilder> {
             // `name`, not `key`: binned models are named like `nch.1`
             multiline_sep(name),
             multiline_sep(key_str),
-            alt((
-                many1(multiline_sep(key_value)),
-                map(
-                    (
-                        loss_sep,
-                        char('('),
-                        loss_sep,
-                        opt((key_value, many0_dummyfirst(multiline_sep(key_value)))),
-                        loss_sep,
-                        char(')'),
-                    ),
-                    |(_, _, _, v, _, _)| {
-                        if let Some((first, mut vec)) = v {
-                            vec[0] = first;
-                            vec
-                        } else {
-                            Vec::new()
-                        }
-                    },
-                ),
-                // no parameters, e.g. `.model dmod d`
-                success(Vec::new()),
-            )),
+            // the parameters may be in parentheses and separated by commas
+            // (HSPICE delimiters); there may be none (`.model dmod d`)
+            many0(preceded(node_sep, key_value)),
+            opt(trailing_delims),
         ),
-        |(name, model_type_ctx, params)| ModelBuilder {
+        |(name, model_type_ctx, params, _)| ModelBuilder {
             name,
             model_type: model_type_ctx.into(),
             params,
@@ -688,9 +908,9 @@ fn endlib(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
 }
 pub(super) fn lib(i: LocatedSpan) -> IResult<LocatedSpan, Option<(&str, String)>> {
     alt((
-        // include lib section
+        // include lib section (`.lib "file"tt` needs no space after the quote)
         map(
-            (path_str, space1, key_str),
+            (path_str, space, key_str),
             |(path_str, _, (section_str, _))| Some((path_str, section_str.to_lowercase())),
         ),
         // skip to `.endl`
@@ -747,43 +967,74 @@ impl Statement<'_> {
     }
 }
 
-/// HSPICE commands kept verbatim (in [`LocalAST::unknwon`]) without a warning.
-/// Other unknown commands are kept as well, with a warning.
+/// HSPICE commands kept verbatim (in [`LocalAST::unknwon`]) without a warning,
+/// including the short forms `.mea`, `.prot` and `.unpr` used in vendor model
+/// kits. Other unknown commands are kept as well, with a warning.
 const KNOWN_COMMANDS: &[&str] = &[
     "ac",
+    "acphasenoise",
     "alias",
     "alter",
     "appendmodel",
     "biaschk",
+    "check",
     "connect",
     "dc",
     "dcmatch",
     "dcvolt",
     "del",
     "dellib",
+    "design_exploration",
     "disto",
     "dout",
+    "ebd",
+    "element_variation",
     "else",
     "elseif",
+    "end_element_variation",
+    "end_global_variation",
+    "end_local_variation",
     "end_variation",
     "endif",
+    "envelope",
     "fft",
     "four",
+    "fsoptions",
     "func",
     "global",
+    "global_variation",
     "graph",
+    "hb",
+    "hbac",
+    "hblin",
+    "hblsp",
+    "hbnoise",
+    "hbosc",
+    "hbxf",
     "hdl",
+    "ibis",
+    "icm",
     "if",
+    "layerstack",
     "lin",
     "load",
+    "local_variation",
+    "lprint",
+    "lstb",
     "malias",
+    "material",
+    "mea",
     "meas",
     "measure",
     "mosra",
+    "mosraprint",
     "noise",
     "op",
     "pat",
+    "pkg",
     "plot",
+    "power",
+    "powerdc",
     "print",
     "probe",
     "prot",
@@ -792,16 +1043,29 @@ const KNOWN_COMMANDS: &[&str] = &[
     "sample",
     "save",
     "sens",
+    "shape",
+    "sn",
+    "snac",
+    "snft",
+    "snnoise",
+    "snosc",
+    "snxf",
+    "stateye",
     "stim",
+    "surge",
+    "sweepblock",
     "temp",
     "temperature",
     "tf",
     "title",
     "tran",
+    "trannoise",
+    "unpr",
     "unprot",
     "unprotect",
     "variation",
     "vec",
+    "verilog",
     "width",
 ];
 
@@ -879,9 +1143,10 @@ fn subckt<'a>(
     loaded: &IndexMap<FileId, Option<Pos>>,
     manager: &Arc<ParseManager>,
     work_dir: &Path,
+    depth: usize,
 ) -> Result<(LocatedSpan<'a>, Statement<'a>), ParseError> {
     let mut diags = Vec::new();
-    let (i, (_, name, ports_params)) = (space1, name, opt(ports_params)).parse_complete(i)?;
+    let (i, (_, name, ports_params)) = (node_sep, name, opt(ports_params)).parse_complete(i)?;
     let (ports, params) = ports_params.unwrap_or_default();
     // left-over text on the header is reported, but the body is still parsed
     let i = match end_of_statement(i) {
@@ -897,6 +1162,7 @@ fn subckt<'a>(
         work_dir.to_path_buf(),
         i,
         true,
+        depth + 1,
     )?;
     if !closed {
         diags.push(ParseErrorInner::UnterminatedSubckt(name).with(Some(Pos {
@@ -980,6 +1246,71 @@ fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
     ))
 }
 
+/// `.prot freelib` (or `.protect freelib`) starts a block encrypted for HSPICE,
+/// which only HSPICE can read: it is skipped up to `.unprot`, with a warning.
+/// (A plain `.prot` block is not encrypted; it is parsed as usual.)
+fn encrypted_block(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
+    let (rest, (_, (word, _))) = (space1, key_str).parse_complete(i).ok()?;
+    if !word.eq_ignore_ascii_case("freelib") {
+        return None;
+    }
+    static UNPROT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?im)^[ \t]*\.unprot(ect)?\b").unwrap());
+    let rest = line_end(rest);
+    let text: &str = rest.fragment();
+    // stop at the newline before `.unprot`, which is then parsed as usual
+    let end = UNPROT.find(text).map_or(text.len(), |m| m.start() - 1);
+    Some((
+        rest.take_from(end),
+        Statement {
+            item: Item::None,
+            end: None,
+            diags: vec![
+                ParseErrorInner::Encrypted {
+                    lines: text[..end].matches('\n').count(),
+                }
+                .record(i),
+            ],
+        },
+    ))
+}
+
+/// HSPICE reads the first line of the input netlist as its title. The first
+/// line of a top-level file (with its `+` continuation lines) is its title,
+/// unless it is blank, a comment or a dot-command. Returns the input after
+/// the title, the title, and whether that line is also a well-formed element
+/// (which HSPICE ignores as well; worth a warning).
+pub(super) fn title_line(i: LocatedSpan) -> Option<(LocatedSpan, Span, bool)> {
+    let text: &str = i.fragment();
+    let line = text[..text.find('\n').unwrap_or(text.len())].trim();
+    if line.is_empty() || line.starts_with(['*', '$', '.', '+']) {
+        return None;
+    }
+    let rest = skip_statement(i);
+    let (start, _) = space(i).ok()?;
+    let element = line.starts_with(|c: char| "RCLVIMQDXEFGHKrclvimqdxefghk".contains(c))
+        && instance(start).is_ok_and(|(end, _)| {
+            end_of_statement(end)
+                .is_ok_and(|(end, ())| end.location_offset() >= rest.location_offset())
+        });
+    Some((rest, raw_span(i, rest), element))
+}
+
+/// `.subckt` definitions nested deeper than this are not nested: the
+/// enclosing definition is closed there, with an error. (A cell library whose
+/// `.ends` lines are missing would otherwise nest each cell in the previous
+/// one, until the parser ran out of stack.)
+pub const MAX_SUBCKT_DEPTH: usize = 32;
+
+/// Whether the statement at `i` is `.subckt` or `.macro`
+fn starts_subckt(i: LocatedSpan) -> bool {
+    (char('.'), key_str, space1)
+        .parse_complete(i)
+        .is_ok_and(|(_, (_, (cmd, _), _))| {
+            cmd.eq_ignore_ascii_case("subckt") || cmd.eq_ignore_ascii_case("macro")
+        })
+}
+
 /// Parse one statement; the caller checks that nothing is left over.
 fn statement<'a>(
     i: LocatedSpan<'a>,
@@ -987,6 +1318,7 @@ fn statement<'a>(
     manager: &Arc<ParseManager>,
     work_dir: &Path,
     in_subckt: bool,
+    depth: usize,
 ) -> Result<(LocatedSpan<'a>, Statement<'a>), ParseError> {
     if i.fragment().starts_with('+') {
         return Err(ParseErrorInner::OrphanContinuation.record(i));
@@ -1006,6 +1338,11 @@ fn statement<'a>(
     };
     let (i, (cmd_str, cmd)) = key_str(i)?;
     let cmd_lower = cmd_str.to_ascii_lowercase();
+    if matches!(cmd_lower.as_str(), "prot" | "protect") {
+        if let Some(stmt) = encrypted_block(i) {
+            return Ok(stmt);
+        }
+    }
     Ok(match cmd_lower.as_str() {
         "lib" => {
             let (i, (_, lib_info)) = (space1, lib).parse_complete(i)?;
@@ -1039,7 +1376,7 @@ fn statement<'a>(
             let (i, t) = model(i)?;
             (i, Statement::item(Item::Model(t)))
         }
-        "subckt" | "macro" => subckt(i, loaded, manager, work_dir)?,
+        "subckt" | "macro" => subckt(i, loaded, manager, work_dir, depth)?,
         "data" => {
             let (i, t) = data(i)?;
             (i, Statement::item(Item::Data(t)))
@@ -1049,7 +1386,7 @@ fn statement<'a>(
             (i, Statement::item(Item::Options(t)))
         }
         "param" | "parameter" | "parameters" => {
-            let (i, t) = many0(multiline_sep(key_value)).parse_complete(i)?;
+            let (i, t) = many0(multiline_sep(param_assignment)).parse_complete(i)?;
             (i, Statement::item(Item::Params(t)))
         }
         "ic" => {
@@ -1118,15 +1455,23 @@ pub(super) fn local_ast<'a>(
     manager: &Arc<ParseManager>,
     work_dir: &Path,
     in_subckt: bool,
+    depth: usize,
 ) -> IResult<LocatedSpan<'a>, (LocalAST, EndReason<'a>)> {
     let mut ast = LocalAST::default();
     loop {
+        let before = i;
         (i, _) = comment_space_newline(i)?;
         if i.is_empty() {
             return Ok((i, (ast, EndReason::End)));
         }
+        if depth >= MAX_SUBCKT_DEPTH && starts_subckt(i) {
+            // close the enclosing `.subckt` here; its parent parses this one
+            ast.errors
+                .push(ParseErrorInner::TooDeep(MAX_SUBCKT_DEPTH).record(i));
+            return Ok((before, (ast, EndReason::Ends)));
+        }
         let start = i;
-        match statement(i, loaded, manager, work_dir, in_subckt) {
+        match statement(i, loaded, manager, work_dir, in_subckt, depth) {
             Ok((rest, stmt)) => {
                 ast.errors.extend(stmt.diags);
                 match end_of_statement(rest) {

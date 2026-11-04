@@ -1,15 +1,15 @@
 use super::utils::{
-    continuation, integer, key_str, key_value, loss_sep, multiline_sep, name, name_char,
-    ports_params, space, space1, span_text, value,
+    close_parens, continuation, integer, key_str, key_value, loss_sep, multiline_sep, name,
+    name_char, node_sep, ports_params, space, space1, span_text, trailing_delims, value,
 };
 use crate::{
     ast::{KeyValueBuilder, ValueBuilder},
     instance::{
-        ACBuilder, BJTBuilder, CapacitorBuilder, ControlledKind, ControlledSourceBuilder,
-        CurrentBuilder, CurrentSourceBuilder, DiodeBuilder, InductorBuilder, InstanceBuilder,
-        InstanceCtxBuilder, MOSFETBuilder, MutualInductorBuilder, PWLBuilder, ResistorBuilder,
-        SourceSpecBuilder, SubcktBuilder, TimeValuePointBuilder, TranSourceBuilder, VoltageBuilder,
-        VoltageSourceBuilder,
+        ACBuilder, BJTBuilder, CapacitorBuilder, ControlledKind, ControlledPwlBuilder,
+        ControlledSourceBuilder, CurrentBuilder, CurrentSourceBuilder, DiodeBuilder,
+        InductorBuilder, InstanceBuilder, InstanceCtxBuilder, MOSFETBuilder, MutualInductorBuilder,
+        PWLBuilder, ResistorBuilder, SourceSpecBuilder, SubcktBuilder, TimeValuePointBuilder,
+        TranSourceBuilder, VoltageBuilder, VoltageSourceBuilder,
     },
     span::{LocatedSpan, Span},
 };
@@ -118,8 +118,14 @@ fn two_terminal<'a>(
     model_first: bool,
 ) -> IResult<LocatedSpan<'a>, TwoTerminal> {
     let base = i;
-    let (i, (n1, n2, (positional, mut params))) =
-        (multiline_sep(name), multiline_sep(name), args).parse_complete(i)?;
+    // (the nodes may be in parentheses: `R1 (a b) 1k`)
+    let (i, (n1, n2, _, (positional, mut params))) = (
+        preceded(node_sep, name),
+        preceded(node_sep, name),
+        opt(close_parens),
+        args,
+    )
+        .parse_complete(i)?;
     let keyed = take_param(base, &mut params, key);
     let (value, mname) = match (keyed, positional.as_slice()) {
         (Some(value), []) => (value, None),
@@ -271,7 +277,8 @@ fn _subckt(i: LocatedSpan) -> IResult<LocatedSpan, InstanceCtxBuilder> {
         let text = span_text(base, cktname);
         if text.len() > 1 && text.starts_with('/') {
             cktname.start += 1;
-        } else if nodes.last().is_some_and(|n| span_text(base, *n) == "/") {
+        }
+        if nodes.last().is_some_and(|n| span_text(base, *n) == "/") {
             nodes.pop();
         }
         Ok(InstanceCtxBuilder::Subckt(SubcktBuilder {
@@ -377,10 +384,9 @@ fn pwl(i: LocatedSpan) -> IResult<LocatedSpan, PWLBuilder> {
     loop {
         let sep = if in_parens && first {
             Ok((i, ()))
-        } else if in_parens {
-            arg_sep(i)
         } else {
-            item_sep(i)
+            // (commas are delimiters too: `PWL 0n 0, 4n 0, 4.05n 5`)
+            arg_sep(i)
         };
         let Ok((j, ())) = sep else { break };
         if let Ok((k, kv)) = key_value(j) {
@@ -390,6 +396,7 @@ fn pwl(i: LocatedSpan) -> IResult<LocatedSpan, PWLBuilder> {
                 "RSTOP" => &mut pwl.rstop,
                 "STOPVALUE" => &mut pwl.stopvalue,
                 "STOPSLOPE" => &mut pwl.stopslope,
+                "PWLFILE" => &mut pwl.pwlfile,
                 // without parentheses, other parameters belong to the source
                 _ if !in_parens => break,
                 _ => return fail(j, ErrorKind::Verify),
@@ -413,7 +420,7 @@ fn pwl(i: LocatedSpan) -> IResult<LocatedSpan, PWLBuilder> {
     if in_parens {
         (i, _) = (loss_sep, char(')')).parse_complete(i)?;
     }
-    if coords.is_empty() || coords.len() % 2 != 0 {
+    if (coords.is_empty() && pwl.pwlfile.is_none()) || coords.len() % 2 != 0 {
         return fail(base, ErrorKind::Verify);
     }
     pwl.points = coords
@@ -480,8 +487,8 @@ fn source(mut i: LocatedSpan) -> IResult<LocatedSpan, SourceSpecBuilder> {
             spec.params.push(kv);
             i = k;
         } else if first {
-            // `Vxxx n+ n- dcval`
-            let (k, v) = value(j)?;
+            // `Vxxx n+ n- dcval`; `Vxxx n+ n-` alone has no value
+            let Ok((k, v)) = value(j) else { break };
             spec.dc = Some(v);
             i = k;
         } else {
@@ -494,8 +501,13 @@ fn source(mut i: LocatedSpan) -> IResult<LocatedSpan, SourceSpecBuilder> {
 
 #[inline]
 fn _voltage(i: LocatedSpan) -> IResult<LocatedSpan, InstanceCtxBuilder> {
-    let (i, (n1, n2, spec)) =
-        (multiline_sep(name), multiline_sep(name), source).parse_complete(i)?;
+    let (i, (n1, n2, _, spec)) = (
+        preceded(node_sep, name),
+        preceded(node_sep, name),
+        opt(close_parens),
+        source,
+    )
+        .parse_complete(i)?;
     // keep the simple forms as they were before `Spec` existed
     let source = match spec {
         SourceSpecBuilder {
@@ -509,7 +521,7 @@ fn _voltage(i: LocatedSpan) -> IResult<LocatedSpan, InstanceCtxBuilder> {
             ac: None,
             tran: Some(TranSourceBuilder::PWL(pwl)),
             params,
-        } if params.is_empty() => VoltageSourceBuilder::PWL(pwl),
+        } if params.is_empty() => VoltageSourceBuilder::PWL(Box::new(pwl)),
         SourceSpecBuilder {
             dc: None,
             ac: None,
@@ -525,8 +537,13 @@ fn _voltage(i: LocatedSpan) -> IResult<LocatedSpan, InstanceCtxBuilder> {
 }
 #[inline]
 fn _current(i: LocatedSpan) -> IResult<LocatedSpan, InstanceCtxBuilder> {
-    let (i, (n1, n2, spec)) =
-        (multiline_sep(name), multiline_sep(name), source).parse_complete(i)?;
+    let (i, (n1, n2, _, spec)) = (
+        preceded(node_sep, name),
+        preceded(node_sep, name),
+        opt(close_parens),
+        source,
+    )
+        .parse_complete(i)?;
     let source = match spec {
         SourceSpecBuilder {
             dc: Some(v),
@@ -539,7 +556,7 @@ fn _current(i: LocatedSpan) -> IResult<LocatedSpan, InstanceCtxBuilder> {
             ac: None,
             tran: Some(TranSourceBuilder::PWL(pwl)),
             params,
-        } if params.is_empty() => CurrentSourceBuilder::PWL(pwl),
+        } if params.is_empty() => CurrentSourceBuilder::PWL(Box::new(pwl)),
         SourceSpecBuilder {
             dc: None,
             ac: None,
@@ -557,21 +574,10 @@ fn _current(i: LocatedSpan) -> IResult<LocatedSpan, InstanceCtxBuilder> {
 const CONTROLLED_KEYWORDS: [&str; 6] = ["VCVS", "VCCS", "CCCS", "CCVS", "VCR", "VCCAP"];
 /// Controlled-source forms that are not parsed yet: they are reported
 /// instead of being misread as nodes
-const UNSUPPORTED_CONTROLLED: [&str; 13] = [
-    "PWL",
-    "NPWL",
-    "PPWL",
-    "DELAY",
-    "LAPLACE",
-    "POLE",
-    "FREQ",
-    "OPAMP",
-    "TRANSFORMER",
-    "AND",
-    "NAND",
-    "OR",
-    "NOR",
-];
+const UNSUPPORTED_CONTROLLED: [&str; 6] =
+    ["DELAY", "LAPLACE", "POLE", "FREQ", "OPAMP", "TRANSFORMER"];
+/// Piecewise-linear transfer functions of controlled sources
+const PWL_FUNCTIONS: [&str; 7] = ["PWL", "NPWL", "PPWL", "AND", "NAND", "OR", "NOR"];
 
 /// The optional `VCVS`/`VCCS`/... keyword
 #[inline]
@@ -613,6 +619,58 @@ fn poly(i: LocatedSpan) -> IResult<LocatedSpan, usize> {
     .parse_complete(i)
 }
 
+/// `PWL(n)`, `NPWL(n)`, `PPWL(n)`, `AND(n)`, ...: the function and `n`
+#[inline]
+fn pwl_function(i: LocatedSpan) -> IResult<LocatedSpan, (Span, usize)> {
+    map_res(
+        (
+            key_str,
+            loss_sep,
+            char('('),
+            loss_sep,
+            integer,
+            loss_sep,
+            char(')'),
+        ),
+        |((word, span), _, _, _, n, _, _)| {
+            if PWL_FUNCTIONS.iter().any(|k| word.eq_ignore_ascii_case(k)) {
+                Ok((span, n))
+            } else {
+                Err(())
+            }
+        },
+    )
+    .parse_complete(i)
+}
+
+type Points = Vec<(ValueBuilder, ValueBuilder)>;
+
+/// The points of a piecewise-linear controlled source, written `x1,y1 x2,y2`,
+/// `(x1,y1) (x2,y2)` or `x1 y1 x2 y2`, with its parameters (`DELTA=`,
+/// `SMOOTH=`, ...) among them
+fn pwl_points(mut i: LocatedSpan) -> IResult<LocatedSpan, (Points, Vec<KeyValueBuilder>)> {
+    let base = i;
+    let mut coords = Vec::new();
+    let mut params = Vec::new();
+    while let Ok((j, ())) = node_sep(i) {
+        if let Ok((k, kv)) = key_value(j) {
+            params.push(kv);
+            i = k;
+        } else if let Ok((k, v)) = value(j) {
+            coords.push(v);
+            i = k;
+        } else {
+            break;
+        }
+    }
+    let (i, _) = opt(trailing_delims).parse_complete(i)?;
+    if coords.is_empty() || coords.len() % 2 != 0 {
+        return fail(base, ErrorKind::Verify);
+    }
+    let points = coords.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+    Ok((i, (points, params)))
+}
+
 /// For an `E`/`F`/`G`/`H` element written in a form that is not supported
 /// (e.g. `DELAY`, `PWL(1)`, `LAPLACE`): the keyword and its position.
 pub(super) fn unsupported_controlled_form<'a>(
@@ -649,9 +707,10 @@ fn coeff(i: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
 /// Fxxx n+ n- [CCCS] POLY(ndim) vsrc1 ... p0 p1 ... [k=v ...]
 /// ```
 fn controlled(i: LocatedSpan, kind: ControlledKind) -> IResult<LocatedSpan, InstanceCtxBuilder> {
+    // (nodes may be delimited by `(`, `)` and `,`: `E1 o 0 (p,n) 1`)
     let (i, (n1, n2, keyword)) = (
-        multiline_sep(name),
-        multiline_sep(name),
+        preceded(node_sep, name),
+        preceded(node_sep, name),
         opt(multiline_sep(controlled_keyword)),
     )
         .parse_complete(i)?;
@@ -661,37 +720,56 @@ fn controlled(i: LocatedSpan, kind: ControlledKind) -> IResult<LocatedSpan, Inst
     let current_controlled = matches!(kind, ControlledKind::F | ControlledKind::H);
     let mut ctrl_nodes = Vec::new();
     let mut ctrl_sources = Vec::new();
+    let mut pwl = None;
+    let mut params = Vec::new();
     let (i, poly) = opt(multiline_sep(poly)).parse_complete(i)?;
-    let (i, coeffs) = if let Some(n) = poly {
+    let (i, pwl_fn) = match poly {
+        Some(_) => (i, None),
+        None => opt(multiline_sep(pwl_function)).parse_complete(i)?,
+    };
+    let (i, coeffs) = if let Some(n) = poly.or(pwl_fn.map(|(_, n)| n)) {
         let i = if current_controlled {
-            let (i, sources) = count(multiline_sep(name), n).parse_complete(i)?;
+            let (i, sources) = count(preceded(node_sep, name), n).parse_complete(i)?;
             ctrl_sources = sources;
             i
         } else {
             let (i, pairs) =
-                count((multiline_sep(name), multiline_sep(name)), n).parse_complete(i)?;
+                count((preceded(node_sep, name), preceded(node_sep, name)), n).parse_complete(i)?;
             ctrl_nodes = pairs;
             i
         };
-        many0(multiline_sep(coeff)).parse_complete(i)?
+        if let Some((function, ndim)) = pwl_fn {
+            let (i, (points, pwl_params)) = pwl_points(i)?;
+            pwl = Some(Box::new(ControlledPwlBuilder {
+                function,
+                ndim,
+                points,
+            }));
+            params = pwl_params;
+            (i, Vec::new())
+        } else {
+            many0(multiline_sep(coeff)).parse_complete(i)?
+        }
     } else if multiline_sep(key_value).parse_complete(i).is_ok() {
         // behavioral: `VOL='...'` or `CUR='...'`
         (i, Vec::new())
     } else if current_controlled {
-        let (i, (vsrc, gain)) = (multiline_sep(name), multiline_sep(value)).parse_complete(i)?;
+        let (i, (vsrc, gain)) =
+            (preceded(node_sep, name), preceded(node_sep, value)).parse_complete(i)?;
         ctrl_sources.push(vsrc);
         (i, vec![gain])
     } else {
         let (i, (p, n, gain)) = (
-            multiline_sep(name),
-            multiline_sep(name),
-            multiline_sep(value),
+            preceded(node_sep, name),
+            preceded(node_sep, name),
+            preceded(node_sep, value),
         )
             .parse_complete(i)?;
         ctrl_nodes.push((p, n));
         (i, vec![gain])
     };
-    let (i, params) = many0(multiline_sep(key_value)).parse_complete(i)?;
+    let (i, more) = many0(multiline_sep(key_value)).parse_complete(i)?;
+    params.extend(more);
     Ok((
         i,
         InstanceCtxBuilder::ControlledSource(ControlledSourceBuilder {
@@ -700,6 +778,7 @@ fn controlled(i: LocatedSpan, kind: ControlledKind) -> IResult<LocatedSpan, Inst
             n2,
             keyword,
             poly,
+            pwl,
             ctrl_nodes,
             ctrl_sources,
             coeffs,

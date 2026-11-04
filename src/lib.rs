@@ -71,6 +71,10 @@ pub struct Subckt<'s> {
 
 #[derive(Debug, Clone, Default)]
 pub struct AST<'s> {
+    /// The title of the netlist: HSPICE reads the first line of the input
+    /// as its title. It is the first line of the (first) top-level file,
+    /// unless that line is blank, a comment or a dot-command.
+    pub title: Option<Cow<'s, str>>,
     pub subckt: IndexMap<String, Subckt<'s>>,
     pub instance: Vec<instance::Instance<'s>>,
     pub model: Vec<ast::Model<'s>>,
@@ -131,12 +135,61 @@ pub struct AST<'s> {
 //     }
 // }
 
+/// At most this many diagnostics are reported (logged) per file; the rest
+/// are counted in one summary line. (They all stay in [`Parsed`].)
+pub const MAX_DIAGNOSTICS_PER_FILE: usize = 100;
+
+/// Reports the diagnostics found while a netlist is built
+#[derive(Default)]
+struct Reporter {
+    has_err: bool,
+    /// per file: diagnostics reported, errors and warnings not reported
+    counts: IndexMap<FileId, (usize, usize, usize)>,
+}
+
+impl Reporter {
+    fn report(&mut self, e: &err::ParseError, file_id: &FileId, file: &str) {
+        let counts = match self.counts.get_mut(file_id) {
+            Some(counts) => counts,
+            None => self.counts.entry(file_id.clone()).or_default(),
+        };
+        if counts.0 < MAX_DIAGNOSTICS_PER_FILE {
+            counts.0 += 1;
+            e.report(&mut self.has_err, file_id, file);
+        } else if e.is_warning() {
+            counts.2 += 1;
+        } else {
+            counts.1 += 1;
+            self.has_err = true;
+        }
+    }
+    /// Log what was not reported; returns whether there was any error
+    fn finish(self) -> bool {
+        for (file_id, (_, errors, warnings)) in &self.counts {
+            if errors + warnings == 0 {
+                continue;
+            }
+            let msg = format!(
+                "{file_id}: {} more diagnostic(s) not shown ({errors} error(s), {warnings} \
+                 warning(s)); at most {MAX_DIAGNOSTICS_PER_FILE} are reported per file",
+                errors + warnings
+            );
+            if *errors > 0 {
+                crate::error!("{}", msg)
+            } else {
+                crate::warn!("{}", msg)
+            }
+        }
+        self.has_err
+    }
+}
+
 impl ast::ASTBuilder {
     #[expect(clippy::too_many_arguments)]
     fn build<'s>(
         &self,
         ast: &mut AST<'s>,
-        has_err: &mut bool,
+        reporter: &mut Reporter,
         file_id: &span::FileId,
         parsed_id: span::ParsedId,
         files: &'s Files,
@@ -147,7 +200,7 @@ impl ast::ASTBuilder {
         fn build_local<'s>(
             local_ast: &ast::LocalAST,
             ast: &mut AST<'s>,
-            has_err: &mut bool,
+            reporter: &mut Reporter,
             file: &'s str,
             file_id: &span::FileId,
             parsed_id: span::ParsedId,
@@ -157,7 +210,7 @@ impl ast::ASTBuilder {
         ) {
             fn build_subckt<'s>(
                 s: &ast::SubcktBuilder,
-                has_err: &mut bool,
+                reporter: &mut Reporter,
                 file: &'s str,
                 file_id: &span::FileId,
                 parsed_id: span::ParsedId,
@@ -168,7 +221,7 @@ impl ast::ASTBuilder {
                 let mut ast = AST::default();
                 s.ast.build(
                     &mut ast,
-                    has_err,
+                    reporter,
                     file_id,
                     parsed_id,
                     files,
@@ -182,10 +235,13 @@ impl ast::ASTBuilder {
                     ast,
                 }
             }
+            if ast.title.is_none() {
+                ast.title = local_ast.title.build(file);
+            }
             for s in &local_ast.subckt {
                 let subckt = build_subckt(
                     s,
-                    has_err,
+                    reporter,
                     file,
                     file_id,
                     parsed_id,
@@ -195,12 +251,13 @@ impl ast::ASTBuilder {
                 );
                 let key = subckt.name.to_lowercase();
                 if ast.subckt.contains_key(&key) {
-                    err::ParseErrorInner::DuplicateSubckt(subckt.name.to_string())
-                        .with(Some(span::Pos {
+                    let e = err::ParseErrorInner::DuplicateSubckt(subckt.name.to_string()).with(
+                        Some(span::Pos {
                             start: s.name.start,
                             line_num: s.name.line_num,
-                        }))
-                        .report(has_err, file_id, file);
+                        }),
+                    );
+                    reporter.report(&e, file_id, file);
                 }
                 // same as before: the later definition replaces the earlier one
                 ast.subckt.insert(key, subckt);
@@ -224,7 +281,7 @@ impl ast::ASTBuilder {
             ast.unknwon
                 .extend(local_ast.unknwon.iter().map(|b| b.build(file)));
             for e in &local_ast.errors {
-                e.report(has_err, file_id, file);
+                reporter.report(e, file_id, file);
             }
         }
         let file = &files.inner[parsed_id.0];
@@ -234,7 +291,7 @@ impl ast::ASTBuilder {
                     build_local(
                         local_ast,
                         ast,
-                        has_err,
+                        reporter,
                         file,
                         file_id,
                         parsed_id,
@@ -248,7 +305,7 @@ impl ast::ASTBuilder {
                         let (file_id, _ast) = &parsed_inner[parsed_id.0];
                         _ast.build(
                             ast,
-                            has_err,
+                            reporter,
                             file_id,
                             *parsed_id,
                             files,
@@ -257,15 +314,15 @@ impl ast::ASTBuilder {
                         );
                     }
                     Some(Err(e)) => {
-                        e.report(has_err, file_id, file);
+                        reporter.report(e, file_id, file);
                     }
                     None => {
-                        err::ParseErrorInner::Internal(
+                        let e = err::ParseErrorInner::Internal(
                             "an included file was not parsed (its parser task did not finish)"
                                 .to_owned(),
                         )
-                        .with(None)
-                        .report(has_err, file_id, file);
+                        .with(None);
+                        reporter.report(&e, file_id, file);
                     }
                 },
             }
@@ -277,12 +334,12 @@ impl Files {
     #[inline]
     pub fn build(&self, parsed: Parsed) -> (AST<'_>, bool) {
         let mut ast = AST::default();
-        let mut has_err = false;
+        let mut reporter = Reporter::default();
         for top_id in parsed.top_ids {
             let (file_id, _ast) = &parsed.inner[top_id.0];
             _ast.build(
                 &mut ast,
-                &mut has_err,
+                &mut reporter,
                 file_id,
                 top_id,
                 self,
@@ -290,6 +347,6 @@ impl Files {
                 &parsed.inner,
             );
         }
-        (ast, has_err)
+        (ast, reporter.finish())
     }
 }

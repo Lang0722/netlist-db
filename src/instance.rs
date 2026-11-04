@@ -175,7 +175,8 @@ pub struct VoltageBuilder {
 pub enum VoltageSourceBuilder {
     Params(Vec<KeyValueBuilder>),
     Value(ValueBuilder),
-    PWL(PWLBuilder),
+    /// (boxed, to keep every element small)
+    PWL(Box<PWLBuilder>),
     /// Any other combination, e.g. `DC 0 AC 1 PULSE(0 1 0 1n 1n 5n 10n)`
     /// (boxed, to keep every element small)
     Spec(Box<SourceSpecBuilder>),
@@ -190,7 +191,8 @@ pub struct CurrentBuilder {
 pub enum CurrentSourceBuilder {
     Params(Vec<KeyValueBuilder>),
     Value(ValueBuilder),
-    PWL(PWLBuilder),
+    /// (boxed, to keep every element small)
+    PWL(Box<PWLBuilder>),
     /// Any other combination, e.g. `DC 0 AC 1 PULSE(0 1 0 1n 1n 5n 10n)`
     /// (boxed, to keep every element small)
     Spec(Box<SourceSpecBuilder>),
@@ -253,6 +255,8 @@ pub struct PWLBuilder {
     ///
     /// Time, in units of seconds, which specifies the length of time to delay (propagation delay) the piecewise linear function.
     pub delay: Option<ValueBuilder>,
+    /// `PWLFILE=file`: the points are read from this file
+    pub pwlfile: Option<ValueBuilder>,
     pub edgetype: EdgeType,
 }
 
@@ -283,8 +287,10 @@ self_builder!(ControlledKind);
 /// ``` spice
 /// Exxx n+ n- [VCVS] in+ in- gain [MAX=val] ...
 /// Exxx n+ n- [VCVS] POLY(ndim) in1+ in1- ... p0 p1 ...
+/// Exxx n+ n- [VCVS] PWL(1) in+ in- [DELTA=val] x1,y1 x2,y2 ...
 /// Exxx n+ n- VOL='expr'
 /// Fxxx n+ n- [CCCS] vsrc gain
+/// Gxxx n+ n- VCR PWL(1) in+ in- x1,y1 x2,y2 ...
 /// Hxxx n+ n- [CCVS] POLY(ndim) vsrc1 ... p0 p1 ...
 /// ```
 #[derive(Debug, Clone, Builder)]
@@ -297,14 +303,33 @@ pub struct ControlledSourceBuilder {
     pub keyword: Option<Span>,
     /// `POLY(ndim)`
     pub poly: Option<usize>,
+    /// a piecewise-linear transfer function: `PWL(1)`, `NPWL(1)`, `PPWL(1)`,
+    /// or a multi-input gate `AND(n)`, `NAND(n)`, `OR(n)`, `NOR(n)`
+    /// (boxed, to keep every element small)
+    pub pwl: Option<Box<ControlledPwlBuilder>>,
     /// controlling node pairs (`E`, `G`)
     pub ctrl_nodes: Vec<(Span, Span)>,
     /// controlling voltage sources (`F`, `H`)
     pub ctrl_sources: Vec<Span>,
     /// the gain, or the polynomial coefficients
     pub coeffs: Vec<ValueBuilder>,
-    /// e.g. `VOL='...'`, `CUR='...'`, `MAX=1`
+    /// e.g. `VOL='...'`, `CUR='...'`, `MAX=1`, `DELTA=0.1`
     pub params: Vec<KeyValueBuilder>,
+}
+
+/// The piecewise-linear transfer function of a controlled source:
+/// ``` spice
+/// Gxxx n+ n- VCR PWL(1) in+ in- x1,y1 x2,y2 ...
+/// Exxx n+ n- AND(2) in1+ in1- in2+ in2- x1,y1 x2,y2 ...
+/// ```
+#[derive(Debug, Clone, Builder)]
+pub struct ControlledPwlBuilder {
+    /// `PWL`, `NPWL`, `PPWL`, `AND`, `NAND`, `OR` or `NOR`, as written
+    pub function: Span,
+    /// the number of controlling inputs: `n` in `PWL(n)`
+    pub ndim: usize,
+    /// the `(x, y)` points
+    pub points: Vec<(ValueBuilder, ValueBuilder)>,
 }
 
 /// ``` spice
