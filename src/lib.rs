@@ -26,7 +26,9 @@ where
 
 extern crate alloc;
 pub mod ast;
+pub mod eval;
 pub mod instance;
+pub mod models;
 pub mod parser;
 pub mod utlis;
 

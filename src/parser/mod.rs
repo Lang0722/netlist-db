@@ -22,7 +22,7 @@ use std::{
 };
 pub use utils::MAX_SUBCKT_DEPTH;
 use utils::local_ast;
-pub(crate) use utils::{is_formula_text, is_number_list};
+pub(crate) use utils::{is_formula_text, is_number_list, number_prefix};
 
 use super::{
     Files, Parsed,

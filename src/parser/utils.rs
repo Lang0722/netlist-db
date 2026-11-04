@@ -179,6 +179,14 @@ pub(super) fn float_unit(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
     }
 }
 
+/// The number (with its scale factor, as in `2.5u` or `1meg`) at the start of
+/// `s`, and its length
+pub(crate) fn number_prefix(s: &str) -> Option<(f64, usize)> {
+    float_unit(crate::span::span(s, 0))
+        .ok()
+        .map(|(rest, v)| (v, s.len() - rest.fragment().len()))
+}
+
 /// Whether `s` is an unquoted expression as a whole, such as
 /// `agauss(0,0,'2*p1')`
 pub(crate) fn is_formula_text(s: &str) -> bool {
@@ -1423,6 +1431,25 @@ fn statement<'a>(
         }
         // the rest of the line is a comment
         "end" => (line_end(i), Statement::item(Item::None)),
+        // HSPICE: the netlist ends at the first `.alter`; what follows it
+        // describes other runs of the same circuit (other corners or
+        // parameters). It is kept verbatim, not parsed into this netlist.
+        "alter" if !in_subckt => {
+            let end = i.take_from(i.fragment().len());
+            let raw = raw_span(i, end);
+            (
+                end,
+                Statement {
+                    item: Item::Unknown(UnknwonBuilder {
+                        cmd,
+                        tokens: Vec::new(),
+                        raw,
+                    }),
+                    end: Some(EndReason::End),
+                    diags: Vec::new(),
+                },
+            )
+        }
         _ => {
             // keep the statement verbatim; tokens are best-effort
             let end = skip_statement(i);

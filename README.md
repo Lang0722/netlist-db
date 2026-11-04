@@ -13,6 +13,32 @@ Concurrent/Parallel SPICE (HSPICE) parser, under building.
 + Use span to store string, avoid small allocations
 + Units system
 + Circular definition detection
++ HSPICE expressions and parameters, evaluated through the subckt hierarchy (`eval`)
++ HSPICE's model selector: the model bin (`nch.1`, `nch.2`, ...) each MOSFET uses (`models`)
+
+## Model selection
+For a binned model library, HSPICE chooses for each MOSFET the bin `name.N`
+whose ranges hold its length and width (`LMIN <= L < LMAX`,
+`WMIN <= W < WMAX`). `AST::mosfet_models` gives every MOSFET of the circuit
+with its instance path, its L and W (with `.param`, subckt and instance
+parameters resolved) and the model chosen for it, or why none could be:
+
+``` rust
+let (ast, _) = files.build(parsed);
+for m in ast.mosfet_models() {
+    match &m.selection {
+        Ok(s) => println!("{} {} L={:e} W={:e} -> {}", m.path, m.mname, s.l, s.w, s.model.name),
+        Err(e) => println!("{} {}: {e}", m.path, m.mname),
+    }
+}
+```
+
+`AST::mosfet_models_of` does the same for one subckt (e.g. a library cell),
+and `AST::select_model` for a given model name, L and W. From the command line:
+
+``` shell
+cargo run --release --example model_select -- deck.sp
+```
 
 ## Example
 Download the [releases/latest/examples.zip](https://github.com/zao111222333/netlist-db/releases/latest/download/examples.zip), then

@@ -1368,3 +1368,286 @@ async fn fuzzed_round_trip_cases() {
     assert_eq!(diagnostics(&parsed2), []);
     assert_eq!(files2.build(parsed2).0.to_string(), first);
 }
+
+// ---------------------------------------------------------------------------
+// model selection
+
+/// `(path, chosen model or error)` for every MOSFET
+fn chosen(ast: &AST<'_>) -> Vec<(String, String)> {
+    ast.mosfet_models()
+        .into_iter()
+        .map(|m| {
+            let model = match &m.selection {
+                Ok(s) => s.model.name.to_string(),
+                Err(e) => format!("error: {e}"),
+            };
+            (m.path, model)
+        })
+        .collect()
+}
+
+fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+    v.iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
+}
+
+/// HSPICE's model selector: the model of that name, or the bin `name.N`
+/// with LMIN <= L < LMAX and WMIN <= W < WMAX.
+#[tokio::test]
+async fn model_bins_by_length_and_width() {
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".model nch.1 nmos level=54 lmin=1e-6 lmax=1e-5 wmin=1e-6 wmax=1e-4\n\
+         .model nch.2 nmos level=54 lmin=1.8e-7 lmax=1e-6 wmin=1e-6 wmax=1e-4\n\
+         .model nch.3 nmos level=54 lmin=1.8e-7 lmax=1e-6 wmin=2.2e-7 wmax=1e-6\n\
+         .model nch.4 nmos level=54 lmin=5e-8 lmax=1e-7 wmin=1e-7 wmax=1e-4\n\
+         .model nch.5 nmos level=54 lmin=1e-7 lmax=1.8e-7 wmin=1e-7 wmax=1e-4\n\
+         .model nmod nmos level=1\n\
+         .model nmod.1 nmos level=1\n\
+         .param lg=0.18u wn='2*0.5u'\n\
+         M1 d g s b nch l=lg w=wn\n\
+         M2 d g s b nch l=0.18u w=0.5u\n\
+         M3 d g s b nch l=2u w=10u\n\
+         M4 d g s b nch l=0.1u w=1u\n\
+         M5 d g s b NCH l=1u w=0.5u\n\
+         M6 d g s b nmod l=1u w=1u\n\
+         M7 d g s b pch l=1u w=1u\n\
+         M8 d g s b nch l=lx w=1u\n",
+    )])
+    .await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(
+        chosen(&ast),
+        pairs(&[
+            // W = WMAX of nch.3 = WMIN of nch.2: the upper bin
+            ("M1", "nch.2"),
+            ("M2", "nch.3"),
+            ("M3", "nch.1"),
+            // 0.1u is 1.0000000000000001e-7: equal to LMAX of nch.4
+            ("M4", "nch.5"),
+            (
+                "M5",
+                "error: none of the 5 bins `NCH.N` holds L=1e-6, W=5e-7"
+            ),
+            // a model of that name: no selection
+            ("M6", "nmod"),
+            ("M7", "error: no model `pch`, nor bins `pch.N`"),
+            ("M8", "error: L: undefined parameter `lx`"),
+        ])
+    );
+    let s = ast.mosfet_models().remove(0).selection.unwrap();
+    assert!(close(s.l, 1.8e-7) && close(s.w, 1e-6) && s.nf == 1.0);
+    assert_eq!(ast.select_model("nch", 2e-6, 1e-5).unwrap().name, "nch.1");
+}
+
+/// Models defined in a subckt are local to it and hide the ones outside;
+/// L, W and the limits of the bins are evaluated where the transistor is,
+/// with the parameters of the subckt instances above it (as in the TSMC
+/// `nch_mac` macro models, whose limits use mismatch parameters).
+#[tokio::test]
+async fn model_selection_through_the_hierarchy() {
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".param dxln=0\n\
+         .subckt nch_mac d g s b l=1u w=1u nf=1 mismatch=0\n\
+         .param dlmis='1e-9*mismatch'\n\
+         MAIN d g s b nch l=l w=w nf=nf\n\
+         .model nch.1 nmos lmin='1e-7-(dxln+dlmis)' lmax='5e-7-(dxln+dlmis)' wmin=1e-7 wmax=1e-5\n\
+         .model nch.2 nmos lmin='5e-7-(dxln+dlmis)' lmax=1e-5 wmin=1e-7 wmax=1e-5\n\
+         .ends\n\
+         .subckt inv in out vdd vss wn=1u\n\
+         Xn out in vss vss nch_mac l=200n w='wn/2'\n\
+         Mp out in vdd vdd nch l=1u w='2*wn'\n\
+         .ends\n\
+         .model nch.1 nmos lmin=1e-8 lmax=1 wmin=1e-8 wmax=1\n\
+         X1 a b c d nch_mac l=200n w=2u\n\
+         X2 a b c d nch_mac l=800n w=2u\n\
+         X3 a y vdd 0 inv wn=4u\n\
+         M9 a b c d nch l=1u w=1u\n",
+    )])
+    .await;
+    let (ast, _) = files.build(parsed);
+    let models = ast.mosfet_models();
+    let local = &ast.subckt["nch_mac"].ast.model;
+    let global = &ast.model[0];
+    let which = |path: &str| {
+        let m = models.iter().find(|m| m.path == path).unwrap();
+        let s = m.selection.as_ref().unwrap();
+        let place = if local.iter().any(|l| std::ptr::eq(l, s.model)) {
+            "local"
+        } else if std::ptr::eq(global, s.model) {
+            "global"
+        } else {
+            "?"
+        };
+        (
+            s.model.name.to_string(),
+            place,
+            (s.l * 1e9).round(),
+            (s.w * 1e9).round(),
+        )
+    };
+    assert_eq!(
+        models.iter().map(|m| m.path.as_str()).collect::<Vec<_>>(),
+        ["X1.MAIN", "X2.MAIN", "X3.Xn.MAIN", "X3.Mp", "M9"]
+    );
+    // (L and W in nm)
+    assert_eq!(
+        which("X1.MAIN"),
+        ("nch.1".to_owned(), "local", 200.0, 2000.0)
+    );
+    assert_eq!(
+        which("X2.MAIN"),
+        ("nch.2".to_owned(), "local", 800.0, 2000.0)
+    );
+    // `w='wn/2'` with `wn=4u` from the instance of `inv` above
+    assert_eq!(
+        which("X3.Xn.MAIN"),
+        ("nch.1".to_owned(), "local", 200.0, 2000.0)
+    );
+    assert_eq!(
+        which("X3.Mp"),
+        ("nch.1".to_owned(), "global", 1000.0, 8000.0)
+    );
+    assert_eq!(which("M9"), ("nch.1".to_owned(), "global", 1000.0, 1000.0));
+}
+
+/// `.option parhier`: with GLOBAL (HSPICE's default), a parameter defined at
+/// the top level wins over the `.subckt` default; with LOCAL, the definition
+/// closest to the transistor wins. A value passed on the instance line wins
+/// in both.
+#[tokio::test]
+async fn parameter_hierarchy_rules() {
+    let deck = |option: &str| {
+        format!(
+            "{option}\n.param w=1u\n.subckt inv a b w=2u\nM1 a b 0 0 nmod w=w l=1u\n.ends\n\
+             .model nmod nmos level=1\nX1 a b inv\nX2 a b inv w=3u\n"
+        )
+    };
+    let widths = |ast: &AST<'_>| -> Vec<f64> {
+        ast.mosfet_models()
+            .iter()
+            .map(|m| m.selection.as_ref().unwrap().w)
+            .collect()
+    };
+    let (_dir, parsed, files) = parse_text(&[("top.sp", &deck("* default"))]).await;
+    assert_eq!(widths(&files.build(parsed).0), [1e-6, 3e-6]);
+    let (_dir, parsed, files) = parse_text(&[("top.sp", &deck(".option parhier=local"))]).await;
+    assert_eq!(widths(&files.build(parsed).0), [2e-6, 3e-6]);
+}
+
+/// `.option scale` multiplies L and W; `defl`/`defw` give L and W when the
+/// instance has none; with `WNFLAG=1`, bins hold the width per finger.
+#[tokio::test]
+async fn model_selection_options_and_fingers() {
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".option scale=1e-6 defl=0.5 defw=2\n\
+         .model nch.1 nmos wnflag=1 lmin=1e-7 lmax=1e-6 wmin=1e-7 wmax=1e-6\n\
+         .model nch.2 nmos wnflag=1 lmin=1e-7 lmax=1e-6 wmin=1e-6 wmax=1e-5\n\
+         .model pch.1 nmos lmin=1e-7 lmax=1e-6 wmin=1e-7 wmax=1e-6\n\
+         .model pch.2 nmos lmin=1e-7 lmax=1e-6 wmin=1e-6 wmax=1e-5\n\
+         M1 d g s b nch l=0.18 w=4 nf=8\n\
+         M2 d g s b nch l=0.18 w=4\n\
+         M3 d g s b pch l=0.18 w=4 nf=8\n\
+         M4 d g s b pch\n",
+    )])
+    .await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(
+        chosen(&ast),
+        pairs(&[
+            ("M1", "nch.1"),
+            ("M2", "nch.2"),
+            ("M3", "pch.2"),
+            ("M4", "pch.2"),
+        ])
+    );
+    let m4 = ast.mosfet_models().remove(3).selection.unwrap();
+    assert!(close(m4.l, 5e-7) && close(m4.w, 2e-6));
+}
+
+/// A subckt that instantiates itself does not make the walk loop forever.
+#[tokio::test]
+async fn model_selection_stops_at_recursive_subckts() {
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".model nmod nmos level=1\n.subckt a x\nM1 x x 0 0 nmod\nX1 x a\n.ends\nX0 n a\n",
+    )])
+    .await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(chosen(&ast), pairs(&[("X0.M1", "nmod")]));
+}
+
+/// HSPICE: the netlist ends at the first `.alter`; what follows describes
+/// other runs (other corners, other parameters). It used to be parsed into
+/// the same netlist, so every corner's `.lib` and `.param` were merged (the
+/// last one winning). It is now kept verbatim, not parsed.
+#[tokio::test]
+async fn alter_blocks_are_not_merged() {
+    let (_dir, parsed, files) = parse_text(&[
+        (
+            "top.sp",
+            ".lib 'corners.l' tt\n.param w=1u\nM1 d g s b nmod w=w l=1u\n\
+             .alter ss corner\n.del lib 'corners.l' tt\n.lib 'corners.l' ss\n.param w=2u\n\
+             .alter\n.param w=3u\n.end\n",
+        ),
+        (
+            "corners.l",
+            ".lib tt\n.param dx=0\n.model nmod nmos level=1\n.endl tt\n\
+             .lib ss\n.param dx=1n\n.model nmod nmos level=1\n.endl ss\n",
+        ),
+    ])
+    .await;
+    assert_eq!(diagnostics(&parsed), []);
+    let (ast, _) = files.build(parsed);
+    // one corner, one model, one value of each parameter
+    assert_eq!(ast.model.len(), 1);
+    let scope = ast.scope();
+    assert_eq!((scope.get("w"), scope.get("dx")), (Ok(1e-6), Ok(0.0)));
+    // the `.alter` blocks are kept, verbatim, and printed back
+    let alter = ast
+        .unknwon
+        .iter()
+        .find(|u| u.cmd.eq_ignore_ascii_case("alter"))
+        .unwrap();
+    assert!(alter.raw.starts_with("ss corner\n.del lib") && alter.raw.ends_with(".end"));
+    let printed = ast.to_string();
+    let (_dir2, parsed2, files2) = parse_deck(&[("top.sp", &printed)]).await;
+    assert_eq!(files2.build(parsed2).0.to_string(), printed);
+}
+
+/// A hierarchy 250 subckts deep (the walk stops at `MAX_HIERARCHY_DEPTH`)
+/// does not overflow the stack, and parameters pass all the way down.
+#[tokio::test]
+async fn model_selection_in_a_deep_hierarchy() {
+    let mut text = String::from(".model nmod nmos level=1\n");
+    for i in 0..250 {
+        writeln!(
+            text,
+            ".subckt s{i} a w=1u\nX{i} a s{} w='w+1n'\n.ends",
+            i + 1
+        )
+        .unwrap();
+    }
+    text.push_str(".subckt s250 a w=1u\nM1 a a 0 0 nmod w=w l=1u\n.ends\nX a s0\n");
+    let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
+    let (ast, has_err) = files.build(parsed);
+    assert!(!has_err);
+    let mosfets = ast.mosfet_models();
+    assert_eq!(mosfets.len(), 1);
+    let s = mosfets[0].selection.as_ref().unwrap();
+    assert!(close(s.w, 1e-6 + 250e-9), "{}", s.w);
+    assert_eq!(
+        crate::Subckt::append(
+            "s0",
+            |_| false,
+            &mut Vec::new(),
+            &mut vec![&ast.subckt],
+            &mut Vec::new(),
+            &mut Vec::new()
+        ),
+        Ok(())
+    );
+}
