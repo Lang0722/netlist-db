@@ -133,7 +133,7 @@ def main():
                 compare(deck + ".refng", ngs, False, "reference (ngspice's rule) vs ngspice")
                 compare(ndb, ngs, False, "netlist-db vs ngspice (HSPICE's rule)")
     for k in sorted(stats):
-        print(f"{k:55s} {stats[k]}")
+        print(f"{k:60s} {stats[k]}")
     if not NGSPICE:
         print("(ngspice is not installed: no comparison with it)")
     # the comparisons with ngspice are informational: they differ at bin

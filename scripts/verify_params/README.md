@@ -41,5 +41,22 @@ takes into account:
   (HSPICE: its integer part);
 - it does not implement `.option parhier=global`.
 
+`torture.py` runs decks designed by hand whose answers are known in
+advance: computed by a formula from each instance's path (or as closed-form
+counts), or by the scoping rule written out directly. A chain of 24 levels
+each rescaling what it passes down; a binary tree whose leaves' parameter is
+their path read in binary (every context different); a ternary lattice whose
+counts are binomial sums (581 million MOSFETs with `--big`); every
+combination of where a name is defined or passed over 3 levels, under both
+`parhier` rules; overlapping, gapped and open-ended bins, a model and bins
+of one name, dotted and non-numeric names (`n.ch.1`, `nm.mc`), WNFLAG in
+some bins, edges reached through float noise, `.option scale`, local bins
+hiding global ones; errors in some contexts only; library mode, nested
+subckts hiding top-level ones.
+
+``` shell
+python3 scripts/verify_params/torture.py --big --reference --ngspice
+```
+
 `../parhier_probe.sp` asks HSPICE itself the questions that ngspice cannot
 answer (`../parhier_probe.py` compares its results with netlist-db's).

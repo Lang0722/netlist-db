@@ -2,8 +2,8 @@
 //!
 //! A MOSFET names a model, e.g. `nch`. If a model of that name is defined,
 //! it is the one. Otherwise HSPICE chooses among the bins of a binned model
-//! library, the models named `nch.1`, `nch.2`, ..., the one whose ranges hold
-//! the transistor's length and width:
+//! library, the models named `nch.1`, `nch.2`, ... (`nch.` and a number), the
+//! one whose ranges hold the transistor's length and width:
 //!
 //! ``` text
 //! LMIN <= L < LMAX   and   WMIN <= W < WMAX
@@ -277,17 +277,14 @@ impl<'a, 's> ModelIndex<'a, 's> {
         };
         for model in models {
             let name = model.name.to_ascii_lowercase();
-            // a bin of each name before a `.`: `a.b.1` of `a` and of `a.b`
-            for (i, _) in name.match_indices('.') {
-                if i > 0 && i + 1 < name.len() {
-                    index
-                        .bins
-                        .entry(name[..i].to_owned())
-                        .or_default()
-                        .push(Bin {
-                            model,
-                            fixed: OnceCell::new(),
-                        });
+            // a bin `name.N`, N a number: `a.b.1` is a bin of `a.b` (not of
+            // `a`), `nch.mc` none
+            if let Some((base, n)) = name.rsplit_once('.') {
+                if !base.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) {
+                    index.bins.entry(base.to_owned()).or_default().push(Bin {
+                        model,
+                        fixed: OnceCell::new(),
+                    });
                 }
             }
             index.exact.insert(name, model);
@@ -680,10 +677,19 @@ struct Usage<'a, 's> {
     errors: Vec<(SelectError, String)>,
     error_numbers: HashMap<String, usize>,
     /// the counts of the subckt instances evaluated
-    memo: HashMap<MemoKey, Rc<Counts>>,
-    /// parameter contexts: a level that passes or defines parameters gets a
-    /// new one; other levels see the parameters of the level above
-    contexts: HashMap<(usize, Passed, usize), usize>,
+    memo: HashMap<MemoKey, Rc<[(Use, u64)]>>,
+    /// how often the counts of a definition (by address) were found in, or
+    /// missing from, `memo`: (found, missing)
+    memo_use: HashMap<usize, (u64, u64)>,
+    /// the definitions whose instances are not kept in `memo`: almost each
+    /// one is different (a value passed that differs on every instance, read
+    /// below), so that keeping them would only take memory
+    unkept: HashSet<usize>,
+    /// the parameter context of the next level that passes or defines
+    /// parameters (a level that does neither sees the context above it). A
+    /// level whose instance repeats one already evaluated is found in
+    /// `memo`, so each context evaluated is new.
+    next_context: usize,
     /// what the contents of a definition (by address) read (`None`: not
     /// known)
     reads: HashMap<usize, Option<Rc<Reads>>>,
@@ -702,7 +708,9 @@ impl<'a, 's> Usage<'a, 's> {
             errors: Vec::new(),
             error_numbers: HashMap::new(),
             memo: HashMap::new(),
-            contexts: HashMap::new(),
+            memo_use: HashMap::new(),
+            unkept: HashSet::new(),
+            next_context: 2,
             reads: HashMap::new(),
             reading: Vec::new(),
             path: Vec::new(),
@@ -861,27 +869,32 @@ impl<'a, 's> Usage<'a, 's> {
                         })
                         .collect();
                     let addr = ptr::from_ref(def) as usize;
-                    let key = match self.reads(def, &inner) {
-                        Some(reads) => MemoKey::Reads(
-                            addr,
-                            passed
-                                .iter()
-                                .filter(|(k, _)| reads.all.contains(k))
-                                .cloned()
-                                .collect(),
-                            reads.outside.iter().map(|n| scope.binding(n)).collect(),
-                        ),
-                        None => MemoKey::Context(addr, passed.clone(), context),
-                    };
-                    if let Some(c) = self.memo.get(&key) {
-                        add(&mut counts, c);
-                        continue;
-                    }
                     let binds =
                         !passed.is_empty() || !def.params.is_empty() || !def.ast.param.is_empty();
+                    let key = if self.unkept.contains(&addr) {
+                        None
+                    } else {
+                        let key = match self.reads(def, &inner) {
+                            Some(reads) => MemoKey::Reads(
+                                addr,
+                                passed
+                                    .into_iter()
+                                    .filter(|(k, _)| reads.all.contains(k))
+                                    .collect(),
+                                reads.outside.iter().map(|n| scope.binding(n)).collect(),
+                            ),
+                            None => MemoKey::Context(addr, passed, context),
+                        };
+                        if let Some(c) = self.memo.get(&key) {
+                            add(&mut counts, c);
+                            self.memo_use.entry(addr).or_default().0 += 1;
+                            continue;
+                        }
+                        Some(key)
+                    };
                     let inner_context = if binds {
-                        let next = self.contexts.len() + 2;
-                        *self.contexts.entry((addr, passed, context)).or_insert(next)
+                        self.next_context += 1;
+                        self.next_context
                     } else {
                         context
                     };
@@ -895,16 +908,39 @@ impl<'a, 's> Usage<'a, 's> {
                         .collect();
                     self.path.push(&inst.name);
                     self.expanding.push(def);
-                    let c = Rc::new(self.level(&def.ast, &inner_scopes, &inner, inner_context));
+                    let c = self.level(&def.ast, &inner_scopes, &inner, inner_context);
                     self.expanding.pop();
                     self.path.pop();
+                    let c: Rc<[(Use, u64)]> = c.into_iter().collect();
                     add(&mut counts, &c);
-                    self.memo.insert(key, c);
+                    if let Some(key) = key {
+                        self.keep(addr, key, c);
+                    }
                 }
                 _ => {}
             }
         }
         counts
+    }
+
+    /// Keeps the counts `c` of an instance of the definition `addr`, unless
+    /// its instances seldom repeat
+    fn keep(&mut self, addr: usize, key: MemoKey, c: Rc<[(Use, u64)]>) {
+        /// instances of a definition evaluated before judging how often
+        /// they repeat
+        const TRIAL: u64 = 4096;
+        /// how many entries `memo` holds at most (it is emptied then)
+        const MAX_ENTRIES: usize = 1 << 22;
+        let (found, missing) = self.memo_use.entry(addr).or_default();
+        *missing += 1;
+        if *missing >= TRIAL && *found * 16 < *missing {
+            self.unkept.insert(addr);
+            return;
+        }
+        if self.memo.len() >= MAX_ENTRIES {
+            self.memo.clear();
+        }
+        self.memo.insert(key, c);
     }
 
     /// The number of the error `e`, met at the instance `name` of the
@@ -922,8 +958,8 @@ impl<'a, 's> Usage<'a, 's> {
     }
 }
 
-fn add(counts: &mut Counts, more: &Counts) {
-    for (&u, &n) in more {
+fn add(counts: &mut Counts, more: &[(Use, u64)]) {
+    for &(u, n) in more {
         *counts.entry(u).or_default() += n;
     }
 }

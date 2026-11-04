@@ -1712,6 +1712,49 @@ async fn width_per_finger_flags() {
     }
 }
 
+/// Counts through a binary tree whose every instance gets a different value
+/// (each leaf's `p` is its path in binary): beyond a trial, the instances
+/// of a definition that never repeat are not kept (they used to fill the
+/// memory); the counts stay those of the listing.
+#[tokio::test]
+async fn model_usage_of_instances_that_never_repeat() {
+    let depth = 13;
+    let mut deck = String::from(
+        ".model nw.1 nmos wmin=1e-10 wmax=2.5e-7\n.model nw.2 nmos wmin=2.5e-7 wmax=4.5e-7\n\
+         .model nw.3 nmos wmin=4.5e-7 wmax=1e-5\n\
+         .subckt b0 d p=0\nM0 d d 0 0 nw w='(1+p-7*floor(p/7))*100n' l=1u\n.ends\n",
+    );
+    for k in 1..=depth {
+        deck += &format!(
+            ".subckt b{k} d p=0\nX0 d b{} p='2*p'\nX1 d b{} p='2*p+1'\n.ends\n",
+            k - 1,
+            k - 1
+        );
+    }
+    deck += &format!("X0 d b{depth} p=0\n");
+    let (_dir, parsed, files) = parse_text(&[("top.sp", &deck)]).await;
+    let (ast, _) = files.build(parsed);
+    let mut listed = HashMap::<String, u64>::new();
+    for m in ast.mosfet_models() {
+        *listed
+            .entry(m.selection.unwrap().model.name.to_string())
+            .or_default() += 1;
+    }
+    let usage = ast.model_usage();
+    let counted: HashMap<String, u64> = usage
+        .models
+        .iter()
+        .map(|(m, n)| (m.name.to_string(), *n))
+        .collect();
+    assert_eq!(counted, listed);
+    // p mod 7 = 0, 1 (W=100n, 200n): nw.1; 2, 3: nw.2; 4, 5, 6: nw.3
+    let n = 1u64 << depth;
+    let of = |r: u64| (n - 1 - r) / 7 + 1;
+    assert_eq!(counted["nw.1"], of(0) + of(1));
+    assert_eq!(counted["nw.2"], of(2) + of(3));
+    assert_eq!(counted["nw.3"], of(4) + of(5) + of(6));
+}
+
 /// A subckt that instantiates itself does not make the walk loop forever.
 #[tokio::test]
 async fn model_selection_stops_at_recursive_subckts() {
@@ -1902,6 +1945,12 @@ async fn model_usage_counts_like_the_list() {
          .subckt fcell a b wf=0.3u\nM1 a b 0 0 nch w='f(wf)' l=50n\n.ends\n\
          .subckt fblk a b id=0\nX1 a b fcell\nX2 a b fcell wf=0.6u\n.ends\n\
          X1 a b fblk id=1\nX2 a b fblk id=2\nX3 a b fcell\n",
+        // a subckt that calls a function is counted for its context: what
+        // its parent passes (`k`) changes it
+        ".param f(x)='2*x'\n\
+         .subckt fc a b\nM1 a b 0 0 nch w='f(k)*1u' l=50n\n.ends\n\
+         .subckt fp a b k=0.1\nX1 a b fc\nX2 a b fc\n.ends\n\
+         X1 a b fp k=0.1\nX2 a b fp k=0.3\nX3 a b fp k=0.6\nX4 a b fp\n",
         ".temp 85\n.subckt tcell a b\nM1 a b 0 0 nch w='temper*1e-8' l=50n\n.ends\n\
          .subckt tblk a b temper=1\nX1 a b tcell\n.ends\n\
          X1 a b tcell\nX2 a b tblk\nX3 a b tblk temper=200\n",
