@@ -1046,7 +1046,8 @@ def main():
     for name, text in files.items():
         print(f"{name}: {text.count(chr(10))} lines, {len(text.encode())} bytes")
     chip_text = files["chip.sp"]
-    lib = sum(n for m, n in total.items() if m.split(".")[0] in FAMILIES)
+    # (a bin `family.N`: not the exact-named model `nch_svt` local to a subckt)
+    lib = sum(n for m, n in total.items() if "." in m and m.split(".")[0] in FAMILIES)
     print(f"MOSFETs: {sum(total.values())}, of which {lib} use a bin of models.l")
     print(f"subckts in chip.sp: {chip_text.count(chr(10) + '.subckt ')}")
     for d in ["CORE_BIG", "CORE_LIT", "CLUSTER", "CHIP_TOP"] + srams:
