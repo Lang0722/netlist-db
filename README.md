@@ -36,6 +36,17 @@ for m in ast.mosfet_models() {
 `AST::mosfet_models_of` does the same for one subckt (e.g. a library cell),
 and `AST::select_model` for a given model name, L and W.
 
+The parameters follow HSPICE's rules: a subckt instance has its `.subckt`
+defaults, its `.param` statements (which replace a default of the same
+name) and the values passed on its line (computed where the line is, and
+used over both); a name is resolved from the closest level that has it with
+`.option parhier=local`, or from the top-most definition with the default
+`parhier=global` (a value passed being used over a definition). The ranges
+of a bin are evaluated where the model is defined: the top level's
+parameters for a top-level model, the instance's for a model inside a
+subckt. `W/NF` is compared when `WNFLAG` is set on the instance, else in
+the model, else by `.option wnflag`.
+
 A hierarchical netlist can hold far more transistors than fit in a list (a
 30 MB netlist can flatten to hundreds of millions). `AST::for_each_mosfet_model`
 gives them one by one without keeping them, and `AST::model_usage` counts

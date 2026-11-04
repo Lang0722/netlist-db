@@ -1613,6 +1613,105 @@ async fn model_selection_options_and_fingers() {
     assert!(close(m4.l, 5e-7) && close(m4.w, 2e-6));
 }
 
+/// The ranges of a bin are evaluated where the model is defined: those of a
+/// top-level model with the top-level parameters, even inside a subckt that
+/// defines (or is passed) a parameter of the same name, as ngspice and
+/// HSPICE do; those of a model in a subckt with that subckt instance's. The
+/// limits used to be evaluated where the transistor is.
+#[tokio::test]
+async fn bin_ranges_are_evaluated_where_the_model_is() {
+    for option in ["", ".option parhier=local\n"] {
+        let text = format!(
+            "{option}.param lb=2e-7\n\
+             .model nch.1 nmos lmin=1e-8 lmax='lb' wmin=1e-8 wmax=1e-4\n\
+             .model nch.2 nmos lmin='lb' lmax=1e-5 wmin=1e-8 wmax=1e-4\n\
+             .subckt shadow d lb=1e-6\nM1 d d 0 0 nch w=1u l=5e-7\n.ends\n\
+             .subckt inner d\n.param lb=1e-6\nM1 d d 0 0 nch w=1u l=5e-7\n.ends\n\
+             .subckt mac d ll=1e-7 dx=0\n\
+             .model lm.1 nmos lmin=1e-8 lmax='2e-7-dx' wmin=1e-8 wmax=1e-4\n\
+             .model lm.2 nmos lmin='2e-7-dx' lmax=1e-5 wmin=1e-8 wmax=1e-4\n\
+             M1 d d 0 0 lm w=1u l=ll\n.ends\n\
+             X1 d shadow\nX2 d shadow lb=1e-6\nX3 d inner\n\
+             X4 d mac ll=1.95e-7\nX5 d mac ll=1.95e-7 dx=1e-8\nM1 d d 0 0 nch w=1u l=5e-7\n"
+        );
+        let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
+        let (ast, _) = files.build(parsed);
+        assert_eq!(
+            chosen(&ast),
+            pairs(&[
+                ("X1.M1", "nch.2"),
+                ("X2.M1", "nch.2"),
+                ("X3.M1", "nch.2"),
+                ("X4.M1", "lm.1"),
+                ("X5.M1", "lm.2"),
+                ("M1", "nch.2"),
+            ]),
+            "{option}"
+        );
+        let usage = ast.model_usage();
+        let mut counts: Vec<_> = usage
+            .models
+            .iter()
+            .map(|(m, n)| (m.name.to_string(), *n))
+            .collect();
+        counts.sort();
+        assert_eq!(
+            counts,
+            [
+                ("lm.1".to_owned(), 1),
+                ("lm.2".to_owned(), 1),
+                ("nch.2".to_owned(), 4)
+            ]
+        );
+    }
+}
+
+/// A value passed on an instance line is computed where the line is: the
+/// parameters of the subckt it instantiates (`k=100` and `.param q=200`)
+/// do not hide those of the instance's own level (ngspice does let them).
+#[tokio::test]
+async fn passed_values_are_computed_where_the_instance_is() {
+    for option in ["", ".option parhier=local\n"] {
+        let text = format!(
+            "{option}.model nmod nmos level=1\n\
+             .subckt child d s=0 k=100\n.param q=200\nM1 d d 0 0 nmod w='s*1u' l=1u\n.ends\n\
+             .subckt parent d k=7 q=8\nX1 d child s='k+q'\n.ends\n\
+             X1 d parent\n"
+        );
+        let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
+        let (ast, _) = files.build(parsed);
+        let w = ast.mosfet_models().remove(0).selection.unwrap().w;
+        assert!(close(w, 15e-6), "{option}: {w}");
+    }
+}
+
+/// Whether bins compare the width per finger (`W/NF`): `WNFLAG` on the
+/// instance line, else the model's `WNFLAG`, else `.option wnflag` (by
+/// default, the total width)
+#[tokio::test]
+async fn width_per_finger_flags() {
+    let models = ".model a.1 nmos lmin=1e-8 lmax=1e-4 wmin=1e-8 wmax=1e-6\n\
+        .model a.2 nmos lmin=1e-8 lmax=1e-4 wmin=1e-6 wmax=1e-3\n\
+        .model b.1 nmos wnflag=1 lmin=1e-8 lmax=1e-4 wmin=1e-8 wmax=1e-6\n\
+        .model b.2 nmos wnflag=1 lmin=1e-8 lmax=1e-4 wmin=1e-6 wmax=1e-3\n\
+        .model c.1 nmos wnflag=0 lmin=1e-8 lmax=1e-4 wmin=1e-8 wmax=1e-6\n\
+        .model c.2 nmos wnflag=0 lmin=1e-8 lmax=1e-4 wmin=1e-6 wmax=1e-3\n";
+    // 4u over 8 fingers: 0.5u per finger
+    let devices = "M1 d g s b a w=4u l=1u nf=8\nM2 d g s b b w=4u l=1u nf=8\n\
+        M3 d g s b b w=4u l=1u nf=8 wnflag=0\nM4 d g s b a w=4u l=1u nf=8 wnflag=1\n\
+        M5 d g s b c w=4u l=1u nf=8\n";
+    for (option, expected) in [
+        ("", ["a.2", "b.1", "b.2", "a.1", "c.2"]),
+        (".option wnflag=1\n", ["a.1", "b.1", "b.2", "a.1", "c.2"]),
+    ] {
+        let text = format!("{option}{models}{devices}");
+        let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
+        let (ast, _) = files.build(parsed);
+        let got: Vec<_> = chosen(&ast).into_iter().map(|(_, m)| m).collect();
+        assert_eq!(got, expected, "{option}");
+    }
+}
+
 /// A subckt that instantiates itself does not make the walk loop forever.
 #[tokio::test]
 async fn model_selection_stops_at_recursive_subckts() {

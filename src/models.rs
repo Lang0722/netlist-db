@@ -12,12 +12,16 @@
 //! (a limit that is not given does not limit). Details, as in HSPICE:
 //! - A model defined inside a `.subckt` is local to it, and hides the models
 //!   of the same name outside.
-//! - The limits are evaluated where the transistor is, so they may use the
-//!   parameters of its subckt (e.g. `LMIN='2.4e-7-(dxln+dlmisn)'`).
+//! - The limits are evaluated where the model is defined: those of a model
+//!   of the top level with the top-level parameters (a subckt parameter of
+//!   the same name does not change them), those of a model inside a subckt
+//!   with the parameters of that subckt's instance (e.g.
+//!   `LMIN='2.4e-7-(dxln+dlmisn)'` in a macro model).
 //! - L and W are the instance's `L=` and `W=` (or `.option DEFL`/`DEFW`,
 //!   default 100u), times `.option SCALE`; the limits are multiplied by
-//!   `.option SCALM`. With the model parameter `WNFLAG=1`, the width per
-//!   finger (`W/NF`) is used.
+//!   `.option SCALM`. The width per finger (`W/NF`) is compared if `WNFLAG`
+//!   is set: on the instance line, else in the model, else by `.option
+//!   WNFLAG` (by default, the total width).
 //! - A value within 1e-9 (relative) of a limit counts as equal to it, so
 //!   that `L=0.1u` and `LMAX=1e-7` compare equal.
 
@@ -128,6 +132,9 @@ struct Options {
     scalm: f64,
     defl: f64,
     defw: f64,
+    /// `.option wnflag`: whether bins compare the width per finger when
+    /// neither the model nor the instance says
+    wnflag: bool,
 }
 
 impl Options {
@@ -142,6 +149,7 @@ impl Options {
             scalm: get("scalm", 1.0),
             defl: get("defl", 1e-4),
             defw: get("defw", 1e-4),
+            wnflag: get("wnflag", 0.0) != 0.0,
         }
     }
 }
@@ -161,20 +169,21 @@ struct Limits {
     lmax: f64,
     wmin: f64,
     wmax: f64,
-    /// `WNFLAG=1`: the width per finger is compared
-    per_finger: bool,
+    /// the model's `WNFLAG`: whether the width per finger is compared
+    per_finger: Option<bool>,
 }
 
 impl Limits {
-    /// Whether these ranges hold a transistor of length `l`, width `w` and
-    /// `nf` fingers
-    fn hold(&self, l: f64, w: f64, nf: f64) -> bool {
-        let w = if self.per_finger && nf > 0.0 {
-            w / nf
+    /// Whether these ranges hold a transistor of size `size`
+    fn hold(&self, size: &Size, opts: &Options) -> bool {
+        // the instance's WNFLAG, else the model's, else `.option wnflag`
+        let per_finger = size.wnflag.or(self.per_finger).unwrap_or(opts.wnflag);
+        let w = if per_finger && size.nf > 0.0 {
+            size.w / size.nf
         } else {
-            w
+            size.w
         };
-        within(l, self.lmin, self.lmax) && within(w, self.wmin, self.wmax)
+        within(size.l, self.lmin, self.lmax) && within(w, self.wmin, self.wmax)
     }
 }
 
@@ -205,30 +214,44 @@ fn limits(model: &Model<'_>, scope: &Scope<'_>, scalm: f64) -> Result<Limits, Se
         lmax: param("lmax")?.map_or(f64::INFINITY, |v| v * scalm),
         wmin: param("wmin")?.map_or(f64::NEG_INFINITY, |v| v * scalm),
         wmax: param("wmax")?.map_or(f64::INFINITY, |v| v * scalm),
-        per_finger: param("wnflag")?.is_some_and(|flag| flag != 0.0),
+        per_finger: param("wnflag")?.map(|flag| flag != 0.0),
     })
 }
 
-/// L, W and NF of a MOSFET, evaluated in `scope`, L and W times `.option
-/// scale`
-fn size(m: &MOSFET<'_>, scope: &Scope<'_>, opts: &Options) -> Result<(f64, f64, f64), SelectError> {
-    let value = |key: &str, default: f64| match m
+/// The size of a MOSFET, as its bin is chosen
+#[derive(Debug, Clone, Copy)]
+struct Size {
+    /// L and W, times `.option scale`
+    l: f64,
+    w: f64,
+    nf: f64,
+    /// `WNFLAG` on the instance line, if given
+    wnflag: Option<bool>,
+}
+
+/// The size of a MOSFET, evaluated in `scope`
+fn size(m: &MOSFET<'_>, scope: &Scope<'_>, opts: &Options) -> Result<Size, SelectError> {
+    let value = |key: &str| match m
         .params
         .iter()
         .rev()
         .find(|kv| kv.k.eq_ignore_ascii_case(key))
     {
-        Some(kv) => scope.eval(&kv.v).map_err(|error| SelectError::Eval {
-            what: key.to_ascii_uppercase(),
-            error,
-        }),
-        None => Ok(default),
+        Some(kv) => scope
+            .eval(&kv.v)
+            .map(Some)
+            .map_err(|error| SelectError::Eval {
+                what: key.to_ascii_uppercase(),
+                error,
+            }),
+        None => Ok(None),
     };
-    Ok((
-        value("l", opts.defl)? * opts.scale,
-        value("w", opts.defw)? * opts.scale,
-        value("nf", 1.0)?,
-    ))
+    Ok(Size {
+        l: value("l")?.unwrap_or(opts.defl) * opts.scale,
+        w: value("w")?.unwrap_or(opts.defw) * opts.scale,
+        nf: value("nf")?.unwrap_or(1.0),
+        wnflag: value("wnflag")?.map(|flag| flag != 0.0),
+    })
 }
 
 /// The models of one level (the top level, or a subckt), by lowercase name
@@ -376,18 +399,23 @@ impl<'a, 's> Selector<'a, 's> {
             .clone()
     }
 
-    /// The model named `name` for a transistor in `scope`, of length `l`,
-    /// width `w` and `nf` fingers. `lexical`: the definitions around it, from
-    /// the top level to its own, whose models it sees (the innermost first).
+    /// The model named `name` for a transistor of length `l`, width `w` and
+    /// `nf` fingers. `lexical`: the definitions around it, from the top level
+    /// to its own, whose models it sees (the innermost first); `scopes`: the
+    /// parameters of each (the top level, and the instances of the subckts
+    /// above the transistor that they define). The ranges of a bin are
+    /// evaluated where the bin is defined: those of the top level with the
+    /// top-level parameters, those of a subckt with its instance's.
     fn choose(
         &mut self,
         name: &str,
-        (l, w, nf): (f64, f64, f64),
-        scope: &Scope<'_>,
+        size: Size,
+        scopes: &[&Scope<'_>],
         lexical: &[&'a AST<'s>],
     ) -> Result<Selection<'a, 's>, SelectError> {
+        let Size { l, w, nf, .. } = size;
         let key = name.to_ascii_lowercase();
-        for &ast in lexical.iter().rev() {
+        for (&ast, &scope) in lexical.iter().zip(scopes).rev() {
             let index = self.index(ast);
             // a model of this very name
             if let Some(&model) = index.exact.get(&key) {
@@ -411,7 +439,7 @@ impl<'a, 's> Selector<'a, 's> {
                     Some(Some(Err(e))) => return Err(e.clone()),
                     _ => self.limits(bin.model, scope)?,
                 };
-                if limits.hold(l, w, nf) {
+                if limits.hold(&size, &self.opts) {
                     return Ok(Selection {
                         model: bin.model,
                         l,
@@ -430,15 +458,17 @@ impl<'a, 's> Selector<'a, 's> {
         Err(SelectError::NoModel(name.to_owned()))
     }
 
-    /// The model of the MOSFET `m`, in `scope`
+    /// The model of the MOSFET `m`, at the level whose definitions around it
+    /// are `lexical` and their parameters `scopes` (its own last)
     fn select(
         &mut self,
         m: &MOSFET<'_>,
-        scope: &Scope<'_>,
+        scopes: &[&Scope<'_>],
         lexical: &[&'a AST<'s>],
     ) -> Result<Selection<'a, 's>, SelectError> {
+        let scope = scopes.last().expect("the top level at least");
         let size = size(m, scope, &self.opts)?;
-        self.choose(&m.mname, size, scope, lexical)
+        self.choose(&m.mname, size, scopes, lexical)
     }
 }
 
@@ -494,8 +524,13 @@ impl<'s> AST<'s> {
     pub fn select_model(&self, name: &str, l: f64, w: f64) -> Result<&Model<'s>, SelectError> {
         let scope = self.scope();
         let mut sel = Selector::new(self, &scope);
-        sel.choose(name, (l, w, 1.0), &scope, &[self])
-            .map(|s| s.model)
+        let size = Size {
+            l,
+            w,
+            nf: 1.0,
+            wnflag: None,
+        };
+        sel.choose(name, size, &[&scope], &[self]).map(|s| s.model)
     }
 
     /// Every MOSFET of the circuit, in netlist order: the MOSFETs at the top
@@ -532,7 +567,7 @@ impl<'s> AST<'s> {
             path: Vec::new(),
             expanding: Vec::new(),
         };
-        walk.ast(self, &scope, &[self]);
+        walk.ast(self, &[&scope], &[self]);
     }
 
     /// [`AST::for_each_mosfet_model`] for the subckt `name`, as in
@@ -553,7 +588,7 @@ impl<'s> AST<'s> {
             path: Vec::new(),
             expanding: vec![def],
         };
-        walk.ast(&def.ast, &child, &[self, &def.ast]);
+        walk.ast(&def.ast, &[&scope, &child], &[self, &def.ast]);
         true
     }
 }
@@ -581,7 +616,7 @@ impl<'s> AST<'s> {
     pub fn model_usage(&self) -> ModelUsage<'_, 's> {
         let scope = self.scope();
         let mut usage = Usage::new(self, &scope);
-        let counts = usage.level(self, &scope, &[self], 0);
+        let counts = usage.level(self, &[&scope], &[self], 0);
         usage.finish(&counts)
     }
 
@@ -594,7 +629,7 @@ impl<'s> AST<'s> {
         let child = instance_scope(&scope, def, []);
         let mut usage = Usage::new(self, &scope);
         usage.expanding.push(def);
-        let counts = usage.level(&def.ast, &child, &[self, &def.ast], 1);
+        let counts = usage.level(&def.ast, &[&scope, &child], &[self, &def.ast], 1);
         Some(usage.finish(&counts))
     }
 }
@@ -733,18 +768,27 @@ impl<'a, 's> Usage<'a, 's> {
             match &inst.ctx {
                 InstanceCtx::MOSFET(m) => {
                     for kv in &m.params {
-                        if ["l", "w", "nf"]
+                        if ["l", "w", "nf", "wnflag"]
                             .iter()
                             .any(|k| kv.k.eq_ignore_ascii_case(k))
                         {
                             extend(&mut all, &self.sel.names(&kv.v)?);
                         }
                     }
-                    // the ranges of the bins it may use
+                    // the ranges of the bins it may use, read where each is
+                    // defined: those of the top level read the top level's
+                    // parameters (the same everywhere), those of this subckt
+                    // its own; those of a subckt around it (a definition
+                    // nested in another) the parameters of that subckt's
+                    // instance, which are not followed: unknown
                     let name = m.mname.to_ascii_lowercase();
-                    for &ast in lexical {
+                    let last = lexical.len() - 1;
+                    for (depth, &ast) in lexical.iter().enumerate().skip(1) {
                         let index = self.sel.index(ast);
                         for bin in index.bins.get(&name).into_iter().flatten() {
+                            if depth < last {
+                                return None;
+                            }
                             extend(&mut all, &self.sel.limit_names(bin.model)?);
                         }
                     }
@@ -773,20 +817,21 @@ impl<'a, 's> Usage<'a, 's> {
         })
     }
 
-    /// The counts of the instances of `ast`, whose parameters are `scope`
-    /// (context `context`); `lexical` as in [`Walk::ast`]
+    /// The counts of the instances of `ast` (context `context`); `scopes`
+    /// and `lexical` as in [`Walk::ast`]
     fn level(
         &mut self,
         ast: &'a AST<'s>,
-        scope: &Scope<'_>,
+        scopes: &[&Scope<'_>],
         lexical: &[&'a AST<'s>],
         context: usize,
     ) -> Counts {
+        let scope = *scopes.last().expect("the top level at least");
         let mut counts = Counts::new();
         for inst in &ast.instance {
             match &inst.ctx {
                 InstanceCtx::MOSFET(m) => {
-                    let used = match self.sel.select(m, scope, lexical) {
+                    let used = match self.sel.select(m, scopes, lexical) {
                         Ok(s) => {
                             let addr = ptr::from_ref(s.model) as usize;
                             self.models.entry(addr).or_insert(s.model);
@@ -842,9 +887,15 @@ impl<'a, 's> Usage<'a, 's> {
                     };
                     let child =
                         instance_scope(scope, def, x.params.iter().map(|kv| &*kv.k).zip(values));
+                    let depth = inner.len() - 2;
+                    let inner_scopes: Vec<_> = scopes[..=depth]
+                        .iter()
+                        .copied()
+                        .chain(once(&child))
+                        .collect();
                     self.path.push(&inst.name);
                     self.expanding.push(def);
-                    let c = Rc::new(self.level(&def.ast, &child, &inner, inner_context));
+                    let c = Rc::new(self.level(&def.ast, &inner_scopes, &inner, inner_context));
                     self.expanding.pop();
                     self.path.pop();
                     add(&mut counts, &c);
@@ -889,12 +940,15 @@ struct Walk<'a, 's, F> {
 
 impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
     /// `lexical`: the definitions around `ast`, from the top level to `ast`
-    /// itself (where its models and subckts are looked up)
-    fn ast(&mut self, ast: &'a AST<'s>, scope: &Scope<'_>, lexical: &[&'a AST<'s>]) {
+    /// itself (where its models and subckts are looked up); `scopes`: their
+    /// parameters, the top level's and those of the instances (above, and
+    /// of `ast` last) that they define
+    fn ast(&mut self, ast: &'a AST<'s>, scopes: &[&Scope<'_>], lexical: &[&'a AST<'s>]) {
+        let scope = *scopes.last().expect("the top level at least");
         for inst in &ast.instance {
             match &inst.ctx {
                 InstanceCtx::MOSFET(m) => {
-                    let selection = self.sel.select(m, scope, lexical);
+                    let selection = self.sel.select(m, scopes, lexical);
                     (self.f)(MosfetModel {
                         path: self.path.iter().copied().chain(once(&*inst.name)).join("."),
                         instance: inst,
@@ -918,9 +972,15 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
                         def,
                         x.params.iter().map(|kv| (&*kv.k, scope.eval(&kv.v))),
                     );
+                    let depth = inner.len() - 2;
+                    let inner_scopes: Vec<_> = scopes[..=depth]
+                        .iter()
+                        .copied()
+                        .chain(once(&child))
+                        .collect();
                     self.path.push(&inst.name);
                     self.expanding.push(def);
-                    self.ast(&def.ast, &child, &inner);
+                    self.ast(&def.ast, &inner_scopes, &inner);
                     self.expanding.pop();
                     self.path.pop();
                 }
