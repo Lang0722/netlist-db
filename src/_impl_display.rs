@@ -237,6 +237,8 @@ pub trait SpiceFmt: Sized {
             instance::InstanceCtx::BJT(t) => self.bjt(t, f),
             instance::InstanceCtx::Diode(t) => self.diode(t, f),
             instance::InstanceCtx::Subckt(t) => self.inst_subckt(t, f),
+            instance::InstanceCtx::ControlledSource(t) => self.controlled_source(t, f),
+            instance::InstanceCtx::MutualInductor(t) => self.mutual_inductor(t, f),
             instance::InstanceCtx::Unknown {
                 r#type: _,
                 nodes,
@@ -271,6 +273,7 @@ pub trait SpiceFmt: Sized {
             }
             instance::VoltageSource::Value(t) => self.value(t, f),
             instance::VoltageSource::PWL(t) => self.pwl(t, f),
+            instance::VoltageSource::Spec(t) => self.source_spec(t, f),
         }
     }
     fn current_source<W: fmt::Write>(
@@ -284,6 +287,52 @@ pub trait SpiceFmt: Sized {
             }
             instance::CurrentSource::Value(t) => self.value(t, f),
             instance::CurrentSource::PWL(t) => self.pwl(t, f),
+            instance::CurrentSource::Spec(t) => self.source_spec(t, f),
+        }
+    }
+    fn source_spec<W: fmt::Write>(&self, t: &instance::SourceSpec<'_>, f: &mut W) -> fmt::Result {
+        let mut sep = "";
+        if let Some(dc) = &t.dc {
+            write!(f, "DC ")?;
+            self.value(dc, f)?;
+            sep = " ";
+        }
+        if let Some(tran) = &t.tran {
+            write!(f, "{sep}")?;
+            self.tran_source(tran, f)?;
+            sep = " ";
+        }
+        if let Some(ac) = &t.ac {
+            write!(f, "{sep}AC ")?;
+            self.value(&ac.mag, f)?;
+            if let Some(phase) = &ac.phase {
+                write!(f, " ")?;
+                self.value(phase, f)?;
+            }
+            sep = " ";
+        }
+        for param in &t.params {
+            write!(f, "{sep}")?;
+            self.key_value(param, f)?;
+            sep = " ";
+        }
+        Ok(())
+    }
+    fn tran_source<W: fmt::Write>(&self, t: &instance::TranSource<'_>, f: &mut W) -> fmt::Result {
+        match t {
+            instance::TranSource::PWL(t) => self.pwl(t, f),
+            instance::TranSource::Func { name, args, params } => {
+                write!(f, "{name}(")?;
+                display_inline(f, args.iter(), |t, f| self.value(t, f), ' ', true)?;
+                display_inline(
+                    f,
+                    params.iter(),
+                    |t, f| self.key_value(t, f),
+                    ' ',
+                    args.is_empty(),
+                )?;
+                write!(f, ")")
+            }
         }
     }
     fn time_value_point<W: fmt::Write>(
@@ -305,19 +354,73 @@ pub trait SpiceFmt: Sized {
             ' ',
             1,
         )?;
+        for (key, value) in [
+            ("R", &t.repeat),
+            ("TD", &t.delay),
+            ("RSTOP", &t.rstop),
+            ("STOPVALUE", &t.stopvalue),
+            ("STOPSLOPE", &t.stopslope),
+        ] {
+            if let Some(value) = value {
+                write!(f, "\n+ {key}=")?;
+                self.value(value, f)?;
+            }
+        }
         write!(f, ")",)
     }
     fn resistor<W: fmt::Write>(&self, t: &instance::Resistor<'_>, f: &mut W) -> fmt::Result {
         write!(f, "{} {} ", t.n1, t.n2)?;
-        self.value(&t.value, f)
+        if let Some(mname) = &t.mname {
+            write!(f, "{mname} ")?;
+        }
+        self.value(&t.value, f)?;
+        display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn capacitor<W: fmt::Write>(&self, t: &instance::Capacitor<'_>, f: &mut W) -> fmt::Result {
         write!(f, "{} {} ", t.n1, t.n2)?;
-        self.value(&t.value, f)
+        if let Some(mname) = &t.mname {
+            write!(f, "{mname} ")?;
+        }
+        self.value(&t.value, f)?;
+        display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn inductor<W: fmt::Write>(&self, t: &instance::Inductor<'_>, f: &mut W) -> fmt::Result {
         write!(f, "{} {} ", t.n1, t.n2)?;
-        self.value(&t.value, f)
+        self.value(&t.value, f)?;
+        if let Some(mname) = &t.mname {
+            write!(f, " {mname}")?;
+        }
+        display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
+    }
+    fn controlled_source<W: fmt::Write>(
+        &self,
+        t: &instance::ControlledSource<'_>,
+        f: &mut W,
+    ) -> fmt::Result {
+        write!(f, "{} {}", t.n1, t.n2)?;
+        if let Some(keyword) = &t.keyword {
+            write!(f, " {keyword}")?;
+        }
+        if let Some(n) = t.poly {
+            write!(f, " POLY({n})")?;
+        }
+        for (p, n) in &t.ctrl_nodes {
+            write!(f, " {p} {n}")?;
+        }
+        for vsrc in &t.ctrl_sources {
+            write!(f, " {vsrc}")?;
+        }
+        display_inline(f, t.coeffs.iter(), |t, f| self.value(t, f), ' ', false)?;
+        display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
+    }
+    fn mutual_inductor<W: fmt::Write>(
+        &self,
+        t: &instance::MutualInductor<'_>,
+        f: &mut W,
+    ) -> fmt::Result {
+        write!(f, "{} {} ", t.l1, t.l2)?;
+        self.value(&t.coupling, f)?;
+        display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn mosfet<W: fmt::Write>(&self, t: &instance::MOSFET<'_>, f: &mut W) -> fmt::Result {
         write!(
@@ -396,11 +499,20 @@ pub trait SpiceFmt: Sized {
     }
     fn unknwon<W: fmt::Write>(&self, t: &ast::Unknwon<'_>, f: &mut W) -> fmt::Result {
         write!(f, ".{}", t.cmd)?;
-        display_inline(f, t.tokens.iter(), |t, f| self.token(t, f), ' ', false)
+        if t.raw.is_empty() {
+            // no verbatim text (built by hand): print the tokens
+            display_inline(f, t.tokens.iter(), |t, f| self.token(t, f), ' ', false)
+        } else if t.raw.starts_with(['\n', '\r']) {
+            write!(f, "{}", t.raw)
+        } else {
+            write!(f, " {}", t.raw)
+        }
     }
     fn general_cmd<W: fmt::Write>(&self, t: &ast::GeneralCmd, f: &mut W) -> fmt::Result {
-        _ = (t, f);
-        todo!()
+        match t {
+            ast::GeneralCmd::Ic => write!(f, "IC"),
+            ast::GeneralCmd::Meas => write!(f, "MEAS"),
+        }
     }
     fn general<W: fmt::Write>(&self, t: &ast::General<'_>, f: &mut W) -> fmt::Result {
         write!(f, ".")?;
@@ -409,7 +521,7 @@ pub trait SpiceFmt: Sized {
     }
     fn ast<W: fmt::Write>(&self, t: &AST<'_>, f: &mut W) -> fmt::Result {
         if !t.option.is_empty() {
-            write!(f, ".OPTION ",)?;
+            write!(f, "\n.OPTION ",)?;
             display_wrap(
                 f,
                 t.option.iter(),
@@ -437,7 +549,7 @@ pub trait SpiceFmt: Sized {
             write!(f, ".IC V({})=", ic.0)?;
             self.value(&ic.1, f)?;
             if let Some(subckt) = &ic.2 {
-                write!(f, " suckt={subckt}")
+                write!(f, " subckt={subckt}")
             } else {
                 Ok(())
             }
@@ -446,7 +558,7 @@ pub trait SpiceFmt: Sized {
             write!(f, ".NODESET {}=", ic.0)?;
             self.value(&ic.1, f)?;
             if let Some(subckt) = &ic.2 {
-                write!(f, " suckt={subckt}")
+                write!(f, " subckt={subckt}")
             } else {
                 Ok(())
             }

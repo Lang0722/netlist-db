@@ -34,6 +34,8 @@ pub mod _impl_display;
 mod builder;
 mod err;
 mod span;
+#[cfg(test)]
+mod tests;
 
 use alloc::borrow::Cow;
 use ast::ASTBuilder;
@@ -180,7 +182,7 @@ impl ast::ASTBuilder {
                     ast,
                 }
             }
-            ast.subckt.extend(local_ast.subckt.iter().map(|s| {
+            for s in &local_ast.subckt {
                 let subckt = build_subckt(
                     s,
                     has_err,
@@ -191,8 +193,18 @@ impl ast::ASTBuilder {
                     parsed_id2idx,
                     parsed_inner,
                 );
-                (subckt.name.to_lowercase(), subckt)
-            }));
+                let key = subckt.name.to_lowercase();
+                if ast.subckt.contains_key(&key) {
+                    err::ParseErrorInner::DuplicateSubckt(subckt.name.to_string())
+                        .with(Some(span::Pos {
+                            start: s.name.start,
+                            line_num: s.name.line_num,
+                        }))
+                        .report(has_err, file_id, file);
+                }
+                // same as before: the later definition replaces the earlier one
+                ast.subckt.insert(key, subckt);
+            }
             ast.instance
                 .extend(local_ast.instance.iter().map(|b| b.build(file)));
             ast.model
@@ -231,26 +243,31 @@ impl ast::ASTBuilder {
                         parsed_inner,
                     );
                 }
-                ast::Segment::Include(ast_res) => {
-                    let ast_res = ast_res.get().unwrap();
-                    match ast_res {
-                        Ok(parsed_id) => {
-                            let (file_id, _ast) = &parsed_inner[parsed_id.0];
-                            _ast.build(
-                                ast,
-                                has_err,
-                                file_id,
-                                *parsed_id,
-                                files,
-                                parsed_id2idx,
-                                parsed_inner,
-                            );
-                        }
-                        Err(e) => {
-                            e.report(has_err, file_id, file);
-                        }
+                ast::Segment::Include(ast_res) => match ast_res.get() {
+                    Some(Ok(parsed_id)) => {
+                        let (file_id, _ast) = &parsed_inner[parsed_id.0];
+                        _ast.build(
+                            ast,
+                            has_err,
+                            file_id,
+                            *parsed_id,
+                            files,
+                            parsed_id2idx,
+                            parsed_inner,
+                        );
                     }
-                }
+                    Some(Err(e)) => {
+                        e.report(has_err, file_id, file);
+                    }
+                    None => {
+                        err::ParseErrorInner::Internal(
+                            "an included file was not parsed (its parser task did not finish)"
+                                .to_owned(),
+                        )
+                        .with(None)
+                        .report(has_err, file_id, file);
+                    }
+                },
             }
         }
     }

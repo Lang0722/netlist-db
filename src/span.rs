@@ -81,7 +81,10 @@ pub enum EndReason<'a> {
         file_name: &'a Path,
         section: Option<String>,
     },
+    /// end of the input
     End,
+    /// `.ends` closed the current `.subckt`
+    Ends,
 }
 
 #[derive(Debug, Clone, Copy)]

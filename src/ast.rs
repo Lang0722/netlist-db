@@ -32,7 +32,7 @@ pub enum TokenBuilder {
 pub enum GeneralCmd {
     /// `.ic` initial condition
     Ic,
-    /// `.ic` initial condition
+    /// `.meas` measurement
     Meas,
 }
 self_builder!(GeneralCmd);
@@ -42,10 +42,15 @@ pub struct GeneralBuilder {
     pub tokens: Vec<TokenBuilder>,
 }
 
+/// A dot-command that is not modeled (e.g. `.tran`, `.meas`, `.global`).
 #[derive(Debug, Clone, Builder)]
 pub struct UnknwonBuilder {
     pub cmd: Span,
+    /// best-effort tokens; see `raw` for the exact text
     pub tokens: Vec<TokenBuilder>,
+    /// the statement text after the command name, verbatim
+    /// (including continuation lines)
+    pub raw: Span,
 }
 
 #[derive(Debug, Clone, Builder)]
@@ -170,6 +175,8 @@ impl LocalAST {
             && self.option.is_empty()
             && self.data.is_empty()
             && self.general.is_empty()
+            && self.init_condition.is_empty()
+            && self.nodeset.is_empty()
             && self.unknwon.is_empty()
             && self.errors.is_empty()
     }

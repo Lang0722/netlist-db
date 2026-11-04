@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 use manager::ParseManager;
 use nom::IResult;
 use regex::Regex;
-use std::{collections::HashMap, mem, path::PathBuf, sync::OnceLock};
+use std::{mem, path::PathBuf, sync::OnceLock};
 use utils::local_ast;
 
 use super::{
@@ -29,18 +29,21 @@ use crate::{
 
 const BEGIN_TITLE: &str = ".TITLE";
 
+/// Parse statements until the end of the input, or until `.ends` when
+/// `in_subckt` is set. Returns the AST and whether a `.ends` closed it.
 #[inline]
 pub fn ast(
     manager: Arc<ParseManager>,
     loaded: IndexMap<FileId, Option<Pos>>,
     work_dir: PathBuf,
     mut i: LocatedSpan,
-) -> IResult<LocatedSpan, ASTBuilder> {
+    in_subckt: bool,
+) -> IResult<LocatedSpan, (ASTBuilder, bool)> {
     let mut ast = ASTBuilder::new();
     loop {
         let _ast;
         let reason;
-        (i, (_ast, reason)) = local_ast(i, &loaded, &manager, &work_dir)?;
+        (i, (_ast, reason)) = local_ast(i, &loaded, &manager, &work_dir, in_subckt)?;
         if !_ast.is_empty() {
             ast.segments.push(Segment::Local(Box::new(_ast)));
         }
@@ -63,7 +66,8 @@ pub fn ast(
                     include(manager_clone, loaded, file_path, section, include_pos, res).await;
                 });
             }
-            EndReason::End => return Ok((i, ast)),
+            EndReason::End => return Ok((i, (ast, false))),
+            EndReason::Ends => return Ok((i, (ast, true))),
         }
     }
 }
@@ -106,6 +110,7 @@ async fn _include(
     } else {
         (0, contents)
     };
+    let file_ctx = join_continued_lines(file_ctx);
     let parsed_id = manager.file_storage.lock().await.new_file(file_id);
     let i = span(&file_ctx, line_off_set);
     // get dir
@@ -113,8 +118,8 @@ async fn _include(
     #[cfg(test)]
     assert!(file_path.is_dir());
 
-    let res = match ast(manager.clone(), loaded, file_path, i) {
-        Ok((_, res)) => res,
+    let res = match ast(manager.clone(), loaded, file_path, i, false) {
+        Ok((_, (res, _))) => res,
         Err(e) => error2ast(e.into()),
     };
     manager
@@ -147,6 +152,95 @@ async fn include(
     res.set(_res.map_err(|(_, e)| e)).unwrap();
 }
 
+/// HSPICE continues a statement with a `\` at the end of a line (the line
+/// break counts as white space) or a `\\` (the lines are joined with no white
+/// space, e.g. to split a long path), also inside quoted strings. Such lines
+/// are joined here, before parsing. Each removed newline is put back after the
+/// joined line, so the line numbers of what follows stay right. A `\` inside a
+/// comment continues nothing; a `+` that also starts the next line (outside
+/// quotes) is dropped.
+fn join_continued_lines(text: String) -> String {
+    if !text.contains('\\') {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut moved_newlines = 0;
+    let mut continuing = false;
+    // the previous line ended with `\\`
+    let mut squeeze = false;
+    // quote state of the statement being joined
+    let mut in_quote = false;
+    for line in text.split_inclusive('\n') {
+        let (mut body, eol) = match line.strip_suffix('\n') {
+            Some(b) => match b.strip_suffix('\r') {
+                Some(b) => (b, "\r\n"),
+                None => (b, "\n"),
+            },
+            None => (line, ""),
+        };
+        let comment_line = !continuing && body.trim_start().starts_with('*');
+        if continuing {
+            if squeeze {
+                body = body.trim_start();
+            }
+            // (inside quotes a leading `+` is an operator, and is kept)
+            let plus = if in_quote {
+                None
+            } else {
+                body.trim_start().strip_prefix('+')
+            };
+            if let Some(rest) = plus {
+                body = if squeeze { rest.trim_start() } else { rest };
+            }
+        } else {
+            in_quote = false;
+        }
+        let mut dollar_comment = false;
+        for c in body.chars() {
+            match c {
+                '\'' => in_quote = !in_quote,
+                '$' if !in_quote => {
+                    dollar_comment = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let trimmed = body.trim_end();
+        let backslashes = if comment_line || dollar_comment {
+            0
+        } else if trimmed.ends_with("\\\\") {
+            2
+        } else if trimmed.ends_with('\\') {
+            1
+        } else {
+            0
+        };
+        if backslashes == 0 {
+            out.push_str(body);
+            out.push_str(eol);
+            out.extend(std::iter::repeat_n('\n', moved_newlines));
+            moved_newlines = 0;
+            continuing = false;
+        } else {
+            let content = &trimmed[..trimmed.len() - backslashes];
+            if backslashes == 2 {
+                out.push_str(content.trim_end());
+            } else {
+                out.push_str(content);
+                out.push(' ');
+            }
+            if !eol.is_empty() {
+                moved_newlines += 1;
+            }
+            continuing = true;
+            squeeze = backslashes == 2;
+        }
+    }
+    out.extend(std::iter::repeat_n('\n', moved_newlines));
+    out
+}
+
 /// When ParseError come form the included file,
 /// also return the ASTBuilder, to recover the error
 fn error2ast(err: ParseError) -> ASTBuilder {
@@ -157,53 +251,62 @@ fn error2ast(err: ParseError) -> ASTBuilder {
     ast
 }
 
-fn error2parsed(file_id: FileId, err: ParseError) -> (Parsed, Files) {
-    let ast = error2ast(err);
-    let parsed_id = ParsedId(0);
-    let mut id2idx = HashMap::new();
-    id2idx.insert(file_id.clone(), parsed_id);
-    (
-        Parsed {
-            top_ids: vec![parsed_id],
-            id2idx,
-            inner: vec![(file_id, ast)],
-        },
-        Files {
-            inner: vec![String::new()],
-        },
-    )
-}
-
 pub async fn parse_top_multi<I: Iterator<Item = FileId>>(file_ids: I) -> (Parsed, Files) {
     let (manager, done_rx) = ParseManager::new();
+    // Hold a guard while the top-level files are parsed: the includes of one
+    // file may all finish while another top-level file has not spawned its
+    // includes yet, and the count must not reach zero (the "done" signal)
+    // before every top-level file has been parsed.
+    let top_guard = manager.task_guard();
     let handles: Vec<_> = file_ids
-        .into_iter()
         .map(|file_id| {
-            crate::spawn({
+            let handle = crate::spawn({
                 let manager = manager.clone();
+                let file_id = file_id.clone();
                 async move { _include(manager, IndexMap::with_capacity(1), file_id, None).await }
-            })
+            });
+            (file_id, handle)
         })
         .collect();
-    let mut top_ids = Vec::with_capacity(handles.len());
-    for handle in handles {
-        match handle.await.unwrap() {
-            Ok(parsed_id) => top_ids.push(parsed_id),
-            Err((file_id, e)) => return error2parsed(file_id, e),
-        }
+    let mut tops = Vec::with_capacity(handles.len());
+    for (file_id, handle) in handles {
+        tops.push(match handle.await {
+            Ok(res) => res,
+            Err(e) => Err((
+                file_id,
+                ParseErrorInner::Internal(format!("parser task failed: {e}")).with(None),
+            )),
+        });
     }
+    drop(top_guard);
     manager.wait(done_rx).await;
     let mut guard = manager.file_storage.lock().await;
-    let file_storage: FileStorage<ASTBuilder> = mem::take(&mut *guard);
+    let FileStorage {
+        file: mut files,
+        parsed: mut inner,
+        id2idx,
+    } = mem::take(&mut *guard);
+    // A top-level file that failed to load becomes an error-only entry: the
+    // error is reported, and the other top-level files are still built.
+    let top_ids = tops
+        .into_iter()
+        .map(|top| match top {
+            Ok(parsed_id) => parsed_id,
+            Err((file_id, e)) => {
+                let parsed_id = ParsedId(inner.len());
+                inner.push((file_id, error2ast(e)));
+                files.push(String::new());
+                parsed_id
+            }
+        })
+        .collect();
     (
         Parsed {
             top_ids,
-            id2idx: file_storage.id2idx,
-            inner: file_storage.parsed,
+            id2idx,
+            inner,
         },
-        Files {
-            inner: file_storage.file,
-        },
+        Files { inner: files },
     )
 }
 
@@ -214,7 +317,9 @@ fn match_lib(text: &str, section: &str) -> Option<(String, u32)> {
     ))
     .unwrap();
     re.captures_iter(text).last().map(|caps| {
-        let start_offset = caps.get(0).unwrap().start();
+        // Count lines up to the section body (which starts on the `.lib` line),
+        // not up to the match start: `^\s*` also matches blank lines before it.
+        let start_offset = caps.get(1).unwrap().start();
         let line_num_offset = (text[..start_offset].matches('\n').count()) as u32;
         (caps[1].to_owned(), line_num_offset)
     })
@@ -264,8 +369,9 @@ fn test_match_lib() {
         .lib ttg
         it is wrong
         .endl"#;
+    // the matched `.lib tt` is on line 8 (offset 7), after a blank line 7
     assert_eq!(
-        Some(("\n        R1 in out 10k\n".to_owned(), 6)),
+        Some(("\n        R1 in out 10k\n".to_owned(), 7)),
         match_lib(text, "tt")
     );
 }

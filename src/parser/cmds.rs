@@ -6,6 +6,7 @@ use crate::{
 use super::super::parser::utils::{loss_sep, multiline_sep, name, name_str, v, value};
 use nom::{
     IResult, Parser,
+    branch::alt,
     character::char,
     combinator::{map, map_res, opt},
     multi::many1,
@@ -26,18 +27,36 @@ fn subckt(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     .parse_complete(i)
 }
 
+/// A node: `V(node)` or `node`, but not the `subckt=` keyword
+#[inline]
+fn node(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
+    alt((
+        v,
+        map_res(name_str, |(s, span)| {
+            if s.eq_ignore_ascii_case("subckt") {
+                Err(())
+            } else {
+                Ok(span)
+            }
+        }),
+    ))
+    .parse_complete(i)
+}
+
+/// `V(node)=val`, `node=val` or `node val`
+#[inline]
+fn node_volt(i: LocatedSpan) -> IResult<LocatedSpan, (Span, ValueBuilder)> {
+    map(
+        (node, loss_sep, opt(char('=')), loss_sep, value),
+        |(node, _, _, _, val)| (node, val),
+    )
+    .parse_complete(i)
+}
+
 #[inline]
 pub(super) fn init_condition(
     i: LocatedSpan,
 ) -> IResult<LocatedSpan, impl Iterator<Item = (Span, ValueBuilder, Option<Span>)>> {
-    #[inline]
-    fn node_volt(i: LocatedSpan) -> IResult<LocatedSpan, (Span, ValueBuilder)> {
-        map(
-            (v, loss_sep, char('='), loss_sep, value),
-            |(node, _, _, _, val)| (node, val),
-        )
-        .parse_complete(i)
-    }
     map(
         (many1(multiline_sep(node_volt)), opt(multiline_sep(subckt))),
         |(iter, opt_subckt)| {
@@ -52,14 +71,6 @@ pub(super) fn init_condition(
 pub(super) fn nodeset(
     i: LocatedSpan,
 ) -> IResult<LocatedSpan, impl Iterator<Item = (Span, ValueBuilder, Option<Span>)>> {
-    #[inline]
-    fn node_volt(i: LocatedSpan) -> IResult<LocatedSpan, (Span, ValueBuilder)> {
-        map(
-            (name, loss_sep, opt(char('=')), loss_sep, value),
-            |(node, _, _, _, val)| (node, val),
-        )
-        .parse_complete(i)
-    }
     map(
         (many1(multiline_sep(node_volt)), opt(multiline_sep(subckt))),
         |(iter, opt_subckt)| {

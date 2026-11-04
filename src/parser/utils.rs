@@ -7,9 +7,9 @@ use indexmap::IndexMap;
 use nom::{
     IResult, Input, Parser,
     branch::alt,
-    bytes::complete::{tag, take, take_till, take_while, take_while1},
+    bytes::complete::{tag, tag_no_case, take, take_till, take_while, take_while1},
     character::{char, complete::digit1},
-    combinator::{map, map_res, opt, recognize, verify},
+    combinator::{map, map_res, opt, recognize, success, verify},
     error::ErrorKind,
     multi::{many0, many1},
     sequence::{delimited, preceded},
@@ -18,19 +18,20 @@ use regex::Regex;
 
 use super::{ast, manager::ParseManager};
 use crate::{
-    ast::{ASTBuilder, LocalAST, SubcktBuilder},
-    err::ParseErrorInner,
-    parser::{
-        cmds::{init_condition, nodeset},
-        instance::instance,
-    },
-};
-use crate::{
     ast::{
         DataBuilder, DataFileBuilder, DataFilesBuilder, DataValuesBuilder, KeyValueBuilder,
         ModelBuilder, PnameColNumBuilder, TokenBuilder, UnknwonBuilder, ValueBuilder,
     },
     span::{EndReason, FileId, LocatedSpan, Pos, Span},
+};
+use crate::{
+    ast::{LocalAST, SubcktBuilder},
+    err::{ParseError, ParseErrorInner},
+    instance::InstanceBuilder,
+    parser::{
+        cmds::{init_condition, nodeset},
+        instance::{instance, unsupported_controlled_form},
+    },
 };
 
 #[inline]
@@ -46,26 +47,23 @@ pub(super) fn space_newline(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan>
     take_while(|c: char| matches!(c, '\t' | '\r' | ' ' | '\n')).parse_complete(i)
 }
 
+/// A line break inside a statement: the next line starts with `+`. (Lines that
+/// end with `\` or `\\` were already joined when the file was read.)
+#[inline]
+pub(super) fn continuation(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    map((comment_space_newline, char('+'), space), |_| ()).parse_complete(i)
+}
+
 #[inline]
 pub(super) fn multiline_sep<'a, T>(
     f: fn(LocatedSpan<'a>) -> IResult<LocatedSpan<'a>, T>,
 ) -> impl MyParser<'a, T> {
-    alt((
-        preceded(space1, f),
-        map(
-            (comment_space_newline, char('+'), space, f),
-            |(_, _, _, t)| t,
-        ),
-    ))
+    alt((preceded(space1, f), preceded(continuation, f)))
 }
 
 #[inline]
 pub(super) fn loss_sep(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
-    alt((
-        map((comment_space_newline, char('+'), space), |(_, _, s)| s),
-        space,
-    ))
-    .parse_complete(i)
+    alt((recognize(continuation), space)).parse_complete(i)
 }
 
 #[inline]
@@ -81,33 +79,55 @@ enum Unit {
 // hspice/index.htm#page/hspice_5/about_hspice_measurement_system.htm#wwID0EOGJM
 #[inline]
 fn unit(i: LocatedSpan) -> IResult<LocatedSpan, Unit> {
-    map_res(take_while1(char::is_alphanumeric), |s: LocatedSpan| match s
-        .fragment()
-        .to_uppercase()
-        .as_str()
-    {
-        "T" => Ok(Unit::Factor(1e+12)),
-        "G" => Ok(Unit::Factor(1e+9)),
-        "ME" | "MEG" | "X" | "Z" => Ok(Unit::Factor(1e+6)),
-        "K" => Ok(Unit::Factor(1e+3)),
-        "MI" | "MIL" => Ok(Unit::Factor(25.4e-6)),
-        "U" => Ok(Unit::Factor(1e-6)),
-        "N" => Ok(Unit::Factor(1e-9)),
-        "P" => Ok(Unit::Factor(1e-12)),
-        "F" => Ok(Unit::Factor(1e-15)),
-        "A" => Ok(Unit::Factor(1e-18)),
-        "DB" => Ok(Unit::DB),
-        "MIN" => Ok(Unit::Factor(60.0)),
-        "HR" => Ok(Unit::Factor(3600.0)),
-        "DAY" => Ok(Unit::Factor(86400.0)),
-        "YR" => Ok(Unit::Factor(31536000.0)),
-        _ => Err(ErrorKind::Float),
-    })
+    map(
+        take_while1(|c: char| c.is_ascii_alphabetic()),
+        |s: LocatedSpan| {
+            let u = s.fragment().to_ascii_uppercase();
+            match u.as_str() {
+                "DB" => return Unit::DB,
+                "MIN" => return Unit::Factor(60.0),
+                "HR" => return Unit::Factor(3600.0),
+                "DAY" => return Unit::Factor(86400.0),
+                "YR" => return Unit::Factor(31536000.0),
+                "ME" | "Z" => return Unit::Factor(1e+6),
+                "MI" => return Unit::Factor(25.4e-6),
+                _ => {}
+            }
+            // HSPICE scale factors: the leading letters select the factor and
+            // the rest is ignored, so `10pF` is 10p, `1kohm` is 1k, `1.8V` is 1.8
+            // (and `1M` is milli, not mega).
+            Unit::Factor(if u.starts_with("MEG") {
+                1e+6
+            } else if u.starts_with("MIL") {
+                25.4e-6
+            } else {
+                match u.as_bytes()[0] {
+                    b'T' => 1e+12,
+                    b'G' => 1e+9,
+                    b'X' => 1e+6,
+                    b'K' => 1e+3,
+                    b'M' => 1e-3,
+                    b'U' => 1e-6,
+                    b'N' => 1e-9,
+                    b'P' => 1e-12,
+                    b'F' => 1e-15,
+                    b'A' => 1e-18,
+                    _ => 1.0,
+                }
+            })
+        },
+    )
     .parse_complete(i)
 }
 
 #[inline]
 pub(super) fn float(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
+    // SPICE numbers start with a digit or a dot (after an optional sign); this
+    // keeps names such as `nand` or `info` from being read as NaN or infinity
+    let digits = i.fragment().trim_start_matches(['+', '-']);
+    if !digits.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
+        return Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Float)));
+    }
     match fast_float2::parse_partial(i) {
         Ok((f, pos)) => Ok((i.take_from(pos), f)),
         Err(_) => Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Float))),
@@ -143,7 +163,8 @@ fn is_key(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 fn is_name(c: char) -> bool {
-    c.is_alphanumeric() || "/_.+-*^:@%#[]".contains(c)
+    // `<>` (bus bits) and `!` (global nets) are common in CDL netlists
+    c.is_alphanumeric() || "/_.+-*^:@%#[]<>!|".contains(c)
 }
 fn is_formula(c: char) -> bool {
     c.is_alphanumeric() || "/_.+-*^:".contains(c)
@@ -153,9 +174,16 @@ fn is_formula(c: char) -> bool {
 pub(super) fn path(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     alt((
         unquote,
+        map(dquote, |s: LocatedSpan| s.into()),
         map(take_while1(is_path), |s: LocatedSpan| s.into()),
     ))
     .parse_complete(i)
+}
+
+/// `"text"`, on one line
+#[inline]
+fn dquote(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
+    delimited(char('"'), take_till(|c| c == '"' || c == '\n'), char('"')).parse_complete(i)
 }
 
 #[inline]
@@ -167,6 +195,10 @@ pub(super) fn integer(i: LocatedSpan) -> IResult<LocatedSpan, usize> {
 pub(super) fn path_str(i: LocatedSpan) -> IResult<LocatedSpan, &str> {
     alt((
         unquote_str,
+        map(dquote, |s: LocatedSpan| {
+            let _s: &str = s.fragment();
+            _s
+        }),
         map(take_while1(is_path), |s: LocatedSpan| {
             let _s: &str = s.fragment();
             _s
@@ -197,9 +229,54 @@ pub(super) fn name_str(i: LocatedSpan) -> IResult<LocatedSpan, (&str, Span)> {
     .parse_complete(i)
 }
 
+/// An unquoted expression: formula characters, plus balanced `( ... )`
+/// groups such as `agauss(0,1,3)` or `2*(a+b)`.
 #[inline]
 pub(super) fn formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
-    map(take_while1(is_formula), |s: LocatedSpan| s.into()).parse_complete(i)
+    let s: &str = i.fragment();
+    let mut end = 0;
+    while let Some(c) = s[end..].chars().next() {
+        if is_formula(c) {
+            end += c.len_utf8();
+        } else if c == '(' {
+            match balanced_group(&s[end..]) {
+                Some(len) => end += len,
+                None => break,
+            }
+        } else {
+            break;
+        }
+    }
+    if end == 0 {
+        Err(nom::Err::Error(nom::error::Error::new(
+            i,
+            ErrorKind::TakeWhile1,
+        )))
+    } else {
+        Ok((i.take_from(end), i.take(end).into()))
+    }
+}
+
+/// Length of the `( ... )` group at the start of `s`, skipping quoted text;
+/// `None` if it is not closed on the same line.
+fn balanced_group(s: &str) -> Option<usize> {
+    let mut depth = 0_usize;
+    let mut quoted = false;
+    for (idx, c) in s.char_indices() {
+        match c {
+            '\n' => return None,
+            '\'' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[inline]
@@ -504,10 +581,9 @@ pub(super) fn data(mut i: LocatedSpan) -> IResult<LocatedSpan, DataBuilder> {
                 return map(
                     (
                         many0_dummyfirst(multiline_sep(float_unit)),
-                        space_newline,
-                        opt(enddata),
+                        opt(preceded(comment_space_newline, enddata)),
                     ),
-                    |(mut values, _, _)| {
+                    |(mut values, _)| {
                         values[0] = first_n;
                         values
                     },
@@ -529,8 +605,11 @@ pub(super) fn data(mut i: LocatedSpan) -> IResult<LocatedSpan, DataBuilder> {
                 (i, (param_str, param)) = multiline_sep(name_str).parse_complete(i)?;
                 if param_str.to_uppercase().as_str() == "DATAFORM" {
                     return map(
-                        (many1(multiline_sep(value)), space_newline, opt(enddata)),
-                        |(values, _, _)| values,
+                        (
+                            many1(multiline_sep(value)),
+                            opt(preceded(comment_space_newline, enddata)),
+                        ),
+                        |(values, _)| values,
                     )
                     .parse_complete(i)
                     .map(|(i, values)| {
@@ -560,7 +639,8 @@ pub(super) fn data(mut i: LocatedSpan) -> IResult<LocatedSpan, DataBuilder> {
 pub(super) fn model(i: LocatedSpan) -> IResult<LocatedSpan, ModelBuilder> {
     map(
         (
-            multiline_sep(key),
+            // `name`, not `key`: binned models are named like `nch.1`
+            multiline_sep(name),
             multiline_sep(key_str),
             alt((
                 many1(multiline_sep(key_value)),
@@ -582,6 +662,8 @@ pub(super) fn model(i: LocatedSpan) -> IResult<LocatedSpan, ModelBuilder> {
                         }
                     },
                 ),
+                // no parameters, e.g. `.model dmod d`
+                success(Vec::new()),
             )),
         ),
         |(name, model_type_ctx, params)| ModelBuilder {
@@ -616,26 +698,417 @@ pub(super) fn lib(i: LocatedSpan) -> IResult<LocatedSpan, Option<(&str, String)>
     ))
     .parse_complete(i)
 }
+/// A parsed statement. It is added to the [`LocalAST`] only if nothing is
+/// left over on its line(s).
+enum Item {
+    None,
+    Instance(InstanceBuilder),
+    Model(ModelBuilder),
+    Subckt(SubcktBuilder),
+    Data(DataBuilder),
+    Options(Vec<(Span, Option<ValueBuilder>)>),
+    Params(Vec<KeyValueBuilder>),
+    InitCondition(Vec<(Span, ValueBuilder, Option<Span>)>),
+    Nodeset(Vec<(Span, ValueBuilder, Option<Span>)>),
+    Unknown(UnknwonBuilder),
+}
+
+fn push_item(ast: &mut LocalAST, item: Item) {
+    match item {
+        Item::None => {}
+        Item::Instance(t) => ast.instance.push(t),
+        Item::Model(t) => ast.model.push(t),
+        Item::Subckt(t) => ast.subckt.push(t),
+        Item::Data(t) => ast.data.push(t),
+        Item::Options(t) => ast.option.extend(t),
+        Item::Params(t) => ast.param.extend(t),
+        Item::InitCondition(t) => ast.init_condition.extend(t),
+        Item::Nodeset(t) => ast.nodeset.extend(t),
+        Item::Unknown(t) => ast.unknwon.push(t),
+    }
+}
+
+struct Statement<'a> {
+    item: Item,
+    /// stop the current [`LocalAST`] here (`.inc`, `.lib`, `.ends`)
+    end: Option<EndReason<'a>>,
+    /// diagnostics that do not invalidate the statement
+    diags: Vec<ParseError>,
+}
+
+impl Statement<'_> {
+    #[inline]
+    fn item(item: Item) -> Self {
+        Self {
+            item,
+            end: None,
+            diags: Vec::new(),
+        }
+    }
+}
+
+/// HSPICE commands kept verbatim (in [`LocalAST::unknwon`]) without a warning.
+/// Other unknown commands are kept as well, with a warning.
+const KNOWN_COMMANDS: &[&str] = &[
+    "ac",
+    "alias",
+    "alter",
+    "appendmodel",
+    "biaschk",
+    "connect",
+    "dc",
+    "dcmatch",
+    "dcvolt",
+    "del",
+    "dellib",
+    "disto",
+    "dout",
+    "else",
+    "elseif",
+    "end_variation",
+    "endif",
+    "fft",
+    "four",
+    "func",
+    "global",
+    "graph",
+    "hdl",
+    "if",
+    "lin",
+    "load",
+    "malias",
+    "meas",
+    "measure",
+    "mosra",
+    "noise",
+    "op",
+    "pat",
+    "plot",
+    "print",
+    "probe",
+    "prot",
+    "protect",
+    "pz",
+    "sample",
+    "save",
+    "sens",
+    "stim",
+    "temp",
+    "temperature",
+    "tf",
+    "title",
+    "tran",
+    "unprot",
+    "unprotect",
+    "variation",
+    "vec",
+    "width",
+];
+
+/// After a statement, only spaces and a comment may remain on its last line,
+/// and the next line must not continue it (`+`).
+pub(super) fn end_of_statement(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    let (i, _) = space(i)?;
+    let (i, _) = opt(comment).parse_complete(i)?;
+    if !(i.is_empty() || i.fragment().starts_with('\n')) {
+        return Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Eof)));
+    }
+    let (next, _) = comment_space_newline(i)?;
+    if next.fragment().starts_with('+') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            next,
+            ErrorKind::Eof,
+        )));
+    }
+    Ok((i, ()))
+}
+
+/// Skip to the end of the line (before the newline)
 #[inline]
-pub(super) fn subckt<'a>(
+fn line_end(i: LocatedSpan) -> LocatedSpan {
+    let n = i.fragment().find('\n').unwrap_or(i.fragment().len());
+    i.take_from(n)
+}
+
+/// Skip to the end of the statement at `i`: the rest of its line, and every
+/// continuation (`+`) line after it.
+pub(super) fn skip_statement(i: LocatedSpan) -> LocatedSpan {
+    let mut i = line_end(i);
+    loop {
+        match comment_space_newline(i) {
+            Ok((next, _)) if next.fragment().starts_with('+') => i = line_end(next),
+            _ => return i,
+        }
+    }
+}
+
+/// [`ParseErrorInner::Trailing`] where [`end_of_statement`] failed
+fn trailing(e: nom::Err<nom::error::Error<LocatedSpan>>) -> ParseError {
+    match e {
+        nom::Err::Error(e) | nom::Err::Failure(e) => ParseErrorInner::Trailing.record(e.input),
+        nom::Err::Incomplete(_) => unreachable!(),
+    }
+}
+
+/// The text of `span`, which was parsed from `base` (or from input after it)
+pub(super) fn span_text<'a>(base: LocatedSpan<'a>, span: Span) -> &'a str {
+    let offset = base.location_offset();
+    let fragment: &'a str = base.fragment();
+    &fragment[span.start - offset..span.end - offset]
+}
+
+/// The text from `start` to `end`, without the spaces around it
+fn raw_span(start: LocatedSpan, end: LocatedSpan) -> Span {
+    let text = &start.fragment()[..end.location_offset() - start.location_offset()];
+    let lead = text.len() - text.trim_start_matches([' ', '\t']).len();
+    let begin = start.location_offset() + lead;
+    Span {
+        start: begin,
+        end: begin + text[lead..].trim_end().len(),
+        line_num: start.location_line(),
+    }
+}
+
+/// ``` spice
+/// .subckt name [ports...] [k=v ...]
+/// ...
+/// .ends [name]
+/// ```
+fn subckt<'a>(
     i: LocatedSpan<'a>,
     loaded: &IndexMap<FileId, Option<Pos>>,
     manager: &Arc<ParseManager>,
     work_dir: &Path,
-) -> IResult<LocatedSpan<'a>, SubcktBuilder> {
-    let ast_subckt = |i: LocatedSpan<'a>| -> IResult<LocatedSpan<'a>, ASTBuilder> {
-        ast(manager.clone(), loaded.clone(), work_dir.to_path_buf(), i)
+) -> Result<(LocatedSpan<'a>, Statement<'a>), ParseError> {
+    let mut diags = Vec::new();
+    let (i, (_, name, ports_params)) = (space1, name, opt(ports_params)).parse_complete(i)?;
+    let (ports, params) = ports_params.unwrap_or_default();
+    // left-over text on the header is reported, but the body is still parsed
+    let i = match end_of_statement(i) {
+        Ok((i, ())) => i,
+        Err(e) => {
+            diags.push(trailing(e));
+            skip_statement(i)
+        }
     };
-    map(
-        (space1, name, ports_params, space_newline, ast_subckt),
-        |(_, name, (ports, params), _, ast)| SubcktBuilder {
-            name,
-            ports,
-            params,
-            ast,
+    let (i, (ast, closed)) = ast(
+        manager.clone(),
+        loaded.clone(),
+        work_dir.to_path_buf(),
+        i,
+        true,
+    )?;
+    if !closed {
+        diags.push(ParseErrorInner::UnterminatedSubckt(name).with(Some(Pos {
+            start: name.start,
+            line_num: name.line_num,
+        })));
+    }
+    Ok((
+        i,
+        Statement {
+            item: Item::Subckt(SubcktBuilder {
+                name,
+                ports,
+                params,
+                ast,
+            }),
+            end: None,
+            diags,
         },
+    ))
+}
+
+/// `simulator lang=spice|spectre`: a Spectre directive, not HSPICE syntax,
+/// found in model files shared with Spectre. `spice` is ignored with a
+/// warning (the rest of its line too); a section in another language is
+/// reported and skipped up to the next `simulator lang=spice`, or to the end
+/// of the input.
+fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
+    let (rest, (_, _, _, _, _, _, (lang, _))) = (
+        tag_no_case("simulator"),
+        space1,
+        tag_no_case("lang"),
+        space,
+        char('='),
+        space,
+        key_str,
     )
-    .parse_complete(i)
+        .parse_complete(i)
+        .ok()?;
+    let rest = line_end(rest);
+    if lang.eq_ignore_ascii_case("spice") {
+        return Some((
+            rest,
+            Statement {
+                item: Item::None,
+                end: None,
+                diags: vec![
+                    ParseErrorInner::NonHspice(
+                        "`simulator lang=spice` is a Spectre directive, not HSPICE; it is ignored"
+                            .to_owned(),
+                    )
+                    .record(i),
+                ],
+            },
+        ));
+    }
+    static BACK_TO_SPICE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?im)^[ \t]*simulator[ \t]+lang[ \t]*=[ \t]*spice\b").unwrap()
+    });
+    let text: &str = rest.fragment();
+    let (end, until) = match BACK_TO_SPICE.find(text) {
+        // stop at the newline before that line, which is the next statement
+        Some(m) => (
+            rest.take_from(m.start() - 1),
+            "up to the next `simulator lang=spice`",
+        ),
+        None => (rest.take_from(text.len()), "to the end of the file"),
+    };
+    Some((
+        end,
+        Statement {
+            item: Item::None,
+            end: None,
+            diags: vec![
+                ParseErrorInner::Unsupported(format!(
+                    "`simulator lang={lang}` sections (not HSPICE) are not supported; skipped {until}"
+                ))
+                .record(i),
+            ],
+        },
+    ))
+}
+
+/// Parse one statement; the caller checks that nothing is left over.
+fn statement<'a>(
+    i: LocatedSpan<'a>,
+    loaded: &IndexMap<FileId, Option<Pos>>,
+    manager: &Arc<ParseManager>,
+    work_dir: &Path,
+    in_subckt: bool,
+) -> Result<(LocatedSpan<'a>, Statement<'a>), ParseError> {
+    if i.fragment().starts_with('+') {
+        return Err(ParseErrorInner::OrphanContinuation.record(i));
+    }
+    let Ok((i, _)) = char::<_, nom::error::Error<_>>('.').parse_complete(i) else {
+        if let Some(stmt) = simulator_lang(i) {
+            return Ok(stmt);
+        }
+        if let Some((keyword, pos)) = unsupported_controlled_form(i) {
+            return Err(ParseErrorInner::Unsupported(format!(
+                "Controlled source form `{keyword}` is not supported yet; the statement is skipped"
+            ))
+            .record(pos));
+        }
+        let (i, inst) = instance(i)?;
+        return Ok((i, Statement::item(Item::Instance(inst))));
+    };
+    let (i, (cmd_str, cmd)) = key_str(i)?;
+    let cmd_lower = cmd_str.to_ascii_lowercase();
+    Ok(match cmd_lower.as_str() {
+        "lib" => {
+            let (i, (_, lib_info)) = (space1, lib).parse_complete(i)?;
+            (
+                i,
+                Statement {
+                    item: Item::None,
+                    end: lib_info.map(|(file_name, section)| EndReason::Include {
+                        file_name: Path::new(file_name),
+                        section: Some(section),
+                    }),
+                    diags: Vec::new(),
+                },
+            )
+        }
+        "inc" | "include" => {
+            let (i, (_, file_name)) = (space1, path_str).parse_complete(i)?;
+            (
+                i,
+                Statement {
+                    item: Item::None,
+                    end: Some(EndReason::Include {
+                        file_name: Path::new(file_name),
+                        section: None,
+                    }),
+                    diags: Vec::new(),
+                },
+            )
+        }
+        "model" => {
+            let (i, t) = model(i)?;
+            (i, Statement::item(Item::Model(t)))
+        }
+        "subckt" | "macro" => subckt(i, loaded, manager, work_dir)?,
+        "data" => {
+            let (i, t) = data(i)?;
+            (i, Statement::item(Item::Data(t)))
+        }
+        "option" | "options" => {
+            let (i, t) = many0(multiline_sep(option)).parse_complete(i)?;
+            (i, Statement::item(Item::Options(t)))
+        }
+        "param" | "parameter" | "parameters" => {
+            let (i, t) = many0(multiline_sep(key_value)).parse_complete(i)?;
+            (i, Statement::item(Item::Params(t)))
+        }
+        "ic" => {
+            let (i, t) = init_condition(i)?;
+            (i, Statement::item(Item::InitCondition(t.collect())))
+        }
+        "nodeset" => {
+            let (i, t) = nodeset(i)?;
+            (i, Statement::item(Item::Nodeset(t.collect())))
+        }
+        "ends" | "eom" => {
+            // the rest of the line (subckt name, comment) is ignored
+            let rest = line_end(i);
+            if in_subckt {
+                (
+                    rest,
+                    Statement {
+                        item: Item::None,
+                        end: Some(EndReason::Ends),
+                        diags: Vec::new(),
+                    },
+                )
+            } else {
+                // used to end the file here, silently dropping the rest of it
+                (
+                    rest,
+                    Statement {
+                        item: Item::None,
+                        end: None,
+                        diags: vec![ParseErrorInner::StrayEnds.record(i)],
+                    },
+                )
+            }
+        }
+        // the rest of the line is a comment
+        "end" => (line_end(i), Statement::item(Item::None)),
+        _ => {
+            // keep the statement verbatim; tokens are best-effort
+            let end = skip_statement(i);
+            let raw = raw_span(i, end);
+            let tokens = many0(multiline_sep(token))
+                .parse_complete(i)
+                .map(|(_, tokens)| tokens)
+                .unwrap_or_default();
+            let diags = if KNOWN_COMMANDS.contains(&cmd_lower.as_str()) {
+                Vec::new()
+            } else {
+                vec![ParseErrorInner::Unknown(cmd).record(i)]
+            };
+            (
+                end,
+                Statement {
+                    item: Item::Unknown(UnknwonBuilder { cmd, tokens, raw }),
+                    end: None,
+                    diags,
+                },
+            )
+        }
+    })
 }
 
 #[inline]
@@ -644,6 +1117,7 @@ pub(super) fn local_ast<'a>(
     loaded: &IndexMap<FileId, Option<Pos>>,
     manager: &Arc<ParseManager>,
     work_dir: &Path,
+    in_subckt: bool,
 ) -> IResult<LocatedSpan<'a>, (LocalAST, EndReason<'a>)> {
     let mut ast = LocalAST::default();
     loop {
@@ -651,98 +1125,35 @@ pub(super) fn local_ast<'a>(
         if i.is_empty() {
             return Ok((i, (ast, EndReason::End)));
         }
-        match char('.').parse_complete(i) {
-            Err(nom::Err::Error(_)) => {
-                let inst;
-                (i, inst) = instance(i)?;
-                ast.instance.push(inst);
-            }
-            Err(e) => return Err(e),
-            Ok((_i, _)) => {
-                i = _i;
-                let cmd;
-                let cmd_str;
-                (i, (cmd_str, cmd)) = key_str(i)?;
-                match cmd_str.to_lowercase().as_str() {
-                    "lib" => {
-                        let lib_info;
-                        (i, (_, lib_info)) = (space1, lib).parse_complete(i)?;
-                        if let Some((file_name_str, section_str)) = lib_info {
-                            return Ok((
-                                i,
-                                (
-                                    ast,
-                                    EndReason::Include {
-                                        file_name: Path::new(file_name_str),
-                                        section: Some(section_str),
-                                    },
-                                ),
-                            ));
-                        }
+        let start = i;
+        match statement(i, loaded, manager, work_dir, in_subckt) {
+            Ok((rest, stmt)) => {
+                ast.errors.extend(stmt.diags);
+                match end_of_statement(rest) {
+                    Ok((rest, ())) => {
+                        i = rest;
+                        push_item(&mut ast, stmt.item);
                     }
-                    "inc" | "include" => {
-                        let file_name;
-                        (i, (_, file_name)) = (space1, path_str).parse_complete(i)?;
-                        return Ok((
-                            i,
-                            (
-                                ast,
-                                EndReason::Include {
-                                    file_name: Path::new(file_name),
-                                    section: None,
-                                },
-                            ),
-                        ));
-                    }
-                    "model" => {
-                        let _model;
-                        (i, _model) = model(i)?;
-                        ast.model.push(_model);
-                    }
-                    "subckt" => {
-                        let _subckt;
-                        (i, _subckt) = subckt(i, loaded, manager, work_dir)?;
-                        ast.subckt.push(_subckt);
-                    }
-                    "data" => {
-                        let _data;
-                        (i, _data) = data(i)?;
-                        ast.data.push(_data);
-                    }
-                    "option" => {
-                        let options;
-                        (i, options) = many0(multiline_sep(option)).parse_complete(i)?;
-                        ast.option.extend(options);
-                    }
-                    "param" | "parameter" => {
-                        let param;
-                        (i, param) = many0(multiline_sep(key_value)).parse_complete(i)?;
-                        ast.param.extend(param);
-                    }
-                    "ic" => {
-                        let _init_condition;
-                        (i, _init_condition) = init_condition(i)?;
-                        ast.init_condition.extend(_init_condition);
-                    }
-                    "nodeset" => {
-                        let _nodeset;
-                        (i, _nodeset) = nodeset(i)?;
-                        ast.nodeset.extend(_nodeset);
-                    }
-                    "ends" => {
-                        (i, _) = opt((space1, key)).parse_complete(i)?;
-                        return Ok((i, (ast, EndReason::End)));
-                    }
-                    "end" => {
-                        (i, _) = many0((loss_sep, name)).parse_complete(i)?;
-                    }
-                    _ => {
-                        ast.errors.push(ParseErrorInner::Unknown(cmd).record(i));
-                        let tokens;
-                        (i, tokens) = many0(multiline_sep(token)).parse_complete(i)?;
-                        ast.unknwon.push(UnknwonBuilder { cmd, tokens })
+                    Err(e) => {
+                        // Report the left-over text and skip the statement, instead
+                        // of parsing the left-over as a new statement.
+                        ast.errors.push(trailing(e));
+                        i = skip_statement(rest);
                     }
                 }
+                if let Some(end) = stmt.end {
+                    return Ok((i, (ast, end)));
+                }
+            }
+            Err(mut e) => {
+                // Skip this statement (with its continuation lines) and go on:
+                // one bad statement used to drop the whole file.
+                i = skip_statement(start);
+                // a parser can fail after looking past the end of the statement
+                if e.pos.is_none_or(|pos| pos.start > i.location_offset()) {
+                    e.pos = Pos::new(start);
+                }
+                ast.errors.push(e);
             }
         }
     }
