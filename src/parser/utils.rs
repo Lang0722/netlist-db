@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use nom::{
     IResult, Input, Parser,
     branch::alt,
-    bytes::complete::{tag, take, take_till, take_while, take_while1},
+    bytes::complete::{tag, tag_no_case, take, take_till, take_while, take_while1},
     character::{char, complete::digit1},
     combinator::{map, map_res, opt, recognize, success, verify},
     error::ErrorKind,
@@ -47,26 +47,38 @@ pub(super) fn space_newline(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan>
     take_while(|c: char| matches!(c, '\t' | '\r' | ' ' | '\n')).parse_complete(i)
 }
 
+/// A line break inside a statement: the next line starts with `+`, or this
+/// line ends with `\` (Spectre style, also found in HSPICE netlists).
+#[inline]
+pub(super) fn continuation(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    alt((
+        map((comment_space_newline, char('+'), space), |_| ()),
+        map(
+            (
+                space,
+                char('\\'),
+                space,
+                char('\n'),
+                space,
+                opt(char('+')),
+                space,
+            ),
+            |_| (),
+        ),
+    ))
+    .parse_complete(i)
+}
+
 #[inline]
 pub(super) fn multiline_sep<'a, T>(
     f: fn(LocatedSpan<'a>) -> IResult<LocatedSpan<'a>, T>,
 ) -> impl MyParser<'a, T> {
-    alt((
-        preceded(space1, f),
-        map(
-            (comment_space_newline, char('+'), space, f),
-            |(_, _, _, t)| t,
-        ),
-    ))
+    alt((preceded(space1, f), preceded(continuation, f)))
 }
 
 #[inline]
 pub(super) fn loss_sep(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
-    alt((
-        map((comment_space_newline, char('+'), space), |(_, _, s)| s),
-        space,
-    ))
-    .parse_complete(i)
+    alt((recognize(continuation), space)).parse_complete(i)
 }
 
 #[inline]
@@ -826,11 +838,28 @@ pub(super) fn end_of_statement(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
     Ok((i, ()))
 }
 
-/// Skip to the end of the line (before the newline)
+/// Whether a `\` at the end of `line` continues it on the next line (a `\`
+/// inside a `$` comment does not)
+#[inline]
+fn continues(line: &str) -> bool {
+    let line = line.trim_end();
+    line.ends_with('\\') && !line.contains('$')
+}
+
+/// Skip to the end of the line (before the newline), following `\`
+/// continuations
 #[inline]
 fn line_end(i: LocatedSpan) -> LocatedSpan {
-    let n = i.fragment().find('\n').unwrap_or(i.fragment().len());
-    i.take_from(n)
+    let text: &str = i.fragment();
+    let mut start = 0;
+    loop {
+        let end = text[start..].find('\n').map_or(text.len(), |n| start + n);
+        if end < text.len() && continues(&text[start..end]) {
+            start = end + 1;
+        } else {
+            return i.take_from(end);
+        }
+    }
 }
 
 /// Skip to the end of the statement at `i`: the rest of its line, and every
@@ -922,6 +951,53 @@ fn subckt<'a>(
     ))
 }
 
+/// `simulator lang=spice|spectre`, found in Cadence netlists and in model
+/// files shared with Spectre. `spice` changes nothing (the rest of its line is
+/// ignored); a section in another language is reported and skipped up to the
+/// next `simulator lang=spice`, or to the end of the input.
+fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
+    let (rest, (_, _, _, _, _, _, (lang, _))) = (
+        tag_no_case("simulator"),
+        space1,
+        tag_no_case("lang"),
+        space,
+        char('='),
+        space,
+        key_str,
+    )
+        .parse_complete(i)
+        .ok()?;
+    let rest = line_end(rest);
+    if lang.eq_ignore_ascii_case("spice") {
+        return Some((rest, Statement::item(Item::None)));
+    }
+    static BACK_TO_SPICE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?im)^[ \t]*simulator[ \t]+lang[ \t]*=[ \t]*spice\b").unwrap()
+    });
+    let text: &str = rest.fragment();
+    let (end, until) = match BACK_TO_SPICE.find(text) {
+        // stop at the newline before that line, which is the next statement
+        Some(m) => (
+            rest.take_from(m.start() - 1),
+            "up to the next `simulator lang=spice`",
+        ),
+        None => (rest.take_from(text.len()), "to the end of the file"),
+    };
+    Some((
+        end,
+        Statement {
+            item: Item::None,
+            end: None,
+            diags: vec![
+                ParseErrorInner::Unsupported(format!(
+                    "`simulator lang={lang}` sections are not supported; skipped {until}"
+                ))
+                .record(i),
+            ],
+        },
+    ))
+}
+
 /// Parse one statement; the caller checks that nothing is left over.
 fn statement<'a>(
     i: LocatedSpan<'a>,
@@ -934,6 +1010,9 @@ fn statement<'a>(
         return Err(ParseErrorInner::OrphanContinuation.record(i));
     }
     let Ok((i, _)) = char::<_, nom::error::Error<_>>('.').parse_complete(i) else {
+        if let Some(stmt) = simulator_lang(i) {
+            return Ok(stmt);
+        }
         if let Some((keyword, pos)) = unsupported_controlled_form(i) {
             return Err(ParseErrorInner::Unsupported(format!(
                 "Controlled source form `{keyword}` is not supported yet; the statement is skipped"

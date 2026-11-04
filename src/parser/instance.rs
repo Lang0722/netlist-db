@@ -1,5 +1,5 @@
 use super::utils::{
-    comment_space_newline, integer, key_str, key_value, loss_sep, multiline_sep, name, name_char,
+    continuation, integer, key_str, key_value, loss_sep, multiline_sep, name, name_char,
     ports_params, space, space1, span_text, value,
 };
 use crate::{
@@ -293,14 +293,10 @@ fn is_keyword(i: LocatedSpan, keywords: &[&str]) -> bool {
     key_str(i).is_ok_and(|(_, (word, _))| keywords.iter().any(|k| word.eq_ignore_ascii_case(k)))
 }
 
-/// Separator between items: spaces, or a continuation line
+/// Separator between items: spaces, or a line continuation
 #[inline]
 fn item_sep(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
-    alt((
-        map((comment_space_newline, char('+'), space), |_| ()),
-        map(space1, |_| ()),
-    ))
-    .parse_complete(i)
+    alt((continuation, map(space1, |_| ()))).parse_complete(i)
 }
 
 /// Separator between arguments in parentheses: spaces, a comma, or a
