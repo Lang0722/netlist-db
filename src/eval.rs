@@ -23,7 +23,12 @@ use crate::{
     ast::{KeyValue, Value},
 };
 use core::fmt;
-use std::{cell::RefCell, collections::HashMap, f64::consts::PI};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    f64::consts::PI,
+    sync::Arc,
+};
 
 /// Why a value could not be computed
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +103,13 @@ pub enum ParHier {
     Local,
 }
 
+/// How a parameter is bound at a level (see [`Scope::binding`]): with
+/// `parhier=local`, the value of its closest definition or passed value; with
+/// `parhier=global`, the closest value passed and the value of the definition
+/// closest to the top. A value is the bits of a number, or the error that
+/// computing it gave.
+pub(crate) type Binding = (Option<Result<u64, String>>, Option<Result<u64, String>>);
+
 #[derive(Debug, Clone)]
 enum Def {
     Num(f64),
@@ -136,6 +148,8 @@ pub struct Scope<'p> {
     cache: RefCell<HashMap<String, Result<f64, EvalError>>>,
     /// parameters being evaluated, to find the ones that depend on themselves
     active: RefCell<Vec<String>>,
+    /// parsed expressions (kept by the top level for every level below it)
+    parsed: RefCell<HashMap<String, Arc<Expr>>>,
 }
 
 impl Scope<'static> {
@@ -149,6 +163,7 @@ impl Scope<'static> {
             funcs: HashMap::new(),
             cache: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
+            parsed: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -164,6 +179,7 @@ impl<'p> Scope<'p> {
             funcs: HashMap::new(),
             cache: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
+            parsed: RefCell::new(HashMap::new()),
         }
     }
 
@@ -210,11 +226,7 @@ impl<'p> Scope<'p> {
     pub fn get(&self, name: &str) -> Result<f64, EvalError> {
         let key = name.to_ascii_lowercase();
         match self.find(&key) {
-            Some((scope, true)) => match &scope.passed[&key] {
-                Def::Num(n) => Ok(*n),
-                Def::Err(e) => Err(e.clone()),
-                Def::Expr(e) => scope.eval_str(e),
-            },
+            Some((scope, true)) => scope.passed_value(&key),
             Some((scope, false)) => scope.value_here(&key),
             None => match key.as_str() {
                 "pi" => Ok(PI),
@@ -235,7 +247,7 @@ impl<'p> Scope<'p> {
 
     /// The value of the expression `expr`
     pub fn eval_str(&self, expr: &str) -> Result<f64, EvalError> {
-        let tree = Parser::new(expr).parse()?;
+        let tree = self.parse(expr)?;
         let v = self.eval_tree(&tree, &[], 0)?;
         if v.is_finite() {
             Ok(v)
@@ -244,19 +256,21 @@ impl<'p> Scope<'p> {
         }
     }
 
+    /// This level, then the levels above it
+    fn levels(&self) -> impl Iterator<Item = &Scope<'p>> {
+        let mut level = Some(self);
+        core::iter::from_fn(move || {
+            let s = level?;
+            level = s.parent;
+            Some(s)
+        })
+    }
+
     /// The level whose definition of `key` is used, and whether it is a
     /// passed value
     fn find(&self, key: &str) -> Option<(&Scope<'p>, bool)> {
-        let levels = || {
-            let mut level = Some(self);
-            core::iter::from_fn(move || {
-                let s = level?;
-                level = s.parent;
-                Some(s)
-            })
-        };
         match self.parhier {
-            ParHier::Local => levels().find_map(|s| {
+            ParHier::Local => self.levels().find_map(|s| {
                 if s.passed.contains_key(key) {
                     Some((s, true))
                 } else if s.defs.contains_key(key) {
@@ -266,15 +280,57 @@ impl<'p> Scope<'p> {
                 }
             }),
             // the closest passed value, else the definition closest to the top
-            ParHier::Global => levels()
+            ParHier::Global => self
+                .levels()
                 .find(|s| s.passed.contains_key(key))
                 .map(|s| (s, true))
                 .or_else(|| {
-                    levels()
+                    self.levels()
                         .filter(|s| s.defs.contains_key(key))
                         .last()
                         .map(|s| (s, false))
                 }),
+        }
+    }
+
+    /// The value passed to this level for `key`
+    fn passed_value(&self, key: &str) -> Result<f64, EvalError> {
+        match &self.passed[key] {
+            Def::Num(n) => Ok(*n),
+            Def::Err(e) => Err(e.clone()),
+            Def::Expr(e) => self.eval_str(e),
+        }
+    }
+
+    /// How the parameter `name` is bound, seen from this level: what decides
+    /// its value here, and in the levels below that do not bind it
+    /// themselves. Two levels with the same bindings for the parameters that
+    /// an expression reads give it the same value.
+    pub(crate) fn binding(&self, name: &str) -> Binding {
+        let key = name.to_ascii_lowercase();
+        let bits = |v: Result<f64, EvalError>| v.map(f64::to_bits).map_err(|e| e.to_string());
+        match self.parhier {
+            // the closest definition or passed value
+            ParHier::Local => (
+                self.find(&key).map(|(s, passed)| {
+                    bits(if passed {
+                        s.passed_value(&key)
+                    } else {
+                        s.value_here(&key)
+                    })
+                }),
+                None,
+            ),
+            // the closest passed value, and the definition closest to the top
+            ParHier::Global => (
+                self.levels()
+                    .find(|s| s.passed.contains_key(&key))
+                    .map(|s| bits(s.passed_value(&key))),
+                self.levels()
+                    .filter(|s| s.defs.contains_key(&key))
+                    .last()
+                    .map(|s| bits(s.value_here(&key))),
+            ),
         }
     }
 
@@ -298,6 +354,28 @@ impl<'p> Scope<'p> {
         self.active.borrow_mut().pop();
         self.cache.borrow_mut().insert(key.to_owned(), v.clone());
         v
+    }
+
+    /// The top level
+    fn root(&self) -> &Scope<'p> {
+        let mut s = self;
+        while let Some(parent) = s.parent {
+            s = parent;
+        }
+        s
+    }
+
+    /// `expr`, parsed (once: the parsed expressions are kept)
+    fn parse(&self, expr: &str) -> Result<Arc<Expr>, EvalError> {
+        let root = self.root();
+        if let Some(tree) = root.parsed.borrow().get(expr) {
+            return Ok(tree.clone());
+        }
+        let tree = Arc::new(Parser::new(expr).parse()?);
+        root.parsed
+            .borrow_mut()
+            .insert(expr.to_owned(), tree.clone());
+        Ok(tree)
     }
 
     fn func(&self, name: &str) -> Option<&Func> {
@@ -389,7 +467,7 @@ impl<'p> Scope<'p> {
                     return match &f.body {
                         Def::Num(n) => Ok(*n),
                         Def::Expr(body) => {
-                            let tree = Parser::new(body).parse()?;
+                            let tree = self.parse(body)?;
                             self.eval_tree(&tree, &locals, depth + 1)
                         }
                         Def::Err(e) => Err(e.clone()),
@@ -436,6 +514,54 @@ impl<'s> AST<'s> {
             .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .and_then(|(_, v)| v.as_ref())
     }
+}
+
+/// The parameters that the expression `expr` reads, lowercase, each once.
+/// `None` if it calls one of `functions`, functions defined with `.param
+/// f(x)=...` (the parameters a function's body reads are those of the level
+/// where it is called). An expression that is not valid reads nothing: it is
+/// an error wherever it is.
+pub(crate) fn expr_names(expr: &str, functions: &HashSet<String>) -> Option<Vec<String>> {
+    fn walk(e: &Expr, functions: &HashSet<String>, out: &mut Vec<String>) -> Option<()> {
+        match e {
+            Expr::Num(_) => {}
+            Expr::Var(name) => {
+                if !out.contains(name) {
+                    out.push(name.clone());
+                }
+            }
+            Expr::Neg(a) | Expr::Not(a) => walk(a, functions, out)?,
+            Expr::Bin(_, a, b) => {
+                walk(a, functions, out)?;
+                walk(b, functions, out)?;
+            }
+            Expr::Cond(c, a, b) => {
+                walk(c, functions, out)?;
+                walk(a, functions, out)?;
+                walk(b, functions, out)?;
+            }
+            Expr::Call(name, args) => {
+                if functions.contains(name) {
+                    return None;
+                }
+                for a in args {
+                    walk(a, functions, out)?;
+                }
+            }
+        }
+        Some(())
+    }
+    let mut out = Vec::new();
+    if let Ok(tree) = Parser::new(expr).parse() {
+        walk(&tree, functions, &mut out)?;
+    }
+    Some(out)
+}
+
+/// The name of the function that the key of a `.param` assignment defines
+/// (`f(a, b)`: `f`, lowercase), if it defines one
+pub(crate) fn function_name(key: &str) -> Option<String> {
+    function_key(key).map(|(name, _)| name)
 }
 
 /// `name(a, b)`: the function name and its arguments, lowercase

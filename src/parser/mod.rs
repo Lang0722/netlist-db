@@ -14,6 +14,7 @@ use alloc::sync::Arc;
 use indexmap::IndexMap;
 use manager::ParseManager;
 use nom::IResult;
+#[cfg(test)]
 use regex::Regex;
 use std::{
     mem,
@@ -103,7 +104,7 @@ fn include_path(work_dir: &Path, file_name: &Path) -> PathBuf {
 /// file, e.g. one made by joining files), turn lone CR line ends (classic
 /// Mac OS) into LF, and read bytes that are not UTF-8 (e.g. a `µ` written in
 /// Latin-1) as Latin-1, with a warning, instead of rejecting the whole file.
-fn decode(bytes: Vec<u8>) -> (String, Option<ParseError>) {
+fn decode(bytes: Vec<u8>) -> (String, Option<String>) {
     let (mut text, note) = match String::from_utf8(bytes) {
         Ok(text) => (text, None),
         Err(e) => {
@@ -121,11 +122,10 @@ fn decode(bytes: Vec<u8>) -> (String, Option<ParseError>) {
                     text.push(char::from(b));
                 }
             }
-            let note = ParseErrorInner::Encoding(format!(
+            let note = format!(
                 "The file is not valid UTF-8: {invalid} byte(s) were read as Latin-1 \
                  (the first one on line {first_line})"
-            ))
-            .with(None);
+            );
             (text, Some(note))
         }
     };
@@ -149,6 +149,36 @@ fn decode(bytes: Vec<u8>) -> (String, Option<ParseError>) {
         text = out;
     }
     (text, note)
+}
+
+/// The text of a file read (and its encoding warning, if any): its own, or
+/// shared by the sections loaded from a library file
+enum LibText {
+    Own((String, Option<String>)),
+    Shared(Arc<(String, Option<String>)>),
+}
+
+impl LibText {
+    fn text(&self) -> &str {
+        match self {
+            Self::Own((text, _)) => text,
+            Self::Shared(shared) => &shared.0,
+        }
+    }
+
+    fn note(&self) -> Option<&str> {
+        match self {
+            Self::Own((_, note)) => note.as_deref(),
+            Self::Shared(shared) => shared.1.as_deref(),
+        }
+    }
+
+    fn into_text(self) -> String {
+        match self {
+            Self::Own((text, _)) => text,
+            Self::Shared(shared) => shared.0.clone(),
+        }
+    }
 }
 
 async fn _include(
@@ -182,15 +212,43 @@ async fn _include(
     let release = async |file_id: &FileId| {
         manager.file_storage.lock().await.id2idx.remove(file_id);
     };
-    let (contents, encoding_note) = match tokio::fs::read(&file_path).await {
-        Ok(bytes) => decode(bytes),
+    // the sections of a library file share one reading of it
+    let text = match &file_id {
+        FileId::Section { .. } => {
+            let cell = manager
+                .lib_text
+                .lock()
+                .await
+                .entry(file_path.clone())
+                .or_default()
+                .clone();
+            cell.get_or_init(|| async {
+                tokio::fs::read(&file_path)
+                    .await
+                    .map(|bytes| Arc::new(decode(bytes)))
+                    .map_err(|e| (e.kind(), e.to_string()))
+            })
+            .await
+            .clone()
+            .map(LibText::Shared)
+            .map_err(|(kind, msg)| std::io::Error::new(kind, msg))
+        }
+        FileId::Include { .. } => tokio::fs::read(&file_path)
+            .await
+            .map(|bytes| LibText::Own(decode(bytes))),
+    };
+    let text = match text {
+        Ok(text) => text,
         Err(e) => {
             release(&file_id).await;
             return Err((file_id, ParseErrorInner::with(e.into(), include_pos)));
         }
     };
+    let encoding_note = text
+        .note()
+        .map(|msg| ParseErrorInner::Encoding(msg.to_owned()).with(None));
     let (line_off_set, file_ctx) = if let FileId::Section { path: _, section } = file_id.clone() {
-        if let Some((file_ctx, line_off_set)) = match_lib(&contents, &section) {
+        if let Some((file_ctx, line_off_set)) = match_lib(text.text(), &section) {
             (line_off_set, file_ctx)
         } else {
             release(&file_id).await;
@@ -204,7 +262,7 @@ async fn _include(
             ));
         }
     } else {
-        (0, contents)
+        (0, text.into_text())
     };
     let file_ctx = join_continued_lines(file_ctx);
     let mut i = span(&file_ctx, line_off_set);
@@ -419,18 +477,57 @@ pub async fn parse_top_multi<I: Iterator<Item = FileId>>(file_ids: I) -> (Parsed
     )
 }
 
+/// The section `section` of a library file: the text after `.lib section`,
+/// up to the next line that starts with `.endl` (the last such section, if
+/// there are several), and the number of the line where it starts (from 0).
+///
+/// A library file is scanned once per section loaded from it, so this is a
+/// single pass over its lines (PDK model files are tens of MB).
 fn match_lib(text: &str, section: &str) -> Option<(String, u32)> {
-    let section_escaped = regex::escape(section);
-    let re = Regex::new(&format!(
-        r"(?ims)^\s*\.lib\s+{section_escaped}\b(.*?)^\s*\.endl(?:\s+{section_escaped}\b)?"
-    ))
-    .unwrap();
-    re.captures_iter(text).last().map(|caps| {
-        // Count lines up to the section body (which starts on the `.lib` line),
-        // not up to the match start: `^\s*` also matches blank lines before it.
-        let start_offset = caps.get(1).unwrap().start();
-        let line_num_offset = (text[..start_offset].matches('\n').count()) as u32;
-        (caps[1].to_owned(), line_num_offset)
+    let starts_with = |s: &str, prefix: &str| {
+        s.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    };
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let last_is_word = section.chars().last().is_some_and(is_word);
+    let mut found = None;
+    // in a section: where its text starts, and where the run of blank lines
+    // before the current line starts
+    let mut open: Option<usize> = None;
+    let mut blank_from: Option<usize> = None;
+    let mut end = 0;
+    for line in text.split_inclusive('\n') {
+        let start = end;
+        end += line.len();
+        let t = line.trim_start();
+        if let Some(body) = open {
+            if t.is_empty() {
+                blank_from.get_or_insert(start);
+            } else {
+                if starts_with(t, ".endl") {
+                    found = Some((body, blank_from.unwrap_or(start)));
+                    open = None;
+                }
+                blank_from = None;
+            }
+            continue;
+        }
+        // `.lib section`, the name followed by the end of a word
+        if !section.is_empty() && starts_with(t, ".lib") {
+            let rest = &t[4..];
+            let name = rest.trim_start();
+            if name.len() < rest.len()
+                && starts_with(name, section)
+                && last_is_word != name[section.len()..].chars().next().is_some_and(is_word)
+            {
+                open = Some(end - name.len() + section.len());
+                blank_from = None;
+            }
+        }
+    }
+    found.map(|(body, body_end)| {
+        let line = text[..body].matches('\n').count() as u32;
+        (text[body..body_end].to_owned(), line)
     })
 }
 #[tokio::test]
@@ -463,6 +560,84 @@ async fn test_top() {
     println!("{parsed:?}");
     println!("{files:?}");
 }
+/// `match_lib` as it was written with a regex: the regex of `section`
+#[cfg(test)]
+fn match_lib_regex(section: &str) -> impl Fn(&str) -> Option<(String, u32)> {
+    let section_escaped = regex::escape(section);
+    let re = Regex::new(&format!(
+        r"(?ims)^\s*\.lib\s+{section_escaped}\b(.*?)^\s*\.endl(?:\s+{section_escaped}\b)?"
+    ))
+    .unwrap();
+    move |text| {
+        re.captures_iter(text).last().map(|caps| {
+            let start_offset = caps.get(1).unwrap().start();
+            let line_num_offset = (text[..start_offset].matches('\n').count()) as u32;
+            (caps[1].to_owned(), line_num_offset)
+        })
+    }
+}
+
+#[test]
+fn match_lib_like_the_regex() {
+    // random texts made of lines that open, close or fill sections
+    let pieces = [
+        ".lib tt",
+        ".LIB TT",
+        "  .lib  tt",
+        ".lib tt_mc",
+        ".lib ttg",
+        ".lib ss",
+        ".libtt",
+        ".lib 'f.l' tt",
+        ".endl",
+        ".ENDL TT",
+        "  .endl ss",
+        ".endlx",
+        "",
+        "   ",
+        "\t",
+        "M1 d g s b nch",
+        "* .lib tt",
+        "+ .endl",
+        ".lib",
+        ".lib\ttt x",
+        ".lib tt$c",
+        ".lib tt.x",
+        ".lib tt\u{b5}",
+        "\u{b5}",
+        ".lib\u{a0}tt",
+        "\u{a0}.endl",
+    ];
+    let regexes: Vec<_> = ["tt", "ss", "TT"]
+        .into_iter()
+        .map(|section| (section, match_lib_regex(section)))
+        .collect();
+    let mut seed = 12345u64;
+    let mut next = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) as usize
+    };
+    for _ in 0..100_000 {
+        let n = next() % 12;
+        let mut text = String::new();
+        for i in 0..n {
+            if i > 0 {
+                text.push_str(if next() % 5 == 0 { "\r\n" } else { "\n" });
+            }
+            text.push_str(pieces[next() % pieces.len()]);
+        }
+        for (section, regex) in &regexes {
+            assert_eq!(
+                match_lib(&text, section),
+                regex(&text),
+                "{text:?} {section}"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_match_lib() {
     let text = r#"

@@ -1,6 +1,10 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::{Mutex, oneshot};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex as StdMutex},
+};
+use tokio::sync::{Mutex, OnceCell, oneshot};
 
 use crate::{ast::ASTBuilder, span::FileStorage};
 
@@ -9,7 +13,13 @@ pub struct ParseManager {
     active_tasks: AtomicUsize,
     done_tx: StdMutex<Option<oneshot::Sender<()>>>,
     pub file_storage: Mutex<FileStorage<ASTBuilder>>,
+    /// The text of each library file whose sections are loaded (read once
+    /// for all its sections), and its encoding warning; or why it could not
+    /// be read
+    pub(super) lib_text: Mutex<HashMap<PathBuf, Arc<OnceCell<SharedText>>>>,
 }
+
+pub(super) type SharedText = Result<Arc<(String, Option<String>)>, (std::io::ErrorKind, String)>;
 
 /// One unit of outstanding work: [`ParseManager::wait`] does not return while
 /// a guard is alive. It is released on drop, so a task that panics still
@@ -31,6 +41,7 @@ impl ParseManager {
                 active_tasks: AtomicUsize::new(0),
                 done_tx: StdMutex::new(Some(tx)),
                 file_storage: Mutex::new(FileStorage::default()),
+                lib_text: Mutex::new(HashMap::new()),
             }),
             done_rx,
         )

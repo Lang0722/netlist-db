@@ -978,6 +978,51 @@ async fn cr_line_ends_bom_and_latin1_are_read() {
     assert_eq!(names(&ast), ["R1", "C1", "V1", "R2", "C2", "R3"]);
 }
 
+/// The sections of a library file are read from one reading of it (a PDK
+/// model file of tens of MB used to be read and kept in memory once per
+/// section, all at once): sections loaded from a corner, a missing section,
+/// a library that is not UTF-8, and one that does not exist.
+#[tokio::test]
+async fn library_sections_share_one_reading() {
+    let dir = TempDir::new("lib");
+    dir.write_bytes(
+        "models.l",
+        b"* \xb5 library\n.lib tt\n.param d=0\n.lib 'models.l' core\n.lib 'models.l' io\n.endl tt\n\
+          .lib core\n.model nch.1 nmos lmin=1e-8 lmax=1e-6\n.model nch.2 nmos lmin=1e-6 lmax=1e-4\n.endl core\n\
+          .lib io\n.model nio nmos level=54\n.endl io\n",
+    );
+    let deck = dir.write_bytes(
+        "deck.sp",
+        b"* deck\n.lib 'models.l' tt\n.lib 'models.l' rf\n.lib 'nothing.l' tt\n.lib 'nothing.l' ss\n\
+          M1 d g s b nch l=2u w=1u\nM2 d g s b nio l=1u w=1u\n",
+    );
+    let (parsed, files) = parse_files(&[deck]).await;
+    let mut kinds: Vec<_> = diagnostics(&parsed).iter().map(|d| d.kind).collect();
+    kinds.sort();
+    // the encoding warning of each section read (tt, core, io), the missing
+    // section, and each section of the missing file
+    assert_eq!(
+        kinds,
+        [
+            "Encoding",
+            "Encoding",
+            "Encoding",
+            "IO",
+            "IO",
+            "NoLibSection"
+        ]
+    );
+    let (ast, _) = files.build(parsed);
+    let models: Vec<_> = ast.model.iter().map(|m| m.name.to_string()).collect();
+    assert_eq!(models, ["nch.1", "nch.2", "nio"]);
+    let chosen: Vec<_> = ast
+        .mosfet_models()
+        .into_iter()
+        .map(|m| m.selection.unwrap().model.name.to_string())
+        .collect();
+    assert_eq!(chosen, ["nch.2", "nio"]);
+}
+
 /// A quote that was not closed used to take in every line up to the next
 /// quote in the file (here, two resistors), and the error pointed there.
 #[tokio::test]
@@ -1650,4 +1695,126 @@ async fn model_selection_in_a_deep_hierarchy() {
         ),
         Ok(())
     );
+}
+
+/// `model_usage` (counted through the hierarchy, each distinct subckt
+/// instance once) gives the same counts as listing every MOSFET.
+#[tokio::test]
+async fn model_usage_counts_like_the_list() {
+    /// MOSFETs; how many use each model; how many have each error
+    type Tally = (u64, Vec<(String, u64)>, Vec<(String, u64)>);
+    fn tally(ast: &AST<'_>) -> Tally {
+        let mut models = HashMap::<String, u64>::new();
+        let mut errors = HashMap::<String, u64>::new();
+        let list = ast.mosfet_models();
+        for m in &list {
+            match &m.selection {
+                Ok(s) => *models.entry(s.model.name.to_string()).or_default() += 1,
+                Err(e) => *errors.entry(e.to_string()).or_default() += 1,
+            }
+        }
+        let mut models: Vec<_> = models.into_iter().collect();
+        let mut errors: Vec<_> = errors.into_iter().collect();
+        models.sort();
+        errors.sort();
+        (list.len() as u64, models, errors)
+    }
+    fn usage(ast: &AST<'_>) -> Tally {
+        let u = ast.model_usage();
+        let mut models = HashMap::<String, u64>::new();
+        for (m, n) in &u.models {
+            *models.entry(m.name.to_string()).or_default() += n;
+        }
+        let mut models: Vec<_> = models.into_iter().collect();
+        let mut errors: Vec<_> = u
+            .errors
+            .iter()
+            .map(|(e, n, _)| (e.to_string(), *n))
+            .collect();
+        models.sort();
+        errors.sort();
+        (u.mosfets, models, errors)
+    }
+    // the same subckt under different parameters, levels without parameters,
+    // local models, errors, and repeated instances
+    let deck = ".param dxln=0 lg=30n\n\
+        .model nch.1 nmos lmin=1e-8 lmax=1e-7 wmin=1e-8 wmax=1e-6\n\
+        .model nch.2 nmos lmin=1e-8 lmax=1e-7 wmin=1e-6 wmax=1e-4\n\
+        .model nch.3 nmos lmin=1e-7 lmax=1e-4 wmin=1e-8 wmax=1e-4\n\
+        .subckt cell a b wn=0.5u l=lg\n\
+        M1 a b 0 0 nch w=wn l=l\nM2 a b 0 0 nch w='4*wn' l=l\nM3 a b 0 0 pch w=wn l=l\n.ends\n\
+        .subckt blk a b\n\
+        X1 a b cell\nX2 a b cell wn=1u\nX3 a b cell l=200n\nX4 a b cell\nM9 a b 0 0 nch w=2u l=lx\n.ends\n\
+        .subckt tile a b sz=1u\n\
+        Xb1 a b blk\nXb2 a b blk\nXc a b cell wn=sz\n.ends\n\
+        .subckt mac a b l=1u w=1u\n\
+        MAIN a b 0 0 nch l=l w=w\n\
+        .model nch.1 nmos lmin=1e-8 lmax=1 wmin=1e-8 wmax=1\n.ends\n\
+        Xt1 a b tile\nXt2 a b tile sz=2u\nXt3 a b tile\nXm1 a b mac\nXm2 a b mac l=50n\nM0 a b 0 0 nch w=1u l=1u\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", deck)]).await;
+    let (ast, _) = files.build(parsed);
+    let expected = tally(&ast);
+    assert_eq!(expected.0, 3 * (2 * (4 * 3 + 1) + 3) + 2 + 1);
+    assert_eq!(usage(&ast), expected);
+    // and the models of one subckt
+    let u = ast.model_usage_of("tile").unwrap();
+    assert_eq!(u.mosfets, 2 * (4 * 3 + 1) + 3);
+    assert!(ast.model_usage_of("nothing").is_none());
+    // with `.option parhier=local`, `.option scale`, and fingers
+    for deck in [
+        ".option parhier=local\n.param w=1u\n.subckt inv a b w=2u\nM1 a b 0 0 nmod w=w l=1u\n.ends\n\
+         .model nmod nmos level=1\nX1 a b inv\nX2 a b inv w=3u\n",
+        ".option scale=1e-6\n.model nch.1 nmos wnflag=1 lmin=1e-7 lmax=1e-6 wmin=1e-7 wmax=1e-6\n\
+         .model nch.2 nmos wnflag=1 lmin=1e-7 lmax=1e-6 wmin=1e-6 wmax=1e-5\n\
+         M1 d g s b nch l=0.18 w=4 nf=8\nM2 d g s b nch l=0.18 w=4\n",
+    ] {
+        let (_dir, parsed, files) = parse_text(&[("top.sp", deck)]).await;
+        let (ast, _) = files.build(parsed);
+        assert_eq!(usage(&ast), tally(&ast));
+    }
+    // the counts of a subckt instance are kept for the parameters its
+    // contents read: values passed that nothing reads (`id`), values read
+    // levels below (`k`, `lsel`), a definition that hides another (`wq`),
+    // the ranges of local bins (`dx`), and functions; with each `parhier`
+    let models = ".model nch.1 nmos lmin=1e-8 lmax=1e-7 wmin=1e-8 wmax=1e-6\n\
+        .model nch.2 nmos lmin=1e-8 lmax=1e-7 wmin=1e-6 wmax=1e-4\n\
+        .model nch.3 nmos lmin=1e-7 lmax=1e-4 wmin=1e-8 wmax=1e-6\n\
+        .model nch.4 nmos lmin=1e-7 lmax=1e-4 wmin=1e-6 wmax=1e-4\n";
+    let decks = [
+        ".param lsel=50n k=0.3u\n\
+         .subckt leaf a b wl=1u\nM1 a b 0 0 nch w=wl l=lsel\n.ends\n\
+         .subckt mid a b id=0\nX1 a b leaf\nX2 a b leaf wl='2*k'\nX3 a b leaf id=id\n.ends\n\
+         .subckt top a b id=0 k=1u\nXm1 a b mid id=1\nXm2 a b mid id=2\nXm3 a b mid\n.ends\n\
+         Xt1 a b top id=1\nXt2 a b top id=2 k=0.6u\nXt3 a b top k=0.6u\nXt4 a b top id=4\n\
+         Xt5 a b mid\nXt6 a b leaf lsel=200n\n",
+        ".param wq=0.5u\n\
+         .subckt cellq a b\nM1 a b 0 0 nch w=wq l=50n\n.ends\n\
+         .subckt blkq a b wq=3u id=0\nX1 a b cellq\nX2 a b cellq wq=0.2u\n.ends\n\
+         .subckt topq a b\nXa a b blkq id=1\nXb a b blkq id=2\nXc a b blkq wq=2u\n.ends\n\
+         X1 a b blkq\nX2 a b cellq\nX3 a b topq\nX4 a b topq\n",
+        ".subckt mac2 a b l=1u w=1u dx=0 tag=0\n\
+         .model nmac.1 nmos lmin='1e-7-dx' lmax='5e-7-dx' wmin=1e-8 wmax=1\n\
+         .model nmac.2 nmos lmin='5e-7-dx' lmax=1 wmin=1e-8 wmax=1\n\
+         M1 a b 0 0 nmac l=l w=w\n.ends\n\
+         .subckt pair a b tag=0 dx=0\nX1 a b mac2 l=4.95e-7 tag=tag\nX2 a b mac2 l=4.95e-7 dx=dx\n.ends\n\
+         X1 a b mac2 l=4.95e-7 tag=1\nX2 a b mac2 l=4.95e-7 dx=1e-8 tag=2\n\
+         X3 a b mac2 l=4.95e-7 dx=1e-8 tag=3\nX4 a b pair tag=4\nX5 a b pair dx=1e-8\nX6 a b pair tag=6\n",
+        ".param f(x)='2*x' wf=0.4u\n\
+         .subckt fcell a b wf=0.3u\nM1 a b 0 0 nch w='f(wf)' l=50n\n.ends\n\
+         .subckt fblk a b id=0\nX1 a b fcell\nX2 a b fcell wf=0.6u\n.ends\n\
+         X1 a b fblk id=1\nX2 a b fblk id=2\nX3 a b fcell\n",
+        ".temp 85\n.subckt tcell a b\nM1 a b 0 0 nch w='temper*1e-8' l=50n\n.ends\n\
+         .subckt tblk a b temper=1\nX1 a b tcell\n.ends\n\
+         X1 a b tcell\nX2 a b tblk\nX3 a b tblk temper=200\n",
+    ];
+    for deck in decks {
+        for option in ["", ".option parhier=local\n"] {
+            let text = format!("{option}{models}{deck}");
+            let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
+            let (ast, _) = files.build(parsed);
+            let expected = tally(&ast);
+            assert!(expected.1.len() > 1, "{text}");
+            assert_eq!(usage(&ast), expected, "{text}");
+        }
+    }
 }

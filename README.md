@@ -34,10 +34,32 @@ for m in ast.mosfet_models() {
 ```
 
 `AST::mosfet_models_of` does the same for one subckt (e.g. a library cell),
-and `AST::select_model` for a given model name, L and W. From the command line:
+and `AST::select_model` for a given model name, L and W.
+
+A hierarchical netlist can hold far more transistors than fit in a list (a
+30 MB netlist can flatten to hundreds of millions). `AST::for_each_mosfet_model`
+gives them one by one without keeping them, and `AST::model_usage` counts
+how many use each model (and how many have no model, with an example path)
+without visiting each one: a subckt instance is evaluated once for the
+parameters its contents read, and its counts are reused for every instance
+that sees the same values.
+
+``` rust
+let usage = ast.model_usage();
+for (model, n) in &usage.models {
+    println!("{} {n}", model.name);
+}
+for (e, n, example) in &usage.errors {
+    println!("{e}: {n} MOSFETs, e.g. {example}");
+}
+```
+
+From the command line (`--summary` for the counts, `--subckt NAME` for one
+subckt):
 
 ``` shell
 cargo run --release --example model_select -- deck.sp
+cargo run --release --example model_select -- --summary deck.sp
 ```
 
 ## Example
