@@ -58,6 +58,9 @@ pub enum ParseErrorInner {
     /// Valid syntax that this parser does not support yet
     #[error("{0}")]
     Unsupported(String),
+    /// Syntax that is not HSPICE (e.g. a Spectre directive); it is ignored
+    #[error("{0}")]
+    NonHspice(String),
     /// A parser task failed
     #[error("{0}")]
     Internal(String),
@@ -78,7 +81,7 @@ impl ParseErrorInner {
     pub fn is_warning(&self) -> bool {
         matches!(
             self,
-            Self::Unknown(_) | Self::StrayEnds | Self::DuplicateSubckt(_)
+            Self::Unknown(_) | Self::StrayEnds | Self::DuplicateSubckt(_) | Self::NonHspice(_)
         )
     }
 }
@@ -206,6 +209,7 @@ impl ParseError {
                         ),
                     ),
                     ParseErrorInner::Unsupported(msg) => ("Error", msg.clone()),
+                    ParseErrorInner::NonHspice(msg) => ("Warning", msg.clone()),
                     ParseErrorInner::Internal(msg) => ("InternalError", msg.clone()),
                     ParseErrorInner::CircularDefinition(index_set, idx) => {
                         struct FileDisplay<'a>(&'a FileId, &'a Option<Pos>);

@@ -110,6 +110,7 @@ async fn _include(
     } else {
         (0, contents)
     };
+    let file_ctx = join_continued_lines(file_ctx);
     let parsed_id = manager.file_storage.lock().await.new_file(file_id);
     let i = span(&file_ctx, line_off_set);
     // get dir
@@ -149,6 +150,95 @@ async fn include(
     };
     let _res = _include(manager, loaded, file_id, include_pos).await;
     res.set(_res.map_err(|(_, e)| e)).unwrap();
+}
+
+/// HSPICE continues a statement with a `\` at the end of a line (the line
+/// break counts as white space) or a `\\` (the lines are joined with no white
+/// space, e.g. to split a long path), also inside quoted strings. Such lines
+/// are joined here, before parsing. Each removed newline is put back after the
+/// joined line, so the line numbers of what follows stay right. A `\` inside a
+/// comment continues nothing; a `+` that also starts the next line (outside
+/// quotes) is dropped.
+fn join_continued_lines(text: String) -> String {
+    if !text.contains('\\') {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut moved_newlines = 0;
+    let mut continuing = false;
+    // the previous line ended with `\\`
+    let mut squeeze = false;
+    // quote state of the statement being joined
+    let mut in_quote = false;
+    for line in text.split_inclusive('\n') {
+        let (mut body, eol) = match line.strip_suffix('\n') {
+            Some(b) => match b.strip_suffix('\r') {
+                Some(b) => (b, "\r\n"),
+                None => (b, "\n"),
+            },
+            None => (line, ""),
+        };
+        let comment_line = !continuing && body.trim_start().starts_with('*');
+        if continuing {
+            if squeeze {
+                body = body.trim_start();
+            }
+            // (inside quotes a leading `+` is an operator, and is kept)
+            let plus = if in_quote {
+                None
+            } else {
+                body.trim_start().strip_prefix('+')
+            };
+            if let Some(rest) = plus {
+                body = if squeeze { rest.trim_start() } else { rest };
+            }
+        } else {
+            in_quote = false;
+        }
+        let mut dollar_comment = false;
+        for c in body.chars() {
+            match c {
+                '\'' => in_quote = !in_quote,
+                '$' if !in_quote => {
+                    dollar_comment = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let trimmed = body.trim_end();
+        let backslashes = if comment_line || dollar_comment {
+            0
+        } else if trimmed.ends_with("\\\\") {
+            2
+        } else if trimmed.ends_with('\\') {
+            1
+        } else {
+            0
+        };
+        if backslashes == 0 {
+            out.push_str(body);
+            out.push_str(eol);
+            out.extend(std::iter::repeat_n('\n', moved_newlines));
+            moved_newlines = 0;
+            continuing = false;
+        } else {
+            let content = &trimmed[..trimmed.len() - backslashes];
+            if backslashes == 2 {
+                out.push_str(content.trim_end());
+            } else {
+                out.push_str(content);
+                out.push(' ');
+            }
+            if !eol.is_empty() {
+                moved_newlines += 1;
+            }
+            continuing = true;
+            squeeze = backslashes == 2;
+        }
+    }
+    out.extend(std::iter::repeat_n('\n', moved_newlines));
+    out
 }
 
 /// When ParseError come form the included file,

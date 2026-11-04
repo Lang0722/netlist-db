@@ -111,6 +111,7 @@ fn kind(e: &ParseErrorInner) -> &'static str {
         ParseErrorInner::UnterminatedSubckt(_) => "UnterminatedSubckt",
         ParseErrorInner::DuplicateSubckt(_) => "DuplicateSubckt",
         ParseErrorInner::Unsupported(_) => "Unsupported",
+        ParseErrorInner::NonHspice(_) => "NonHspice",
         ParseErrorInner::Internal(_) => "Internal",
     }
 }
@@ -154,7 +155,10 @@ fn diag(kind: &'static str, line: u32) -> Diag {
     Diag {
         kind,
         line: Some(line),
-        warning: matches!(kind, "UnknownCommand" | "StrayEnds" | "DuplicateSubckt"),
+        warning: matches!(
+            kind,
+            "UnknownCommand" | "StrayEnds" | "DuplicateSubckt" | "NonHspice"
+        ),
     }
 }
 
@@ -713,9 +717,10 @@ async fn text_after_ends_and_end_is_ignored() {
 // dialect details found in real netlists (Infineon adsbenchmark)
 
 /// Infineon's model files start with `simulator lang = spice`, which used to
-/// become a fake element named `simulator`.
+/// become a fake element named `simulator`. It is a Spectre directive, not
+/// HSPICE syntax: it is ignored, with a warning.
 #[tokio::test]
-async fn simulator_lang_spice_is_a_directive() {
+async fn simulator_lang_spice_is_ignored_with_a_warning() {
     let (_dir, parsed, files) = parse_text(&[(
         "top.sp",
         // header of adsbenchmark/*/src/model/bip_nom.scs
@@ -725,8 +730,9 @@ async fn simulator_lang_spice_is_a_directive() {
          + cje=2.5e-15 vje=0.9 mje=0.55 cjc=25e-15 vjc=0.9 mjc=0.55\n",
     )])
     .await;
-    assert_eq!(diagnostics(&parsed), []);
-    let (ast, _) = files.build(parsed);
+    assert_eq!(diagnostics(&parsed), [diag("NonHspice", 1)]);
+    let (ast, has_err) = files.build(parsed);
+    assert!(!has_err, "a warning is not an error");
     assert!(
         ast.instance.is_empty(),
         "no element named `simulator`:\n{ast}"
@@ -753,15 +759,20 @@ async fn simulator_lang_spectre_section_is_reported_and_skipped() {
     .await;
     assert_eq!(
         diagnostics(&parsed),
-        [diag("Unsupported", 2), diag("Unsupported", 7)]
+        [
+            diag("Unsupported", 2),
+            diag("NonHspice", 5),
+            diag("Unsupported", 7)
+        ]
     );
     let (ast, has_err) = files.build(parsed);
     assert!(has_err);
     assert_eq!(names(&ast), ["R1", "R3"]);
 }
 
-/// Infineon's PHY testbench continues a `.PARAM` line with a trailing `\`
-/// (Spectre style); the statement used to be dropped.
+/// HSPICE continues a statement with a trailing `\` (the line break counts as
+/// white space). Infineon's PHY testbench continues a `.PARAM` line this way,
+/// and the statement used to be dropped.
 #[tokio::test]
 async fn backslash_continues_a_line() {
     let (_dir, parsed, files) = parse_text(&[(
@@ -789,5 +800,51 @@ async fn backslash_continues_a_line() {
         panic!()
     };
     assert_eq!(m.params.len(), 2);
-    assert!(ast.to_string().contains(".tran 1n \\\n10n"), "{ast}");
+    // the lines are joined when the file is read
+    assert!(ast.to_string().contains(".tran 1n  10n"), "{ast}");
+}
+
+/// HSPICE: a trailing `\\` joins the lines with no white space (e.g. to split
+/// a long path), and both forms also work inside quotes. Line numbers after
+/// the joined lines stay right.
+#[tokio::test]
+async fn double_backslash_joins_lines_without_white_space() {
+    let (_dir, parsed, files) = parse_text(&[
+        (
+            "top.sp",
+            ".inc 'sm\\\\\n\
+             \x20   all.sp'\n\
+             .param y=12\\\\\n\
+             34 z='1 + \\\n\
+             2'\n\
+             M9 d g\n",
+        ),
+        ("small.sp", "R0 a b 1k\n"),
+    ])
+    .await;
+    // `M9 d g` (too few nodes) is on line 6 of the file
+    assert_eq!(diagnostics(&parsed), [diag("Syntax", 6)]);
+    let (ast, _) = files.build(parsed);
+    assert_eq!(names(&ast), ["R0"], "the split include path resolves");
+    let param = |k: &str| &ast.param.iter().find(|kv| kv.k == k).unwrap().v;
+    assert!(close(num(param("y")), 1234.0));
+    assert!(
+        matches!(param("z"), Value::Expr(e) if !e.contains(['\\', '\n'])),
+        "{:?}",
+        param("z")
+    );
+}
+
+/// After a `\`, a `+` starting the next line is a continuation mark, except
+/// inside quotes, where it is an operator.
+#[tokio::test]
+async fn backslash_then_plus() {
+    let (_dir, parsed, files) = parse_text(&[("top.sp", ".param a=1 \\\n+ b='1 \\\n+ 2'\n")]).await;
+    assert_eq!(diagnostics(&parsed), []);
+    let (ast, _) = files.build(parsed);
+    assert_eq!(ast.param.len(), 2);
+    assert!(
+        matches!(&ast.param[1].v, Value::Expr(e) if e.contains("+ 2")),
+        "{ast}"
+    );
 }

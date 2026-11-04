@@ -47,26 +47,11 @@ pub(super) fn space_newline(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan>
     take_while(|c: char| matches!(c, '\t' | '\r' | ' ' | '\n')).parse_complete(i)
 }
 
-/// A line break inside a statement: the next line starts with `+`, or this
-/// line ends with `\` (Spectre style, also found in HSPICE netlists).
+/// A line break inside a statement: the next line starts with `+`. (Lines that
+/// end with `\` or `\\` were already joined when the file was read.)
 #[inline]
 pub(super) fn continuation(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
-    alt((
-        map((comment_space_newline, char('+'), space), |_| ()),
-        map(
-            (
-                space,
-                char('\\'),
-                space,
-                char('\n'),
-                space,
-                opt(char('+')),
-                space,
-            ),
-            |_| (),
-        ),
-    ))
-    .parse_complete(i)
+    map((comment_space_newline, char('+'), space), |_| ()).parse_complete(i)
 }
 
 #[inline]
@@ -838,28 +823,11 @@ pub(super) fn end_of_statement(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
     Ok((i, ()))
 }
 
-/// Whether a `\` at the end of `line` continues it on the next line (a `\`
-/// inside a `$` comment does not)
-#[inline]
-fn continues(line: &str) -> bool {
-    let line = line.trim_end();
-    line.ends_with('\\') && !line.contains('$')
-}
-
-/// Skip to the end of the line (before the newline), following `\`
-/// continuations
+/// Skip to the end of the line (before the newline)
 #[inline]
 fn line_end(i: LocatedSpan) -> LocatedSpan {
-    let text: &str = i.fragment();
-    let mut start = 0;
-    loop {
-        let end = text[start..].find('\n').map_or(text.len(), |n| start + n);
-        if end < text.len() && continues(&text[start..end]) {
-            start = end + 1;
-        } else {
-            return i.take_from(end);
-        }
-    }
+    let n = i.fragment().find('\n').unwrap_or(i.fragment().len());
+    i.take_from(n)
 }
 
 /// Skip to the end of the statement at `i`: the rest of its line, and every
@@ -951,10 +919,11 @@ fn subckt<'a>(
     ))
 }
 
-/// `simulator lang=spice|spectre`, found in Cadence netlists and in model
-/// files shared with Spectre. `spice` changes nothing (the rest of its line is
-/// ignored); a section in another language is reported and skipped up to the
-/// next `simulator lang=spice`, or to the end of the input.
+/// `simulator lang=spice|spectre`: a Spectre directive, not HSPICE syntax,
+/// found in model files shared with Spectre. `spice` is ignored with a
+/// warning (the rest of its line too); a section in another language is
+/// reported and skipped up to the next `simulator lang=spice`, or to the end
+/// of the input.
 fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
     let (rest, (_, _, _, _, _, _, (lang, _))) = (
         tag_no_case("simulator"),
@@ -969,7 +938,20 @@ fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
         .ok()?;
     let rest = line_end(rest);
     if lang.eq_ignore_ascii_case("spice") {
-        return Some((rest, Statement::item(Item::None)));
+        return Some((
+            rest,
+            Statement {
+                item: Item::None,
+                end: None,
+                diags: vec![
+                    ParseErrorInner::NonHspice(
+                        "`simulator lang=spice` is a Spectre directive, not HSPICE; it is ignored"
+                            .to_owned(),
+                    )
+                    .record(i),
+                ],
+            },
+        ));
     }
     static BACK_TO_SPICE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?im)^[ \t]*simulator[ \t]+lang[ \t]*=[ \t]*spice\b").unwrap()
@@ -990,7 +972,7 @@ fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
             end: None,
             diags: vec![
                 ParseErrorInner::Unsupported(format!(
-                    "`simulator lang={lang}` sections are not supported; skipped {until}"
+                    "`simulator lang={lang}` sections (not HSPICE) are not supported; skipped {until}"
                 ))
                 .record(i),
             ],
