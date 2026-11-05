@@ -240,6 +240,17 @@ def decks():
                              "X1 d g s leaf\n.ends host\nX1 d g 0 leaf\nX2 d g 0 host\n",
          "X2.X1.X1: the nested cell of host, on its instance path"),
         ("q_positional", ".model a nmos level=54\nM1 d g 0 0 a 2u 1u\n", "two numbers after the model name: L, then W"),
+        ("q_x_no_def", ".model nv nmos level=54\nM1 d g 0 0 nv l=1u w=1u\nX1 d g 0 nothing\n",
+         "an X line with no definition: HSPICE stops"),
+        ("q_x_nested_only", ".model nv nmos level=54\n.subckt outer d g s\n.subckt only d g s\n"
+         "M1 d g s s nv l=1u w=1u\n.ends only\nX1 d g s only\n.ends outer\nX1 d g 0 outer\nX2 d g 0 only\n",
+         "X2 calls a name that only another subckt nests: HSPICE stops"),
+        ("q_x_one_path", ".model nv nmos level=54\n.subckt t d g s\nX1 d g s only\n.ends t\n"
+         ".subckt outer d g s\n.subckt only d g s\nM1 d g s s nv l=1u w=1u\n.ends only\nX1 d g s t\n"
+         ".ends outer\nX1 d g 0 outer\nX2 d g 0 t\n",
+         "one X line resolves under X1 and not under X2: HSPICE stops"),
+        ("q_x_model_name", ".model nv nmos level=54\nM1 d g 0 0 nv l=1u w=1u\nX1 d g 0 nv\n",
+         "an X line that calls the name of a model card: HSPICE stops"),
     ]
     # where the limits of a bin that read a parameter are evaluated
     tg = (".param lb=2e-7\n.model tg.1 nmos level=54 lmin=1e-8 lmax='lb'\n"

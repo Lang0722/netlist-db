@@ -20,6 +20,12 @@
 //!   two dots (`n.ch.1`) is a bin of nothing.
 //! - A bin must set its four limits: HSPICE stops if it looks at one that
 //!   does not.
+//! - HSPICE stops at an `X` line with no definition on its instance path, also
+//!   if the same line resolves on another path. Here that is the error
+//!   [`SelectError::NoSubckt`], and the walk goes on without the MOSFETs below
+//!   the line. HSPICE runs a line that calls a Verilog-A module (`.hdl`) or a
+//!   subckt in an encrypted block. This crate reads neither, so it reports
+//!   those lines too.
 //! - The limits are evaluated where the model is defined: those of a model
 //!   of the top level with the top-level parameters (a subckt parameter of
 //!   the same name does not change them), those of a model inside a subckt
@@ -78,6 +84,10 @@ pub enum SelectError {
     MissingLimits(String),
     /// A value (L, W, or a limit of a bin) could not be computed
     Eval { what: String, error: EvalError },
+    /// An `X` line calls this name, and no subckt of this name is on the
+    /// line's instance path. HSPICE stops there. This is the one error that
+    /// does not concern a MOSFET: the MOSFETs below the line are not known.
+    NoSubckt(String),
 }
 
 impl fmt::Display for SelectError {
@@ -95,6 +105,10 @@ impl fmt::Display for SelectError {
                 "model `{model}` has a `.` in its name: it must set LMIN, LMAX, WMIN and WMAX"
             ),
             Self::Eval { what, error } => write!(f, "{what}: {error}"),
+            Self::NoSubckt(name) => write!(
+                f,
+                "X line with no definition of subckt `{name}`: the MOSFETs below it are not counted"
+            ),
         }
     }
 }
@@ -138,7 +152,9 @@ pub struct Selection<'a, 's> {
     pub nf: f64,
 }
 
-/// A MOSFET of the circuit, with the model chosen for it
+/// A MOSFET of the circuit, with the model chosen for it. An `X` line with no
+/// definition also gets an entry: its `selection` is
+/// [`SelectError::NoSubckt`], and `mname` is the subckt name on the line.
 #[derive(Debug, Clone)]
 pub struct MosfetModel<'a, 's> {
     /// the path of the instance, e.g. `Xinv.Mn` (the subckt instances above
@@ -631,12 +647,14 @@ impl<'s> AST<'s> {
 /// once; its counts are multiplied by the number of such instances.
 #[derive(Debug, Clone, Default)]
 pub struct ModelUsage<'a, 's> {
-    /// the MOSFETs of the circuit
+    /// the MOSFETs of the circuit. This count is too low if `errors` holds a
+    /// [`SelectError::NoSubckt`] for a line whose definition holds MOSFETs.
     pub mosfets: u64,
     /// each model chosen, and how many MOSFETs use it: the most used first
     pub models: Vec<(&'a Model<'s>, u64)>,
     /// each reason why no model could be chosen, how many MOSFETs it
-    /// concerns, and the path of one of them: the most frequent first
+    /// concerns (for [`SelectError::NoSubckt`], how many `X` lines), and the
+    /// path of one of them: the most frequent first
     pub errors: Vec<(SelectError, u64, String)>,
 }
 
@@ -790,6 +808,10 @@ impl<'a, 's> Usage<'a, 's> {
                 Use::Model(addr) => usage.models.push((self.models[&addr], n)),
                 Use::Error(number) => {
                     let (e, path) = errors[number].take().expect("each error is counted once");
+                    // (an `X` line is not a MOSFET)
+                    if matches!(e, SelectError::NoSubckt(_)) {
+                        usage.mosfets -= n;
+                    }
                     usage.errors.push((e, n, path));
                 }
             }
@@ -941,6 +963,9 @@ impl<'a, 's> Usage<'a, 's> {
                 }
                 InstanceCtx::Subckt(x) => {
                     let Some(def) = resolve(&x.cktname, on_path) else {
+                        let e = SelectError::NoSubckt(x.cktname.to_string());
+                        let used = Use::Error(self.error_number(e, &inst.name));
+                        *counts.entry(used).or_default() += 1;
                         continue;
                     };
                     if self.expanding.iter().any(|s| ptr::eq(*s, def))
@@ -1085,6 +1110,12 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
                 }
                 InstanceCtx::Subckt(x) => {
                     let Some(def) = resolve(&x.cktname, on_path) else {
+                        (self.f)(MosfetModel {
+                            path: self.path.iter().copied().chain(once(&*inst.name)).join("."),
+                            instance: inst,
+                            mname: &x.cktname,
+                            selection: Err(SelectError::NoSubckt(x.cktname.to_string())),
+                        });
                         continue;
                     };
                     if self.expanding.iter().any(|s| ptr::eq(*s, def))

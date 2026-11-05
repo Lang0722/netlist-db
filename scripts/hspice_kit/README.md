@@ -91,9 +91,8 @@ Known gaps, reported by `compare_hspice.py` but not failing it:
   there is no model `pl`.
 
 Known gaps not in this kit:
-- an X line with no definition on its instance path, or a definition
-  instantiated inside itself: HSPICE stops. netlist-db skips that line and
-  reports nothing, so the MOSFETs below it are not counted;
+- a definition instantiated inside itself: HSPICE stops. netlist-db skips that
+  line and reports nothing, so the MOSFETs below it are not counted;
 - `.param` functions with the same name at several levels: HSPICE keeps, in
   some cases, mainly under `parhier=local`, the function that an expression found
   in the first instance that evaluated it;

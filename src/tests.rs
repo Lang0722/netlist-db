@@ -2369,6 +2369,108 @@ async fn model_selection_stops_at_recursive_subckts() {
     assert_eq!(chosen(&ast), pairs(&[("X0.M1", "nmod")]));
 }
 
+/// HSPICE stops at an `X` line with no definition on its instance path (golden
+/// cases `hier_top_nested_only`, `hier_unres_in_subckt`, `hier_model_callee`).
+/// The MOSFETs below that line are not known, so both walks report the line,
+/// and a total counts only the MOSFETs found.
+#[tokio::test]
+async fn x_line_with_no_definition_is_an_error() {
+    use crate::models::SelectError;
+    let no_def = |name: &str| format!("error: {}", SelectError::NoSubckt(name.to_owned()));
+    let usage_errors = |u: &crate::models::ModelUsage<'_, '_>| -> Vec<(String, u64, String)> {
+        u.errors
+            .iter()
+            .map(|(e, n, path)| (format!("error: {e}"), *n, path.clone()))
+            .collect()
+    };
+
+    // a top-level line, and a name that only another subckt nests
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".model nmod nmos level=1\n.subckt outer a b\n.subckt only a b\nM1 a b 0 0 nmod\n.ends\n\
+         Xo a b only\n.ends\nX1 1 0 outer\nX2 2 0 only\n",
+    )])
+    .await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(
+        chosen(&ast),
+        vec![
+            ("X1.Xo.M1".to_owned(), "nmod".to_owned()),
+            ("X2".to_owned(), no_def("only")),
+        ]
+    );
+    let u = ast.model_usage();
+    assert_eq!(u.mosfets, 1);
+    assert_eq!(usage_errors(&u), [(no_def("only"), 1, "X2".to_owned())]);
+
+    // one line that resolves on one instance path and not on another
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".model nmod nmos level=1\n.subckt t a b\nXn a b only\n.ends\n.subckt outer a b\n\
+         .subckt only a b\nM1 a b 0 0 nmod\n.ends\nXt a b t\n.ends\nX1 1 0 outer\nX2 2 0 t\n",
+    )])
+    .await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(
+        chosen(&ast),
+        vec![
+            ("X1.Xt.Xn.M1".to_owned(), "nmod".to_owned()),
+            ("X2.Xn".to_owned(), no_def("only")),
+        ]
+    );
+    let u = ast.model_usage();
+    assert_eq!(u.mosfets, 1);
+    assert_eq!(usage_errors(&u), [(no_def("only"), 1, "X2.Xn".to_owned())]);
+    // the same line from an instance of `t` alone
+    let of = ast.mosfet_models_of("t").unwrap();
+    assert_eq!(of.len(), 1);
+    assert_eq!(of[0].path, "Xn");
+    let u = ast.model_usage_of("t").unwrap();
+    assert_eq!(u.mosfets, 0);
+    assert_eq!(usage_errors(&u), [(no_def("only"), 1, "Xn".to_owned())]);
+
+    // the name of a model is not a subckt
+    let (_dir, parsed, files) = parse_text(&[("top.sp", ".model rmod r\nX1 1 0 rmod\n")]).await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(chosen(&ast), vec![("X1".to_owned(), no_def("rmod"))]);
+    assert_eq!(ast.model_usage().mosfets, 0);
+
+    // counted through the hierarchy, as the MOSFETs are
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".model nmod nmos level=1\n.subckt leaf a\nM1 a a 0 0 nmod\nXgone a gone\n.ends\n\
+         .subckt mid a\nX1 a leaf\nX2 a leaf\n.ends\nX1 n mid\nX2 n mid\nX3 n mid\n",
+    )])
+    .await;
+    let (ast, _) = files.build(parsed);
+    let u = ast.model_usage();
+    assert_eq!(u.mosfets, 6);
+    assert_eq!(u.models.len(), 1);
+    assert_eq!(u.models[0].1, 6);
+    assert_eq!(
+        usage_errors(&u),
+        [(no_def("gone"), 6, "X1.X1.Xgone".to_owned())]
+    );
+    let listed = chosen(&ast);
+    assert_eq!(listed.len(), 12);
+    assert_eq!(
+        listed.iter().filter(|(_, m)| *m == no_def("gone")).count(),
+        6
+    );
+
+    // a definition in a plain `.prot` block is a definition (golden case
+    // `prot_subckt`), and a name is found in any case
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".model nmod nmos level=1\n.prot\n.subckt secret a b\nM1 a b 0 0 nmod\n.ends\n.unprot\n\
+         X1 1 0 SECRET\n",
+    )])
+    .await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(chosen(&ast), pairs(&[("X1.M1", "nmod")]));
+    assert!(ast.model_usage().errors.is_empty());
+}
+
 /// HSPICE: the netlist ends at the first `.alter`; what follows describes
 /// other runs (other corners, other parameters). It used to be parsed into
 /// the same netlist, so every corner's `.lib` and `.param` were merged (the

@@ -16,13 +16,17 @@
 // parameters. A netlist without instances at the top level (a library) is
 // shown subckt by subckt.
 //
+// An X line with no definition on its instance path gets an `error:` row, and
+// a note on stderr says that the count can be too low. The exit status does
+// not change, as for the other errors.
+//
 // The parameters follow the last `.option parhier` of the netlist. Without one
 // they follow HSPICE's default, `global`, and a note on stderr says so. A
 // netlist that a `parhier=local` testbench includes has no such line: pass a
 // file that holds it as one more file.
 use netlist_db::{
     AST, FileId,
-    models::{ModelUsage, MosfetModel, Short},
+    models::{ModelUsage, MosfetModel, SelectError, Short},
     parser::parse_top_multi,
 };
 use std::{
@@ -63,18 +67,25 @@ fn print_usage(
         )?;
     }
     for (e, n, path) in &usage.errors {
-        writeln!(
-            out,
-            "{prefix}error: {e}\t{n}\t{:.3}%\te.g. {path}",
-            100.0 * *n as f64 / total
-        )?;
+        // (an X line is not a share of the MOSFETs)
+        let share = match e {
+            SelectError::NoSubckt(_) => "-".to_owned(),
+            _ => format!("{:.3}%", 100.0 * *n as f64 / total),
+        };
+        writeln!(out, "{prefix}error: {e}\t{n}\t{share}\te.g. {path}")?;
     }
     writeln!(out, "{prefix}total\t{}", usage.mosfets)
 }
 
 /// The MOSFETs of `ast`, or of its subckt `name`: listed (as they are
-/// found, not kept), or counted
-fn report(out: &mut impl Write, ast: &AST<'_>, subckt: Option<&str>, summary: bool) -> (u64, u64) {
+/// found, not kept), or counted. Returns the MOSFETs, those with a model, and
+/// the X lines with no definition.
+fn report(
+    out: &mut impl Write,
+    ast: &AST<'_>,
+    subckt: Option<&str>,
+    summary: bool,
+) -> (u64, u64, u64) {
     let no_subckt = || -> ! {
         eprintln!(
             "no subckt `{}` at the top level",
@@ -90,12 +101,22 @@ fn report(out: &mut impl Write, ast: &AST<'_>, subckt: Option<&str>, summary: bo
         };
         print_usage(out, &prefix, &usage).expect("write");
         let chosen = usage.models.iter().map(|(_, n)| n).sum();
-        (usage.mosfets, chosen)
+        let missing = usage
+            .errors
+            .iter()
+            .filter(|(e, ..)| matches!(e, SelectError::NoSubckt(_)))
+            .map(|(_, n, _)| n)
+            .sum();
+        (usage.mosfets, chosen, missing)
     } else {
-        let (mut mosfets, mut chosen) = (0, 0);
+        let (mut mosfets, mut chosen, mut missing) = (0, 0, 0);
         let mut each = |m: MosfetModel<'_, '_>| {
-            mosfets += 1;
-            chosen += u64::from(m.selection.is_ok());
+            if matches!(m.selection, Err(SelectError::NoSubckt(_))) {
+                missing += 1;
+            } else {
+                mosfets += 1;
+                chosen += u64::from(m.selection.is_ok());
+            }
             print(out, &prefix, &m).expect("write");
         };
         match subckt {
@@ -106,7 +127,7 @@ fn report(out: &mut impl Write, ast: &AST<'_>, subckt: Option<&str>, summary: bo
             }
             None => ast.for_each_mosfet_model(&mut each),
         }
-        (mosfets, chosen)
+        (mosfets, chosen, missing)
     }
 }
 
@@ -144,18 +165,22 @@ async fn main() {
         writeln!(out, "path\tmodel name\tL\tW\tNF\tmodel").expect("write");
     }
     let start = Instant::now();
-    let (mut mosfets, mut chosen) = (0, 0);
+    let (mut mosfets, mut chosen, mut missing) = (0, 0, 0);
     if subckt.is_none() && ast.instance.is_empty() {
         // a library: each subckt, with its default parameters
         for def in ast.subckt.values() {
-            let (n, c) = report(&mut out, &ast, Some(&def.name), summary);
+            let (n, c, x) = report(&mut out, &ast, Some(&def.name), summary);
             mosfets += n;
             chosen += c;
+            missing += x;
         }
     } else {
-        (mosfets, chosen) = report(&mut out, &ast, subckt.as_deref(), summary);
+        (mosfets, chosen, missing) = report(&mut out, &ast, subckt.as_deref(), summary);
     }
     out.flush().expect("write");
+    if missing > 0 {
+        eprintln!("error: {missing} X line(s) have no definition, so the count can be too low");
+    }
     eprintln!(
         "{mosfets} MOSFET(s), a model chosen for {chosen}; parsed in {:.2} s, models chosen in {:.2} s",
         parsed_in.as_secs_f64(),
