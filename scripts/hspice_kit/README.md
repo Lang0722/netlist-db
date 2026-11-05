@@ -15,24 +15,26 @@ commit the answers come from).
 What netlist-db does now:
 - parses HSPICE decks robustly (checked on 3,315 public decks), with `.lib`
   corner sections loaded fast (one read per library file);
-- chooses each MOSFET's model the way HSPICE's model selector does: the
-  model of that name, else the bin `name.N` whose LMIN <= L < LMAX and
-  WMIN <= W < WMAX, with parameters resolved through the hierarchy
-  (`.option parhier`), bin limits evaluated where the model is defined, W
-  per finger with WNFLAG;
+- chooses each MOSFET's model the way HSPICE's model selector does, by the
+  rules that this kit measured (`src/eval.rs` and `src/models.rs` state them);
 - query modes (`examples/model_select`): one line per MOSFET (streamed, any
   size), `--summary` (how many MOSFETs use each model, without flattening:
-  a 30 MB deck holding 300 million MOSFETs takes about 1 second),
+  a 30 MB deck holding 300 million MOSFETs takes less than 1 second),
   `--subckt NAME` (one subckt with its defaults), library mode.
 
 What is verified (scripts/verify_params, scripts/gen_big_netlist.py):
+- HSPICE P-2019.06-SP1-1 on this kit (`make_kit.py OUTDIR --random 30`):
+  L and W equal on all 8,645 MOSFETs (5,296 of them under `parhier=local`), and
+  the bin on all but the 5 of the first known gap below; every deck HSPICE stops
+  on, netlist-db reports an error for, but for `q_limits_same_scope`;
 - a 200,000-line, 30 MB deck with 300,000,000 MOSFETs: every count equals
   the generator's own (also with parhier=global, and per subckt);
-- 1.6 million MOSFETs of the same kind, one by one, against a separate
-  reference implementation: all equal;
-- 3,600 random decks (parameters passed through 3-5 levels, nested
-  subckts, functions, WNFLAG, both parhier): all equal to the reference, in
-  every query mode;
+- 14 million MOSFETs of the same kind, one by one: equal to the generator's
+  counts;
+- random decks (parameters passed through 3-5 levels, nested subckts,
+  functions, WNFLAG, both parhier): all equal to `pref.py`, in every query
+  mode. `pref.py` is written from the same rules, so this checks the code, not
+  the rules: only this kit does that;
 - hand-designed decks with answers known by formula (24-level chains,
   2^20-leaf trees, a 581-million-MOSFET lattice, every combination of where
   a parameter is defined or passed): all equal;
@@ -40,16 +42,64 @@ What is verified (scripts/verify_params, scripts/gen_big_netlist.py):
   L, W and NF equal on every MOSFET compared; bins equal except within 1 nm
   of a bin edge (ngspice's own tolerance).
 
-What only HSPICE can tell (and what netlist-db assumes until then):
-1. With `parhier=global`, a value passed on an instance line
-   (`X1 a b sub p=2`) against a top-level `.param p=1`: netlist-db uses the
-   passed value. (probe case 1, case 3)
-2. Bins of a multi-finger MOSFET (`W=4u NF=8`) without WNFLAG: netlist-db
-   compares the total width (W); ngspice's HSPICE mode assumes W/NF.
-   (probe case 8, deck q_nf_default) This one matters for every
-   multi-finger transistor.
-3. A length within 1 nm below a bin limit: netlist-db takes the lower bin
-   (limits exact, within 1e-9 relative). (probe case 10, deck q_edge)
+What HSPICE answered (each is a deck of this kit or a probe case):
+1. `parhier=global`: the level closest to the top wins, also over a value
+   passed below it (cases 1, 3). `parhier=local`: the closest to the reader.
+2. A value passed is computed in the new instance, not where its line is
+   (case 4, `q_override_*`). A text that reads its own name reads that name
+   above (`q_cycle_*_self*`). A value passed whose text leads back to it through
+   other names is computed, as a whole, above (`q_cycle_pass_*`, `q_cycle_text_*`);
+   the values passed are computed in the order of the line (`q_cycle_swap*`).
+3. The names and calls in the body of a `.param` function are resolved where
+   the function is defined (`q_func_*`).
+4. Bins compare `W/NF` by default (case 8, `q_nf_default`). `WNFLAG=0` on the
+   instance, else `.option wnflag=0`, turns that off; a `WNFLAG` in a model is
+   ignored (`q_wnflag*`).
+5. The edge tolerance is relative, about 2e-15 (`q_edge_tol_*`).
+6. Models and subckts are looked up along the instance path (`q_model_dynamic`,
+   `q_subckt_dynamic`), level by level: a bin that does not hold L and W hides
+   nothing (`q_localbin_out_globalexact`, `q_localhide`). Any `name.suffix` is a
+   bin of `name`, but `a.b.1` is a bin of nothing, and a name with a dot is not
+   named on an instance line (`q_nonnumeric`, `q_two_dots_*`, `q_bin_direct*`).
+   A bin looked at must set its four limits (`q_incomplete_*`, `q_mc_*`).
+7. L and W may be the first two values after the model name: numbers, names of
+   parameters or quoted expressions (`q_positional*`).
+8. `**` and `^` associate to the left, `0**y` is 0, a negative base takes the
+   integer part of `y`, and `sqrt` and `log` of a negative number give the
+   negative of the result for its absolute value (`q_expr*`). Scale factors go by
+   the first letters (`1meter` is mega, `1minute` is 60); `z` is 1e-21, `y` is
+   1e-24; an exponent makes the factor void (`1e-3k` is 0.001) (`q_units*`).
+9. The last `.option parhier` of the deck decides, wherever it is and in any form
+   (`.options`, capital letters, spaces around `=`, among other options, on a `+`
+   line, quoted), but not one inside a subckt (`q_parhier_*`). One in an `.inc`
+   file or a `.lib` section counts too (run by hand, once).
+
+Known gaps, reported by `compare_hspice.py` but not failing it:
+- HSPICE evaluates the limits of each bin in the instance of the first MOSFET
+  that looks at the bin (breadth first), and at the level of the model for all
+  the others (`q_limits_s1_s2`, `s2_s1`, `s1_s3`, `bfs`, `nested_local`,
+  `same_scope`, case 7 under local). netlist-db always does the latter: its
+  choice for a transistor does not depend on the order of the walk. This
+  matters only if a level below the model binds a name those limits read, with
+  another value: with `parhier=local`, or a name no level above binds. So it
+  reaches at most one MOSFET per bin, and none for a bin whose limits are numbers
+  (`grep -iE '(lmin|lmax|wmin|wmax) *= *[^0-9.+ -]' FILES` lists the others). On
+  such a deck HSPICE can also stop.
+- `M1 d g 0 a pl pw` (3 nodes, then names of parameters after the model name,
+  `q_positional_names_3`): HSPICE knows the models when it reads the line.
+  netlist-db's parser does not: it takes `a` for a 4th node, then reports that
+  there is no model `pl`.
+
+Known gaps not in this kit:
+- an X line with no definition on its instance path, or a definition
+  instantiated inside itself: HSPICE stops. netlist-db skips that line and
+  reports nothing, so the MOSFETs below it are not counted;
+- `.param` functions with the same name at several levels: HSPICE keeps, in
+  some cases, mainly under `parhier=local`, the function that an expression found
+  in the first instance that evaluated it;
+- `m` on an X line: HSPICE computes it at the level of the line, netlist-db in
+  the new instance. This can change a result only if an expression reads `m`;
+- `20db`: HSPICE gives 9.99999907, netlist-db 10.
 
 ## On the HSPICE machine
 
@@ -83,21 +133,15 @@ Also useful, if you can (optional):
 
 - `probe_global`, `probe_local`: the questions above, by `.measure`
   (values of node voltages, and drain currents that tell which bin was
-  chosen). The most important results.
-- Decks `q_gap`, `q_dotted`, `q_nonnumeric`, `q_localhide`: netlist-db finds
-  no model for their MOSFET; HSPICE should stop with an error there (that is
-  agreement). If HSPICE runs one of them, it chose a model netlist-db
-  does not: the comparison shows which.
-- `q_wnflag_instance`, `q_wnflag_option`: `wnflag` on an instance line and
-  `.option wnflag` are ngspice's; HSPICE may reject or ignore them. Its
-  message is the answer.
-- `wnflag=1` in a model card (`probe_*`, `q_wnflag_model`, decks `r_local*`,
-  `r_global*`): if HSPICE stops on it as an unknown parameter, delete
-  `wnflag=1` from those decks' `.model` lines and run them again (the
-  comparison will show the bins that change, as expected).
+  chosen).
+- Some `q_*` decks make HSPICE stop (`q_gap`, `q_dotted`, `q_cycle_plain_*`,
+  ...): netlist-db reports an error for their MOSFET, and that is agreement. If
+  HSPICE runs one of them, it chose a model netlist-db does not: the comparison
+  shows which.
 - The other decks (`chain_*`, `matrix_*`, `lattice4_*`, `tree6`, `bins`,
   `scale`, `library`, `r_*`) should run cleanly. Each MOSFET's L, W and bin
-  are read from `.measure` of LV1, LV2, LV9 (and the `.op` table).
+  are read from `.measure` of LV1, LV2, LV9 (and the `.op` table; LV9 is not
+  used below an L of 10 nm, where the threshold is no more VTH0 alone).
 - An older HSPICE may not take `version=4.7` in the BSIM4 model cards (the
   probes and `r_*` decks): set it to a version it has (the version does not
   change the choice of bins). Any other message HSPICE stops on is a result
@@ -115,8 +159,8 @@ python3 scripts/hspice_kit/compare_hspice.py hspice_kit results
 
 It prints the probe's table (netlist-db's answer and HSPICE's, per case
 and parhier), then per deck whether HSPICE ran it, and per MOSFET any
-difference of L, W or bin. A difference on the three questions above
-changes netlist-db's rule to HSPICE's; any other is looked into.
+difference of L, W or bin. Any difference that is not a known gap is a bug of
+netlist-db, or a new rule to measure.
 
 ## Contents
 

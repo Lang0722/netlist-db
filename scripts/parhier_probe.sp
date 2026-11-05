@@ -33,7 +33,7 @@ M1 d d 0 0 nch w='v*1u' l=1u
 .ends show
 
 * 1. a top-level .param, a .subckt default, and a value passed:
-*    global: 1 (top-level wins) or 2 (passed wins)? local: 2
+*    global: 1 (the top-level .param wins), local: 2
 .subckt c1 d p=3
 X1 d show v=p
 .ends c1
@@ -41,16 +41,16 @@ X1 d show v=p
 .subckt c2 d p=3
 X1 d show v=p
 .ends c2
-* 3. a value passed two levels up, read below: global 1 or 5? local 5
+* 3. a value passed two levels up, read below: global 1, local 5
 .subckt c3leaf d
 X1 d show v=p
 .ends c3leaf
 .subckt c3 d p=4
 X1 d c3leaf
 .ends c3
-* 4. an expression passed on an instance line, computed where the line is
-*    (the parent's k=7, q=8): 15; not where it goes (the child's default
-*    k=100 and .param q=200): 300
+* 4. an expression passed on an instance line is computed in the new
+*    instance: local, the child's default k=100 and .param q=200: 300;
+*    global, the level closest to the top, c4's k=7 and q=8: 15
 .subckt c4child d s=0 k=100
 .param q=200
 X1 d show v='s'
@@ -58,8 +58,8 @@ X1 d show v='s'
 .subckt c4 d k=7 q=8
 X1 d c4child s='k+q'
 .ends c4
-* 5. a .param in the subckt and a value passed for the same name:
-*    passed (2), .param (5) or default (3)?
+* 5. a .param in the subckt, a default and a value passed for the same name:
+*    local: passed (2); global: the top-level .param (1)
 .subckt c5 d p=3
 .param p=5
 X1 d show v=p
@@ -69,17 +69,18 @@ X1 d show v=p
 X1 d show v=b
 .ends c6
 * 7. the limits of a global model read the global `lb` (2e-7), not the
-*    subckt's: L=5e-7 is in nch.2 (with lb=1e-6 it would be nch.1)
+*    subckt's: L=5e-7 is in nch.2 (with lb=1e-6 it would be nch.1).
+*    Known gap: with parhier=local, this first MOSFET that looks at nch.1
+*    reads the subckt's lb, and HSPICE takes nch.1 (see src/models.rs).
 .subckt c7 d g lb=1e-6
 M1 d g 0 0 nch w=1u l=5e-7
 .ends c7
-* 8. NF=8 fingers of W=4u (0.5u each), no WNFLAG: by the total width nfa.2,
-*    by the width per finger nfa.1
+* 8. NF=8 fingers of W=4u (0.5u each), no WNFLAG: the width per finger, nfa.1
 M8 d8 g 0 0 nfa w=4u l=1u nf=8
-* 9. the same, with WNFLAG=1 in the model: nfb.1
+* 9. the same, with WNFLAG=1 in the model, which changes nothing: nfb.1
 M9 d9 g 0 0 nfb w=4u l=1u nf=8
-* 10. L 0.5 nm below LMAX=1u: edg.1 if the limits are exact; edg.2 if a
-*     value within 1 nm of a limit counts as on it (ngspice)
+* 10. L 0.5 nm below LMAX=1u: edg.1; HSPICE's tolerance is about 2e-15
+*     relative, far below ngspice's 1 nm
 M10 d10 g 0 0 edg w=1u l=0.9995u
 * 11. L on the edge: edg.2
 M11 d11 g 0 0 edg w=1u l=1u

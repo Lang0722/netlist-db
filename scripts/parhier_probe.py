@@ -21,13 +21,13 @@ CASES = {
     "case1": ("Xc1.X1.M1", "top .param p=1, default p=3, passed p=2"),
     "case2": ("Xc2.X1.M1", "top .param p=1, default p=3, nothing passed"),
     "case3": ("Xc3.X1.X1.M1", "top .param p=1, p=5 passed two levels up"),
-    "case4": ("Xc4.X1.X1.M1", "s='k+q' passed: the parent's 7+8, not the child's 100+200"),
+    "case4": ("Xc4.X1.X1.M1", "s='k+q' passed, computed in the new instance: global 7+8, local 100+200"),
     "case5": ("Xc5.X1.M1", "default p=3, .param p=5 inside, passed p=2"),
     "case6": ("Xc6.X1.M1", "a=6 passed, default b='a*2'"),
     "case7": ("Xc7.M1", "bin of a global model, lmax='lb' (global 2e-7, subckt 1e-6)"),
-    "case8": ("M8", "W=4u NF=8, no WNFLAG: total width .2, width per finger .1"),
-    "case9": ("M9", "W=4u NF=8, WNFLAG=1 in the model: .1"),
-    "case10": ("M10", "L 0.5 nm below an edge: exact .1, within 1 nm .2"),
+    "case8": ("M8", "W=4u NF=8, no WNFLAG: the width per finger, .1"),
+    "case9": ("M9", "W=4u NF=8, WNFLAG=1 in the model changes nothing: .1"),
+    "case10": ("M10", "L 0.5 nm below an edge: .1, the tolerance is far below 1 nm"),
     "case11": ("M11", "L on an edge: .2"),
 }
 BINS = ("case7", "case8", "case9", "case10", "case11")

@@ -8,9 +8,9 @@ results/ directory that run_hspice.sh filled (hspice_results.tar.gz).
 
 For each deck: whether HSPICE ran it (errors in the .lis), and for each
 MOSFET its L (LV1), W (LV2: W/NF with NF > 1) and bin (from LV9: VTH0 is
-0.2 + 0.02*N for a bin `name.N`) against netlist-db's; the bins named in the
-.lis operating point tables too, when they can be read. For the probes,
-each case's value against netlist-db's under each parhier.
+0.2 + 0.02*N for a bin `name.N`) and the model its operating point table
+names against netlist-db's. For the probes, each case's value against
+netlist-db's under each parhier. Exits with 1 if anything differs.
 """
 import collections
 import glob
@@ -60,16 +60,35 @@ def errors(lis):
     return out
 
 
+def directory(lines):
+    """The circuit name directory of a listing: circuit number -> its path
+    with the final dot ('' for the main circuit). (The `subckt` rows of the
+    operating point tables cut long paths and skip the main circuit.)"""
+    paths = {0: ""}
+    for i, line in enumerate(lines):
+        if "circuit name directory" not in line:
+            continue
+        for row in lines[i + 1:]:
+            m = re.match(r"\s+(\d+)\s+(\S+\.)(?:\s|$)", row)
+            if m:
+                paths[int(m.group(1))] = m.group(2).lower()
+            elif not re.match(r"\s*(circuit number|number\s|0 main|\S+\s+\d+\.\d+\s*$)", row):
+                break
+        break
+    return paths
+
+
 def op_models(lis):
-    """The model of each MOSFET in the operating point tables of a listing,
-    by element name as printed (`1:m0`, with the subckt row's path when
-    there is one): name -> model. Best effort: the format varies."""
+    """The model of each MOSFET in the operating point tables of a listing:
+    path -> model. An `element` row names MOSFETs by circuit number (`5:m0`),
+    the `model` row below it gives their models (`0:nch.4`)."""
     found = {}
     if not os.path.exists(lis):
         return found
     lines = open(lis, errors="replace").read().splitlines()
+    paths = directory(lines)
     in_mos = False
-    subckt, element = None, None
+    element = None
     for line in lines:
         s = line.strip()
         if s.startswith("****"):
@@ -80,20 +99,32 @@ def op_models(lis):
         parts = s.split()
         if not parts:
             continue
-        if parts[0] == "subckt":
-            subckt = parts[1:]
-        elif parts[0] == "element":
+        if parts[0] == "element":
             element = parts[1:]
         elif parts[0] == "model" and element:
-            models = parts[1:]
-            for i, (e, m) in enumerate(zip(element, models)):
-                local = e.split(":", 1)[-1]
-                path = local
-                if subckt and len(subckt) == len(element):
-                    path = f"{subckt[i]}.{local}"
+            for e, m in zip(element, parts[1:]):
+                number, local = e.split(":", 1)
+                path = paths.get(int(number), f"?{number}.") + local
                 found[path.lower()] = m.split(":", 1)[-1].lower()
-            subckt, element = None, None
+            element = None
     return found
+
+
+# HSPICE stops as netlist-db's error says: no model or bin for the MOSFET, or
+# a value it cannot compute. Any other stop does not answer the question.
+NO_ANSWER = re.compile(r"definition of model/subckt .* is not found|does not fit into the wmax/wmin"
+                       r"|must set all four|cannot redefine parameter|undefined parameter"
+                       r"|loop reference|must not be negative", re.I)
+
+# Where netlist-db differs from HSPICE on purpose. Reported, but they do not
+# fail this comparison.
+# - The first MOSFET that looks at a bin reads the bin's limits in its own
+#   instance (see the known gap in src/models.rs).
+# - `M1 d g 0 a pl pw`: 3 nodes, then names of parameters after the model name.
+#   HSPICE knows the models when it reads the line; netlist-db's parser takes
+#   `a` for a 4th node and `pl` for the model, and then reports no model `pl`.
+KNOWN_GAPS = {"q_limits_s1_s2", "q_limits_s2_s1", "q_limits_s1_s3", "q_limits_bfs", "q_limits_nested_local",
+              "q_limits_same_scope", ("case7", "local"), "q_positional_names_3"}
 
 
 def bin_of(model):
@@ -110,11 +141,17 @@ def compare_deck(kit, results, name, verbose):
     report = collections.Counter()
     diffs = []
     if want_error:
-        # netlist-db finds no model for some MOSFET: HSPICE should stop
-        verdict = "agree (HSPICE stops too)" if errs else "DIFFER: HSPICE ran it"
+        # netlist-db finds no model for some MOSFET: HSPICE should stop, on
+        # that (a stop on anything else does not tell)
+        if any(NO_ANSWER.search(e) for e in errs):
+            verdict = "agree (HSPICE stops too)"
+        elif errs:
+            verdict = "HSPICE stopped (on something else)"
+        else:
+            verdict = "DIFFER: HSPICE ran it"
         return verdict, errs[:3], report, diffs
     if errs and not meas:
-        return "HSPICE stopped", errs[:3], report, diffs
+        return "DIFFER: HSPICE stopped", errs[:3], report, diffs
     if meas is None:
         return "no results", errs[:3], report, diffs
     ops = op_models(lis)
@@ -134,9 +171,12 @@ def compare_deck(kit, results, name, verbose):
             report["W agree (total W)"] += 1
         else:
             diffs.append(f"{path}: W {hw} (netlist-db {w:g}, NF {nf:g})")
-        # the bin, from the threshold
+        # the bin, from the threshold (which is no more VTH0 alone at an L of
+        # a few nm: the `.op` table below still tells)
         if hv is None or hv == 0:
             report["bin unknown (LV9 missing or 0)"] += 1
+        elif l < 1e-8:
+            report["bin unknown (L below 10 nm)"] += 1
         else:
             n = round((abs(hv) - VTH_BASE) / VTH_STEP)
             if n == bin_of(model):
@@ -144,16 +184,29 @@ def compare_deck(kit, results, name, verbose):
             else:
                 diffs.append(f"{path}: bin {n} from LV9={hv:g} (netlist-db {model})")
         # the bin, from the operating point table
-        if path in ops:
-            if ops[path] == model.lower():
-                report["model agree (.op)"] += 1
-            else:
-                diffs.append(f"{path}: .op model {ops[path]} (netlist-db {model})")
+        if path not in ops:
+            report["no .op row"] += 1
+        elif ops[path] == model.lower():
+            report["model agree (.op)"] += 1
+        else:
+            diffs.append(f"{path}: .op model {ops[path]} (netlist-db {model})")
     verdict = "agree" if not diffs else f"DIFFER ({len(diffs)})"
     return verdict, errs[:3], report, diffs
 
 
+def n_agrees(n, h):
+    """netlist-db's answer `n` to a probe case against HSPICE's value `h`"""
+    if h is None:
+        return False
+    if "." in n and not re.fullmatch(r"[\d.e+-]+", n):
+        # a bin: HSPICE's drain current tells .1 (above 1 uA) or .2
+        return n.endswith(".1" if abs(h) > 1e-6 else ".2")
+    return abs(h - float(n)) <= 1e-6 * abs(float(n))
+
+
 def compare_probe(kit, results):
+    """Prints the probe's table; returns how many cases differ"""
+    differ = 0
     exp = {}
     for mode in ("global", "local"):
         for line in open(os.path.join(kit, "expected", f"probe_{mode}.cases.tsv")).read().splitlines()[1:]:
@@ -171,23 +224,24 @@ def compare_probe(kit, results):
                 cells.append("?")
                 ok = False
                 continue
-            if "." in n and not re.fullmatch(r"[\d.e+-]+", n):
-                # a bin: HSPICE's drain current tells .1 (above 1 uA) or .2
-                got = ".1" if abs(h) > 1e-6 else ".2"
-                cells.append(got)
-                ok &= n.endswith(got)
-            else:
-                cells.append(f"{h:g}")
-                ok &= abs(h - float(n)) <= 1e-6 * abs(float(n))
+            is_bin = "." in n and not re.fullmatch(r"[\d.e+-]+", n)
+            cells.append((".1" if abs(h) > 1e-6 else ".2") if is_bin else f"{h:g}")
+            ok &= n_agrees(n, h)
+        # (the known gap is under parhier=local: netlist-db must keep the
+        # global answer)
+        known = not ok and (case, "local") in KNOWN_GAPS and n_agrees(exp[case]["global"], hs["global"].get(case))
+        differ += not ok and not known
         nd = f"{exp[case]['global']} / {exp[case]['local']}"
-        print(f"{case:7}{nd:>26}{' / '.join(cells):>26}  {'agree ' if ok else 'DIFFER'}   {exp[case]['what']}")
+        verdict = "known " if known else "agree " if ok else "DIFFER"
+        print(f"{case:7}{nd:>26}{' / '.join(cells):>26}  {verdict}   {exp[case]['what']}")
+    return differ
 
 
 def main():
     kit, results = sys.argv[1], sys.argv[2]
     verbose = "--verbose" in sys.argv
     print("== the probes (parhier_probe.sp)")
-    compare_probe(kit, results)
+    differ = compare_probe(kit, results)
     print()
     print("== the decks")
     totals = collections.Counter()
@@ -196,6 +250,8 @@ def main():
         if name.startswith("probe_"):
             continue
         verdict, errs, report, diffs = compare_deck(kit, results, name, verbose)
+        if name in KNOWN_GAPS and verdict.startswith("DIFFER"):
+            verdict = "known gap: " + verdict
         totals.update(report)
         totals["decks " + verdict.split(" ")[0]] += 1
         detail = ", ".join(f"{k} {v}" for k, v in sorted(report.items()))
@@ -207,6 +263,7 @@ def main():
     print()
     for k in sorted(totals):
         print(f"{k:40} {totals[k]}")
+    sys.exit(1 if differ or totals["decks DIFFER"] or totals["decks DIFFER:"] else 0)
 
 
 if __name__ == "__main__":
