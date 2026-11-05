@@ -519,6 +519,10 @@ pub trait SpiceFmt: Sized {
             OptionDispaly(&t.nb, |nb, f| write!(f, " {nb}")),
             t.mname,
         )?;
+        for v in &t.positional {
+            f.write_char(' ')?;
+            self.value(v, f)?;
+        }
         display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn bjt<W: fmt::Write>(&self, t: &instance::BJT<'_>, f: &mut W) -> fmt::Result {

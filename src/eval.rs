@@ -8,8 +8,24 @@
 //! their nominal value, as in a nominal (not Monte Carlo) simulation.
 //!
 //! [`Scope`] holds the parameters of one level of the hierarchy, and finds a
-//! parameter defined at several levels with HSPICE's rules
-//! (`.option parhier`).
+//! parameter defined at several levels with HSPICE's rules (measured on
+//! HSPICE P-2019.06 with `scripts/hspice_kit`):
+//! - At one level, a value passed on the instance line hides the level's
+//!   `.param` statements, which hide its `.subckt` defaults.
+//! - `.option parhier=global` (the default) takes the level closest to the
+//!   top that binds the name, also over a value passed below it;
+//!   `parhier=local` takes the level closest to the reader.
+//! - The text that wins is evaluated at the level that holds it. So the text
+//!   of a value passed is evaluated in the new instance. The values passed
+//!   are computed first, in the order of the line.
+//! - A text that reads its own name reads that name at the level above
+//!   (`w='w*k'`: `w` from above, `k` as usual).
+//! - A value passed whose text leads back to it through other names
+//!   (`a='c*k'` with `.param c='a*3'`) is evaluated, as a whole, at the level
+//!   above. Any other loop is an error.
+//! - The same order chooses among functions defined with `.param f(x)=...`.
+//!   The names and the calls in a function's body are resolved at the level
+//!   that holds the function, not where it is called.
 //!
 //! ```
 //! use netlist_db::eval::{ParHier, Scope};
@@ -86,29 +102,25 @@ impl fmt::Display for EvalError {
 
 impl std::error::Error for EvalError {}
 
-/// Which definition of a parameter defined at several levels of the
-/// hierarchy is used (`.option parhier`). A value passed on the line of a
-/// subckt instance (`X1 a b inv w=2u`) is always used inside that instance
-/// (the closest one, if several instances above pass it); the rule decides
-/// between the other definitions: `.param` statements and `.subckt` default
-/// values.
+/// Which level is used for a parameter bound at several levels of the
+/// hierarchy (`.option parhier`). A level binds a name with a value passed on
+/// its instance line (`X1 a b inv w=2u`), a `.param` statement or a `.subckt`
+/// default value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ParHier {
-    /// The definition closest to the top level: e.g. a top-level `.param w`
-    /// overrides the default value of a `.subckt` parameter `w` (HSPICE's
-    /// default)
+    /// The level closest to the top: e.g. a top-level `.param w` wins over a
+    /// `.subckt` default and over a value passed on an instance line
+    /// (HSPICE's default)
     #[default]
     Global,
-    /// The definition closest to the element
+    /// The level closest to the element
     Local,
 }
 
-/// How a parameter is bound at a level (see [`Scope::binding`]): with
-/// `parhier=local`, the value of its closest definition or passed value; with
-/// `parhier=global`, the closest value passed and the value of the definition
-/// closest to the top. A value is the bits of a number, or the error that
-/// computing it gave.
-pub(crate) type Binding = (Option<Result<u64, String>>, Option<Result<u64, String>>);
+/// How a parameter is bound at a level (see [`Scope::binding`]): the value it
+/// has there (the bits of a number, or the error that computing it gave), if
+/// this level or one above binds it.
+pub(crate) type Binding = Option<Result<u64, String>>;
 
 #[derive(Debug, Clone)]
 enum Def {
@@ -122,6 +134,15 @@ impl From<Result<f64, EvalError>> for Def {
         match value {
             Ok(n) => Def::Num(n),
             Err(e) => Def::Err(e),
+        }
+    }
+}
+
+impl From<&Value<'_>> for Def {
+    fn from(value: &Value<'_>) -> Self {
+        match value {
+            Value::Num(n) => Def::Num(*n),
+            Value::Expr(e) => Def::Expr(e.to_string()),
         }
     }
 }
@@ -142,7 +163,7 @@ pub struct Scope<'p> {
     parhier: ParHier,
     /// `.param` statements and `.subckt` defaults
     defs: HashMap<String, Def>,
-    /// values passed on the instance line
+    /// values passed on the instance line: they hide `defs`
     passed: HashMap<String, Def>,
     funcs: HashMap<String, Func>,
     cache: RefCell<HashMap<String, Result<f64, EvalError>>>,
@@ -191,10 +212,7 @@ impl<'p> Scope<'p> {
     /// `.subckt` line: `name=value`, or a function `name(a, b)='expr'`. A
     /// later definition of the same name replaces an earlier one.
     pub fn define(&mut self, kv: &KeyValue<'_>) {
-        let body = match &kv.v {
-            Value::Num(n) => Def::Num(*n),
-            Value::Expr(e) => Def::Expr(e.to_string()),
-        };
+        let body = Def::from(&kv.v);
         if let Some((name, args)) = function_key(&kv.k) {
             self.funcs.insert(name, Func { args, body });
         } else {
@@ -211,23 +229,40 @@ impl<'p> Scope<'p> {
     }
 
     /// Pass a value to this level, as the line of a subckt instance does
-    /// (`X1 a b inv w=2u`); it is computed at the level of the instance line
-    pub fn pass(&mut self, name: &str, value: Result<f64, EvalError>) {
-        self.passed.insert(name.to_ascii_lowercase(), value.into());
+    /// (`X1 a b inv w='2*p'`). It is evaluated at this level (see the module's
+    /// documentation).
+    pub fn pass(&mut self, kv: &KeyValue<'_>) {
+        self.passed
+            .insert(kv.k.to_ascii_lowercase(), (&kv.v).into());
+        self.cache.get_mut().clear();
+    }
+
+    /// Whether this level (not one above) binds `key`, a lowercase name
+    fn binds(&self, key: &str) -> bool {
+        self.passed.contains_key(key) || self.defs.contains_key(key)
     }
 
     /// Whether `name` is defined at this level (not above)
     pub fn defines(&self, name: &str) -> bool {
-        let key = name.to_ascii_lowercase();
-        self.defs.contains_key(&key) || self.passed.contains_key(&key)
+        self.binds(&name.to_ascii_lowercase())
     }
 
     /// The value of the parameter `name`
     pub fn get(&self, name: &str) -> Result<f64, EvalError> {
         let key = name.to_ascii_lowercase();
         match self.find(&key) {
-            Some((scope, true)) => scope.passed_value(&key),
-            Some((scope, false)) => scope.value_here(&key),
+            Some(scope) => match scope.value_here(&key) {
+                // a text that reads its own name: the name at the level above
+                Err(EvalError::Recursive(looped))
+                    if looped == key && self.active.borrow().last() == Some(&key) =>
+                {
+                    match self.parent.and_then(|p| p.find(&key)) {
+                        Some(above) => above.value_here(&key),
+                        None => Err(EvalError::Recursive(looped)),
+                    }
+                }
+                result => result,
+            },
             None => match key.as_str() {
                 "pi" => Ok(PI),
                 // simulation variables
@@ -266,75 +301,39 @@ impl<'p> Scope<'p> {
         })
     }
 
-    /// The level whose definition of `key` is used, and whether it is a
-    /// passed value
-    fn find(&self, key: &str) -> Option<(&Scope<'p>, bool)> {
+    /// The level whose binding of `key` is used
+    fn find(&self, key: &str) -> Option<&Scope<'p>> {
+        let mut levels = self.levels().filter(|s| s.binds(key));
         match self.parhier {
-            ParHier::Local => self.levels().find_map(|s| {
-                if s.passed.contains_key(key) {
-                    Some((s, true))
-                } else if s.defs.contains_key(key) {
-                    Some((s, false))
-                } else {
-                    None
-                }
-            }),
-            // the closest passed value, else the definition closest to the top
-            ParHier::Global => self
-                .levels()
-                .find(|s| s.passed.contains_key(key))
-                .map(|s| (s, true))
-                .or_else(|| {
-                    self.levels()
-                        .filter(|s| s.defs.contains_key(key))
-                        .last()
-                        .map(|s| (s, false))
-                }),
-        }
-    }
-
-    /// The value passed to this level for `key`
-    fn passed_value(&self, key: &str) -> Result<f64, EvalError> {
-        match &self.passed[key] {
-            Def::Num(n) => Ok(*n),
-            Def::Err(e) => Err(e.clone()),
-            Def::Expr(e) => self.eval_str(e),
+            ParHier::Local => levels.next(),
+            ParHier::Global => levels.last(),
         }
     }
 
     /// How the parameter `name` is bound, seen from this level: what decides
     /// its value here, and in the levels below that do not bind it
-    /// themselves. Two levels with the same bindings for the parameters that
-    /// an expression reads give it the same value.
+    /// themselves (with `parhier=global`, in all those below). Two levels
+    /// with the same bindings for the parameters that an expression reads
+    /// give it the same value.
     pub(crate) fn binding(&self, name: &str) -> Binding {
         let key = name.to_ascii_lowercase();
-        let bits = |v: Result<f64, EvalError>| v.map(f64::to_bits).map_err(|e| e.to_string());
-        match self.parhier {
-            // the closest definition or passed value
-            ParHier::Local => (
-                self.find(&key).map(|(s, passed)| {
-                    bits(if passed {
-                        s.passed_value(&key)
-                    } else {
-                        s.value_here(&key)
-                    })
-                }),
-                None,
-            ),
-            // the closest passed value, and the definition closest to the top
-            ParHier::Global => (
-                self.levels()
-                    .find(|s| s.passed.contains_key(&key))
-                    .map(|s| bits(s.passed_value(&key))),
-                self.levels()
-                    .filter(|s| s.defs.contains_key(&key))
-                    .last()
-                    .map(|s| bits(s.value_here(&key))),
-            ),
+        self.find(&key).map(|s| {
+            s.value_here(&key)
+                .map(f64::to_bits)
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    /// The value of a definition, evaluated at this level
+    fn value_of(&self, def: &Def) -> Result<f64, EvalError> {
+        match def {
+            Def::Num(n) => Ok(*n),
+            Def::Expr(e) => self.eval_str(e),
+            Def::Err(e) => Err(e.clone()),
         }
     }
 
-    /// The value of `key`, which this level defines
+    /// The value of `key`, which this level binds
     fn value_here(&self, key: &str) -> Result<f64, EvalError> {
         if let Some(v) = self.cache.borrow().get(key) {
             return v.clone();
@@ -345,14 +344,23 @@ impl<'p> Scope<'p> {
         if self.active.borrow().len() >= MAX_DEPTH {
             return Err(EvalError::TooDeep(key.to_owned()));
         }
+        let passed = self.passed.get(key);
         self.active.borrow_mut().push(key.to_owned());
-        let v = match &self.defs[key] {
-            Def::Num(n) => Ok(*n),
-            Def::Expr(e) => self.eval_str(e),
-            Def::Err(e) => Err(e.clone()),
-        };
+        let mut v = self.value_of(passed.unwrap_or_else(|| &self.defs[key]));
         self.active.borrow_mut().pop();
-        self.cache.borrow_mut().insert(key.to_owned(), v.clone());
+        // a value passed whose text leads back to it: as a whole, above
+        if matches!(&v, Err(EvalError::Recursive(looped)) if looped == key)
+            && let (Some(def), Some(parent)) = (passed, self.parent)
+        {
+            v = parent
+                .value_of(def)
+                .map_err(|_| EvalError::Recursive(key.to_owned()));
+        }
+        // (a cycle depends on the name where the evaluation started: read
+        // later, this name may have a value)
+        if !matches!(v, Err(EvalError::Recursive(_))) {
+            self.cache.borrow_mut().insert(key.to_owned(), v.clone());
+        }
         v
     }
 
@@ -378,15 +386,15 @@ impl<'p> Scope<'p> {
         Ok(tree)
     }
 
-    fn func(&self, name: &str) -> Option<&Func> {
-        let mut level = Some(self);
-        while let Some(s) = level {
-            if let Some(f) = s.funcs.get(name) {
-                return Some(f);
-            }
-            level = s.parent;
+    /// The function `name` that is used here, and the level that holds it
+    fn func(&self, name: &str) -> Option<(&Scope<'p>, &Func)> {
+        let mut levels = self
+            .levels()
+            .filter_map(|s| s.funcs.get(name).map(|f| (s, f)));
+        match self.parhier {
+            ParHier::Local => levels.next(),
+            ParHier::Global => levels.last(),
         }
-        None
     }
 
     /// `locals`: the arguments of the user function being evaluated
@@ -423,7 +431,7 @@ impl<'p> Scope<'p> {
                     Op::Sub => x - y,
                     Op::Mul => x * y,
                     Op::Div => x / y,
-                    Op::Pow => x.powf(y),
+                    Op::Pow => power(x, y),
                     Op::Lt => flag(x < y),
                     Op::Le => flag(x <= y),
                     Op::Gt => flag(x > y),
@@ -451,7 +459,7 @@ impl<'p> Scope<'p> {
                         }),
                     };
                 }
-                if let Some(f) = self.func(name) {
+                if let Some((holder, f)) = self.func(name) {
                     if f.args.len() != args.len() {
                         return Err(EvalError::Arguments {
                             function: name.clone(),
@@ -467,8 +475,9 @@ impl<'p> Scope<'p> {
                     return match &f.body {
                         Def::Num(n) => Ok(*n),
                         Def::Expr(body) => {
+                            // (its names and calls: where it is defined)
                             let tree = self.parse(body)?;
-                            self.eval_tree(&tree, &locals, depth + 1)
+                            holder.eval_tree(&tree, &locals, depth + 1)
                         }
                         Def::Err(e) => Err(e.clone()),
                     };
@@ -518,9 +527,9 @@ impl<'s> AST<'s> {
 
 /// The parameters that the expression `expr` reads, lowercase, each once.
 /// `None` if it calls one of `functions`, functions defined with `.param
-/// f(x)=...` (the parameters a function's body reads are those of the level
-/// where it is called). An expression that is not valid reads nothing: it is
-/// an error wherever it is.
+/// f(x)=...` (a function's body reads the parameters of the level that holds
+/// it, which depends on the levels above). An expression that is not valid
+/// reads nothing: it is an error wherever it is.
 pub(crate) fn expr_names(expr: &str, functions: &HashSet<String>) -> Option<Vec<String>> {
     fn walk(e: &Expr, functions: &HashSet<String>, out: &mut Vec<String>) -> Option<()> {
         match e {
@@ -602,6 +611,18 @@ fn is_simulation_function(name: &str) -> bool {
         && name[2..].bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// `x**y`, as HSPICE computes it: 0 for a zero base and any `y`, and the
+/// integer part of `y` for a negative base
+fn power(x: f64, y: f64) -> f64 {
+    if x == 0.0 {
+        0.0
+    } else if x < 0.0 {
+        x.powf(y.trunc())
+    } else {
+        x.powf(y)
+    }
+}
+
 /// HSPICE's built-in functions; `None` if `name` is not one
 fn builtin(name: &str, a: &[f64]) -> Option<Result<f64, EvalError>> {
     let arity = |expected: &'static str| EvalError::Arguments {
@@ -636,11 +657,12 @@ fn builtin(name: &str, a: &[f64]) -> Option<Result<f64, EvalError>> {
         "sinh" => one(f64::sinh),
         "cosh" => one(f64::cosh),
         "tanh" => one(f64::tanh),
-        "sqrt" => one(f64::sqrt),
+        // (a negative argument gives the negative of the result for `|x|`)
+        "sqrt" => one(|x| x.signum() * x.abs().sqrt()),
         "exp" => one(f64::exp),
         // natural logarithm, as in HSPICE
-        "log" | "ln" => one(f64::ln),
-        "log10" => one(f64::log10),
+        "log" | "ln" => one(|x| x.signum() * x.abs().ln()),
+        "log10" => one(|x| x.signum() * x.abs().log10()),
         "abs" => one(f64::abs),
         "floor" => one(f64::floor),
         "ceil" => one(f64::ceil),
@@ -695,7 +717,9 @@ enum Expr {
 
 /// A recursive-descent parser, by increasing precedence:
 /// `?:`, `||`, `&&`, `== !=`, `< <= > >=`, `+ -`, `* /`, unary `- + !`,
-/// `** ^` (right-associative, binds tighter than a unary minus before it).
+/// `** ^`. As in HSPICE, `** ^` associate to the left (`2**3**2` is 64) and bind
+/// tighter than a unary minus before them (`-2**2` is -4); a unary minus right
+/// after them takes the next operand only (`2**-3**2` is `(2**-3)**2`).
 struct Parser<'e> {
     s: &'e str,
     pos: usize,
@@ -855,12 +879,28 @@ impl<'e> Parser<'e> {
     }
 
     fn power(&mut self) -> Result<Expr, EvalError> {
-        let base = self.primary()?;
-        if self.eat("**") || self.eat("^") {
-            let exp = self.unary()?;
-            return Ok(Expr::Bin(Op::Pow, Box::new(base), Box::new(exp)));
+        let mut base = self.primary()?;
+        while self.eat("**") || self.eat("^") {
+            let exp = self.exponent()?;
+            base = Expr::Bin(Op::Pow, Box::new(base), Box::new(exp));
         }
         Ok(base)
+    }
+
+    fn exponent(&mut self) -> Result<Expr, EvalError> {
+        self.nest()?;
+        let e = if self.eat("-") {
+            Expr::Neg(Box::new(self.exponent()?))
+        } else if self.eat("+") {
+            self.exponent()?
+        } else if self.peek_not("!", "!=") {
+            self.pos += 1;
+            Expr::Not(Box::new(self.exponent()?))
+        } else {
+            self.primary()?
+        };
+        self.depth -= 1;
+        Ok(e)
     }
 
     fn primary(&mut self) -> Result<Expr, EvalError> {
@@ -935,9 +975,20 @@ mod tests {
         assert!(close(e("1meg"), 1e6));
         assert!(close(e("1+2*3"), 7.0));
         assert!(close(e("(1+2)*3"), 9.0));
-        assert!(close(e("2**3**2"), 512.0));
         assert!(close(e("2^10"), 1024.0));
+        // (as measured on HSPICE)
+        assert!(close(e("2**3**2"), 64.0));
+        assert!(close(e("2^3^2"), 64.0));
+        assert!(close(e("2**-3**2"), 0.015625));
         assert!(close(e("-2**2"), -4.0));
+        assert!(close(e("-2**2+10"), 6.0));
+        assert!(close(e("(-2)**3"), -8.0));
+        assert!(close(e("(-2)**1.5"), -2.0));
+        assert!(close(e("(-2)**2.5"), 4.0));
+        assert!(close(e("(-2)**0.5"), 1.0));
+        assert!(close(e("1+0**0"), 1.0));
+        assert!(close(e("1+0**-1"), 1.0));
+        assert!(close(e("1+0**0.5"), 1.0));
         assert!(close(e("w/l"), 20.0));
         assert!(close(e("2*W+100n"), 4.1e-6));
         assert!(close(e("1 - 2 - 3"), -4.0));
@@ -952,10 +1003,53 @@ mod tests {
     }
 
     #[test]
+    fn numbers_as_measured_on_hspice() {
+        let s = top(&[]);
+        for (text, value) in [
+            ("1me", 1e6),
+            ("1meter", 1e6),
+            ("1meg", 1e6),
+            ("1megs", 1e6),
+            ("1x", 1e6),
+            ("1m", 1e-3),
+            ("1M", 1e-3),
+            ("1mohm", 1e-3),
+            ("1mi", 25.4e-6),
+            ("1mil", 25.4e-6),
+            ("1mile", 25.4e-6),
+            ("1min", 60.0),
+            ("1minute", 60.0),
+            ("1hr", 3600.0),
+            ("1hrs", 3600.0),
+            ("1day", 86400.0),
+            ("1days", 86400.0),
+            ("1yr", 31536000.0),
+            ("1y", 1e-24),
+            ("1years", 1e-24),
+            ("1z", 1e-21),
+            ("1zz", 1e-21),
+            ("1a", 1e-18),
+            ("20db", 10.0),
+            ("20dbm", 10.0),
+            ("10pF", 1e-11),
+            ("1.8V", 1.8),
+            // (an exponent makes the scale factor void)
+            ("1e-3k", 1e-3),
+            ("2E3meg", 2e3),
+        ] {
+            assert!(close(s.eval_str(text).unwrap(), value), "{text}");
+        }
+    }
+
+    #[test]
     fn functions() {
         let s = top(&[("x", 4.0)]);
         let e = |x: &str| s.eval_str(x).unwrap();
         assert!(close(e("sqrt(x)"), 2.0));
+        // (as measured on HSPICE)
+        assert!(close(e("sqrt(-4)"), -2.0));
+        assert!(close(e("log(-100)"), -100f64.abs().ln()));
+        assert!(close(e("log10(-100)"), -2.0));
         assert!(close(e("max(1, x, 3)"), 4.0));
         assert!(close(e("min(1, -x)"), -4.0));
         assert!(close(e("log(exp(2))"), 2.0));

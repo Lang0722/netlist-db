@@ -1,33 +1,52 @@
 //! The model HSPICE uses for each MOSFET (its "model selector").
 //!
-//! A MOSFET names a model, e.g. `nch`. If a model of that name is defined,
-//! it is the one. Otherwise HSPICE chooses among the bins of a binned model
-//! library, the models named `nch.1`, `nch.2`, ... (`nch.` and a number), the
-//! one whose ranges hold the transistor's length and width:
+//! A MOSFET names a model, e.g. `nch`. HSPICE looks at the levels of the
+//! hierarchy, from the MOSFET's own up to the top level. At each level, if a
+//! model of that name is defined, it is the one. Otherwise it is the first
+//! bin of that name, in netlist order, whose ranges hold the transistor's
+//! length and width; if none does, the search goes on one level up. The bins
+//! of `nch` are the models `nch.1`, `nch.mc`, ... (`nch.` and any suffix):
 //!
 //! ``` text
 //! LMIN <= L < LMAX   and   WMIN <= W < WMAX
 //! ```
 //!
-//! (a limit that is not given does not limit). Details, as in HSPICE:
-//! - A model defined inside a `.subckt` is local to it, and hides the models
-//!   of the same name outside.
+//! Details, as measured on HSPICE P-2019.06 with `scripts/hspice_kit`:
+//! - The levels are those of the instance path: a model (or a subckt) defined
+//!   in the subckt of any instance above is seen, though the text of the
+//!   MOSFET is not inside that subckt. One line can then use different models
+//!   on different paths.
+//! - A name with a dot cannot be named on an instance line, and a name with
+//!   two dots (`n.ch.1`) is a bin of nothing.
+//! - A bin must set its four limits: HSPICE stops if it looks at one that
+//!   does not.
 //! - The limits are evaluated where the model is defined: those of a model
 //!   of the top level with the top-level parameters (a subckt parameter of
 //!   the same name does not change them), those of a model inside a subckt
 //!   with the parameters of that subckt's instance (e.g.
 //!   `LMIN='2.4e-7-(dxln+dlmisn)'` in a macro model).
-//! - L and W are the instance's `L=` and `W=` (or `.option DEFL`/`DEFW`,
-//!   default 100u), times `.option SCALE`; the limits are multiplied by
-//!   `.option SCALM`. The width per finger (`W/NF`) is compared if `WNFLAG`
-//!   is set: on the instance line, else in the model, else by `.option
-//!   WNFLAG` (by default, the total width).
-//! - A value within 1e-9 (relative) of a limit counts as equal to it, so
-//!   that `L=0.1u` and `LMAX=1e-7` compare equal.
+//! - L and W are the instance's `L=` and `W=` or the first two values after
+//!   its model name (else `.option DEFL`/`DEFW`, default 100u), times
+//!   `.option SCALE`; the limits are multiplied by `.option SCALM`. The width
+//!   per finger (`W/NF`) is compared, unless `WNFLAG=0` on the instance line
+//!   or, without one, `.option WNFLAG=0`. A `WNFLAG` in a model is ignored.
+//! - A value at most 2e-15 (relative) below a limit counts as on it, so that
+//!   `L='0.1u*3'` and `LMAX=3e-7` compare equal. (Measured: 1e-15 below does,
+//!   3e-15 below does not, at limits from 1e-8 to 1e-4.)
+//!
+//! Known gap. HSPICE evaluates the limits of each bin differently for one
+//! MOSFET: the first one it makes (breadth first) that looks at the bin
+//! evaluates them in its own instance, not where the model is defined (decks
+//! `q_limits_*` of the kit, and the probe's case 7). This changes the choice
+//! only if a level below the model binds a name that the limits read, in a way
+//! that changes its value there (`parhier=local`, or a name no level above
+//! binds), so for at most one MOSFET per bin, and for none if the limits are
+//! numbers. It is not done here: a model is chosen for a transistor from its
+//! own line and the levels above it, in any order of the walk.
 
 use crate::{
     AST, Subckt,
-    ast::{Model, Value},
+    ast::{KeyValue, Model, Value},
     eval::{Binding, EvalError, ParHier, Scope, expr_names, function_name},
     instance::{Instance, InstanceCtx, MOSFET},
     utlis::MAX_HIERARCHY_DEPTH,
@@ -55,6 +74,8 @@ pub enum SelectError {
         w: f64,
         bins: usize,
     },
+    /// A bin of the name does not set its four limits
+    MissingLimits(String),
     /// A value (L, W, or a limit of a bin) could not be computed
     Eval { what: String, error: EvalError },
 }
@@ -68,6 +89,10 @@ impl fmt::Display for SelectError {
                 "none of the {bins} bins `{name}.N` holds L={}, W={}",
                 Short(*l),
                 Short(*w)
+            ),
+            Self::MissingLimits(model) => write!(
+                f,
+                "model `{model}` has a `.` in its name: it must set LMIN, LMAX, WMIN and WMAX"
             ),
             Self::Eval { what, error } => write!(f, "{what}: {error}"),
         }
@@ -132,8 +157,8 @@ struct Options {
     scalm: f64,
     defl: f64,
     defw: f64,
-    /// `.option wnflag`: whether bins compare the width per finger when
-    /// neither the model nor the instance says
+    /// `.option wnflag`: whether bins compare the width per finger when the
+    /// instance does not say (by default, they do)
     wnflag: bool,
 }
 
@@ -149,17 +174,18 @@ impl Options {
             scalm: get("scalm", 1.0),
             defl: get("defl", 1e-4),
             defw: get("defw", 1e-4),
-            wnflag: get("wnflag", 0.0) != 0.0,
+            wnflag: get("wnflag", 1.0) != 0.0,
         }
     }
 }
 
-/// `min <= x < max`, a value within 1e-9 (relative) of a limit counting as
-/// equal to it
+/// How far below a limit (relative) a value counts as on it
+const EDGE_TOLERANCE: f64 = 2e-15;
+
+/// `min <= x < max`, a value just below a limit counting as on it
 fn within(x: f64, min: f64, max: f64) -> bool {
-    let tol = |v: f64| v.abs() * 1e-9;
-    (min == f64::NEG_INFINITY || x >= min - tol(min))
-        && (max == f64::INFINITY || x < max - tol(max))
+    let tol = |v: f64| v.abs() * EDGE_TOLERANCE;
+    x >= min - tol(min) && x < max - tol(max)
 }
 
 /// The ranges of a bin
@@ -169,15 +195,13 @@ struct Limits {
     lmax: f64,
     wmin: f64,
     wmax: f64,
-    /// the model's `WNFLAG`: whether the width per finger is compared
-    per_finger: Option<bool>,
 }
 
 impl Limits {
     /// Whether these ranges hold a transistor of size `size`
     fn hold(&self, size: &Size, opts: &Options) -> bool {
-        // the instance's WNFLAG, else the model's, else `.option wnflag`
-        let per_finger = size.wnflag.or(self.per_finger).unwrap_or(opts.wnflag);
+        // the instance's WNFLAG, else `.option wnflag`
+        let per_finger = size.wnflag.unwrap_or(opts.wnflag);
         let w = if per_finger && size.nf > 0.0 {
             size.w / size.nf
         } else {
@@ -188,33 +212,32 @@ impl Limits {
 }
 
 /// The parameters of a bin that its ranges are made of
-const LIMITS: [&str; 5] = ["lmin", "lmax", "wmin", "wmax", "wnflag"];
+const LIMITS: [&str; 4] = ["lmin", "lmax", "wmin", "wmax"];
 
 /// The ranges of the bin `model`, evaluated in `scope`
 fn limits(model: &Model<'_>, scope: &Scope<'_>, scalm: f64) -> Result<Limits, SelectError> {
-    let param = |key: &str| -> Result<Option<f64>, SelectError> {
+    let param = |key: &str| -> Result<f64, SelectError> {
         let Some(kv) = model
             .params
             .iter()
             .rev()
             .find(|kv| kv.k.eq_ignore_ascii_case(key))
         else {
-            return Ok(None);
+            return Err(SelectError::MissingLimits(model.name.to_string()));
         };
         scope
             .eval(&kv.v)
-            .map(Some)
+            .map(|v| v * scalm)
             .map_err(|error| SelectError::Eval {
                 what: format!("{} of model `{}`", key.to_ascii_uppercase(), model.name),
                 error,
             })
     };
     Ok(Limits {
-        lmin: param("lmin")?.map_or(f64::NEG_INFINITY, |v| v * scalm),
-        lmax: param("lmax")?.map_or(f64::INFINITY, |v| v * scalm),
-        wmin: param("wmin")?.map_or(f64::NEG_INFINITY, |v| v * scalm),
-        wmax: param("wmax")?.map_or(f64::INFINITY, |v| v * scalm),
-        per_finger: param("wnflag")?.map(|flag| flag != 0.0),
+        lmin: param("lmin")?,
+        lmax: param("lmax")?,
+        wmin: param("wmin")?,
+        wmax: param("wmax")?,
     })
 }
 
@@ -229,22 +252,33 @@ struct Size {
     wnflag: Option<bool>,
 }
 
+/// The parameters of an instance line that the size of a MOSFET is made of
+const SIZES: [&str; 4] = ["l", "w", "nf", "wnflag"];
+
+/// The parameters that the first values after the model name give
+const POSITIONAL: [&str; 2] = ["l", "w"];
+
 /// The size of a MOSFET, evaluated in `scope`
 fn size(m: &MOSFET<'_>, scope: &Scope<'_>, opts: &Options) -> Result<Size, SelectError> {
-    let value = |key: &str| match m
-        .params
-        .iter()
-        .rev()
-        .find(|kv| kv.k.eq_ignore_ascii_case(key))
-    {
-        Some(kv) => scope
-            .eval(&kv.v)
-            .map(Some)
-            .map_err(|error| SelectError::Eval {
+    let value = |key: &str| {
+        // (a keyword wins over a number after the model name)
+        let v = m
+            .params
+            .iter()
+            .rev()
+            .find(|kv| kv.k.eq_ignore_ascii_case(key))
+            .map(|kv| &kv.v)
+            .or_else(|| {
+                let position = POSITIONAL.iter().position(|k| *k == key)?;
+                m.positional.get(position)
+            });
+        match v {
+            Some(v) => scope.eval(v).map(Some).map_err(|error| SelectError::Eval {
                 what: key.to_ascii_uppercase(),
                 error,
             }),
-        None => Ok(None),
+            None => Ok(None),
+        }
     };
     Ok(Size {
         l: value("l")?.unwrap_or(opts.defl) * opts.scale,
@@ -256,14 +290,17 @@ fn size(m: &MOSFET<'_>, scope: &Scope<'_>, opts: &Options) -> Result<Size, Selec
 
 /// The models of one level (the top level, or a subckt), by lowercase name
 struct ModelIndex<'a, 's> {
-    /// the model of each name (the last one, if one is defined twice)
+    /// the model of each name without a dot (the last one, if one is defined
+    /// twice)
     exact: HashMap<String, &'a Model<'s>>,
-    /// the bins `name.N` of each `name`, in netlist order
+    /// the bins `name.suffix` of each `name`, in netlist order
     bins: HashMap<String, Vec<Bin<'a, 's>>>,
 }
 
 struct Bin<'a, 's> {
     model: &'a Model<'s>,
+    /// whether it sets its four limits
+    complete: bool,
     /// its ranges if they read no parameter (they are the same everywhere),
     /// once computed
     fixed: OnceCell<Option<Result<Limits, SelectError>>>,
@@ -277,17 +314,24 @@ impl<'a, 's> ModelIndex<'a, 's> {
         };
         for model in models {
             let name = model.name.to_ascii_lowercase();
-            // a bin `name.N`, N a number: `a.b.1` is a bin of `a.b` (not of
-            // `a`), `nch.mc` none
-            if let Some((base, n)) = name.rsplit_once('.') {
-                if !base.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) {
+            match name.split_once('.') {
+                None => {
+                    index.exact.insert(name, model);
+                }
+                // a bin of `base`, any suffix; `a.b.1` is of no use
+                Some((base, suffix))
+                    if !base.is_empty() && !suffix.is_empty() && !suffix.contains('.') =>
+                {
+                    let sets =
+                        |key: &str| model.params.iter().any(|kv| kv.k.eq_ignore_ascii_case(key));
                     index.bins.entry(base.to_owned()).or_default().push(Bin {
                         model,
+                        complete: LIMITS.iter().all(|key| sets(key)),
                         fixed: OnceCell::new(),
                     });
                 }
+                Some(_) => {}
             }
-            index.exact.insert(name, model);
         }
         index
     }
@@ -396,23 +440,21 @@ impl<'a, 's> Selector<'a, 's> {
             .clone()
     }
 
-    /// The model named `name` for a transistor of length `l`, width `w` and
-    /// `nf` fingers. `lexical`: the definitions around it, from the top level
-    /// to its own, whose models it sees (the innermost first); `scopes`: the
-    /// parameters of each (the top level, and the instances of the subckts
-    /// above the transistor that they define). The ranges of a bin are
-    /// evaluated where the bin is defined: those of the top level with the
-    /// top-level parameters, those of a subckt with its instance's.
+    /// The model named `name` for a transistor of size `size`. `on_path`: the
+    /// definitions on its instance path, from the top level to its own;
+    /// `scopes`: the parameters of each, the top level and the instances. The
+    /// ranges of a bin are evaluated at the level that defines it.
     fn choose(
         &mut self,
         name: &str,
         size: Size,
         scopes: &[&Scope<'_>],
-        lexical: &[&'a AST<'s>],
+        on_path: &[&'a AST<'s>],
     ) -> Result<Selection<'a, 's>, SelectError> {
         let Size { l, w, nf, .. } = size;
         let key = name.to_ascii_lowercase();
-        for (&ast, &scope) in lexical.iter().zip(scopes).rev() {
+        let mut seen = 0;
+        for (&ast, &scope) in on_path.iter().zip(scopes).rev() {
             let index = self.index(ast);
             // a model of this very name
             if let Some(&model) = index.exact.get(&key) {
@@ -421,6 +463,9 @@ impl<'a, 's> Selector<'a, 's> {
             let Some(bins) = index.bins.get(&key) else {
                 continue;
             };
+            if let Some(bin) = bins.iter().find(|bin| !bin.complete) {
+                return Err(SelectError::MissingLimits(bin.model.name.to_string()));
+            }
             // the first bin that holds the transistor; a bin before it whose
             // ranges cannot be computed makes the choice uncertain: an error
             for bin in bins {
@@ -445,27 +490,30 @@ impl<'a, 's> Selector<'a, 's> {
                     });
                 }
             }
-            return Err(SelectError::NoBin {
-                name: name.to_owned(),
-                l,
-                w,
-                bins: bins.len(),
-            });
+            seen += bins.len();
         }
-        Err(SelectError::NoModel(name.to_owned()))
+        if seen == 0 {
+            return Err(SelectError::NoModel(name.to_owned()));
+        }
+        Err(SelectError::NoBin {
+            name: name.to_owned(),
+            l,
+            w,
+            bins: seen,
+        })
     }
 
-    /// The model of the MOSFET `m`, at the level whose definitions around it
-    /// are `lexical` and their parameters `scopes` (its own last)
+    /// The model of the MOSFET `m`, at the level whose instance path has the
+    /// definitions `on_path` and the parameters `scopes` (its own last)
     fn select(
         &mut self,
         m: &MOSFET<'_>,
         scopes: &[&Scope<'_>],
-        lexical: &[&'a AST<'s>],
+        on_path: &[&'a AST<'s>],
     ) -> Result<Selection<'a, 's>, SelectError> {
         let scope = scopes.last().expect("the top level at least");
         let size = size(m, scope, &self.opts)?;
-        self.choose(&m.mname, size, scopes, lexical)
+        self.choose(&m.mname, size, scopes, on_path)
     }
 }
 
@@ -474,42 +522,27 @@ fn extend(names: &mut IndexSet<String>, more: &[String]) {
     names.extend(more.iter().cloned());
 }
 
-/// The definition of the subckt `name`, seen from the level whose
-/// definitions around it are `lexical` (the innermost one that has it); with
-/// the definitions around it: `lexical` up to where it is defined, then its
-/// own
-fn resolve<'a, 's>(
-    name: &str,
-    lexical: &[&'a AST<'s>],
-) -> Option<(&'a Subckt<'s>, Vec<&'a AST<'s>>)> {
+/// The definition of the subckt `name`, seen from the level whose instance
+/// path has the definitions `on_path`: the nearest one
+fn resolve<'a, 's>(name: &str, on_path: &[&'a AST<'s>]) -> Option<&'a Subckt<'s>> {
     let key = name.to_lowercase();
-    let (depth, def) = lexical
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(d, a)| a.subckt.get(&key).map(|s| (d, s)))?;
-    let inner = lexical[..=depth]
-        .iter()
-        .copied()
-        .chain(once(&def.ast))
-        .collect();
-    Some((def, inner))
+    on_path.iter().rev().find_map(|a| a.subckt.get(&key))
 }
 
-/// The parameters of an instance of `def` whose line passes `passed` (each
-/// value computed where the instance is): its `.subckt` defaults and `.param`
-/// statements, and the values passed
-fn instance_scope<'p>(
-    scope: &'p Scope<'p>,
-    def: &Subckt<'_>,
-    passed: impl IntoIterator<Item = (&'p str, Result<f64, EvalError>)>,
-) -> Scope<'p> {
+/// The parameters of an instance of `def` whose line passes `line`: its
+/// `.subckt` defaults and `.param` statements, and the values passed. Each
+/// value passed is computed now, so that a value passed down a deep hierarchy
+/// is not a deep recursion later.
+fn instance_scope<'p>(scope: &'p Scope<'p>, def: &Subckt<'_>, line: &[KeyValue<'_>]) -> Scope<'p> {
     let mut child = scope.child();
     for kv in def.params.iter().chain(&def.ast.param) {
         child.define(kv);
     }
-    for (k, v) in passed {
-        child.pass(k, v);
+    for kv in line {
+        child.pass(kv);
+    }
+    for kv in line {
+        _ = child.get(&kv.k);
     }
     child
 }
@@ -578,7 +611,7 @@ impl<'s> AST<'s> {
             return false;
         };
         let scope = self.scope();
-        let child = instance_scope(&scope, def, []);
+        let child = instance_scope(&scope, def, &[]);
         let mut walk = Walk {
             sel: Selector::new(self, &scope),
             f,
@@ -613,7 +646,7 @@ impl<'s> AST<'s> {
     pub fn model_usage(&self) -> ModelUsage<'_, 's> {
         let scope = self.scope();
         let mut usage = Usage::new(self, &scope);
-        let counts = usage.level(self, &[&scope], &[self], 0);
+        let counts = usage.level(self, &[&scope], &[self], 0, 0);
         usage.finish(&counts)
     }
 
@@ -623,10 +656,11 @@ impl<'s> AST<'s> {
     pub fn model_usage_of(&self, name: &str) -> Option<ModelUsage<'_, 's>> {
         let def = self.subckt.get(&name.to_lowercase())?;
         let scope = self.scope();
-        let child = instance_scope(&scope, def, []);
+        let child = instance_scope(&scope, def, &[]);
         let mut usage = Usage::new(self, &scope);
         usage.expanding.push(def);
-        let counts = usage.level(&def.ast, &[&scope, &child], &[self, &def.ast], 1);
+        let visible = usage.visible_below(0, def);
+        let counts = usage.level(&def.ast, &[&scope, &child], &[self, &def.ast], 1, visible);
         Some(usage.finish(&counts))
     }
 }
@@ -640,9 +674,29 @@ enum Use {
 
 type Counts = HashMap<Use, u64>;
 
-/// The values passed on an instance line: name, and the value's bits (or
-/// the error that computing it gave)
+/// The values passed on an instance line: name, and the bits of the value
+/// that name has in the new instance (or the error that computing it gave)
 type Passed = Vec<(String, Result<u64, String>)>;
+
+/// The values passed on the instance line `line`, of the new instance `child`
+/// (`None` if the line passes nothing); only those of `only`, if given
+fn passed_values(
+    child: Option<&Scope<'_>>,
+    line: &[KeyValue<'_>],
+    only: Option<&HashSet<String>>,
+) -> Passed {
+    let Some(child) = child else {
+        return Passed::new();
+    };
+    line.iter()
+        .map(|kv| kv.k.to_ascii_lowercase())
+        .filter(|k| only.is_none_or(|only| only.contains(k)))
+        .map(|k| {
+            let v = child.get(&k).map(f64::to_bits).map_err(|e| e.to_string());
+            (k, v)
+        })
+        .collect()
+}
 
 /// The parameters that the contents of a subckt read (its own, and those of
 /// the instances under it)
@@ -659,12 +713,14 @@ struct Reads {
 /// What the counts of a subckt instance depend on
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum MemoKey {
-    /// A definition whose contents read known parameters: the values
+    /// A definition whose contents read known parameters: the definitions
+    /// its lines can see above it (see [`Usage::visible_below`]), the values
     /// passed that they read, and how the parameters they read from above
     /// are bound there
-    Reads(usize, Passed, Vec<Binding>),
-    /// Any other (its contents call a function defined with `.param f(x)`,
-    /// or a subckt instantiates itself): the values passed, and the context
+    Reads(usize, usize, Passed, Vec<Binding>),
+    /// Any other (its contents call a function defined with `.param f(x)`, a
+    /// bin of an instance above reads parameters, or a subckt instantiates
+    /// itself): the values passed, and the context
     Context(usize, Passed, usize),
 }
 
@@ -685,14 +741,18 @@ struct Usage<'a, 's> {
     /// one is different (a value passed that differs on every instance, read
     /// below), so that keeping them would only take memory
     unkept: HashSet<usize>,
-    /// the parameter context of the next level that passes or defines
-    /// parameters (a level that does neither sees the context above it). A
-    /// level whose instance repeats one already evaluated is found in
-    /// `memo`, so each context evaluated is new.
+    /// the context of the next level that passes or defines parameters, or
+    /// defines models or subckts (a level that does none of these sees the
+    /// context above it). A level whose instance repeats one already
+    /// evaluated is found in `memo`, so each context evaluated is new.
     next_context: usize,
-    /// what the contents of a definition (by address) read (`None`: not
-    /// known)
-    reads: HashMap<usize, Option<Rc<Reads>>>,
+    /// the numbers of the lists of definitions that hold models or subckts,
+    /// on the instance paths seen: by the number of the list above and the
+    /// definition (by address)
+    visible: HashMap<(usize, usize), usize>,
+    /// what the contents of a definition (by address), under a list of
+    /// definitions (by number), read (`None`: not known)
+    reads: HashMap<(usize, usize), Option<Rc<Reads>>>,
     /// the definitions whose reads are being found
     reading: Vec<usize>,
     path: Vec<&'a str>,
@@ -711,6 +771,7 @@ impl<'a, 's> Usage<'a, 's> {
             memo_use: HashMap::new(),
             unkept: HashSet::new(),
             next_context: 2,
+            visible: HashMap::new(),
             reads: HashMap::new(),
             reading: Vec::new(),
             path: Vec::new(),
@@ -742,11 +803,32 @@ impl<'a, 's> Usage<'a, 's> {
         usage
     }
 
-    /// What the contents of `def`, whose definitions around it are
-    /// `lexical`, read; `None` if not known
-    fn reads(&mut self, def: &'a Subckt<'s>, lexical: &[&'a AST<'s>]) -> Option<Rc<Reads>> {
+    /// What the lines of a level see, as a number: the definitions on its
+    /// instance path that hold models or subckts. `visible`: the number of
+    /// the level above; `def`: this level's definition. Two levels with the
+    /// same number find the same definition for each name.
+    fn visible_below(&mut self, visible: usize, def: &Subckt<'_>) -> usize {
+        if def.ast.model.is_empty() && def.ast.subckt.is_empty() {
+            return visible;
+        }
+        let next = self.visible.len() + 1;
+        *self
+            .visible
+            .entry((visible, ptr::from_ref(def) as usize))
+            .or_insert(next)
+    }
+
+    /// What the contents of `def` read, for an instance of it under a level
+    /// with the definitions `on_path` and the number `visible`; `None` if not
+    /// known
+    fn reads(
+        &mut self,
+        def: &'a Subckt<'s>,
+        on_path: &[&'a AST<'s>],
+        visible: usize,
+    ) -> Option<Rc<Reads>> {
         let addr = ptr::from_ref(def) as usize;
-        if let Some(reads) = self.reads.get(&addr) {
+        if let Some(reads) = self.reads.get(&(addr, visible)) {
             return reads.clone();
         }
         // a subckt that instantiates itself, or too deep a hierarchy
@@ -754,16 +836,20 @@ impl<'a, 's> Usage<'a, 's> {
             return None;
         }
         self.reading.push(addr);
-        let reads = self.find_reads(def, lexical).map(Rc::new);
+        let reads = self.find_reads(def, on_path, visible).map(Rc::new);
         self.reading.pop();
-        self.reads.insert(addr, reads.clone());
+        self.reads.insert((addr, visible), reads.clone());
         reads
     }
 
-    fn find_reads(&mut self, def: &'a Subckt<'s>, lexical: &[&'a AST<'s>]) -> Option<Reads> {
+    fn find_reads(
+        &mut self,
+        def: &'a Subckt<'s>,
+        on_path: &[&'a AST<'s>],
+        visible: usize,
+    ) -> Option<Reads> {
         let mut all = IndexSet::new();
-        // a function's body is read where it is called (and a call makes
-        // what is read unknown)
+        // (a call of a function makes what is read unknown)
         let definitions = def
             .params
             .iter()
@@ -772,32 +858,34 @@ impl<'a, 's> Usage<'a, 's> {
         for kv in definitions.clone() {
             extend(&mut all, &self.sel.names(&kv.v)?);
         }
+        let inner: Vec<_> = on_path.iter().copied().chain(once(&def.ast)).collect();
+        let inner_visible = self.visible_below(visible, def);
         for inst in &def.ast.instance {
             match &inst.ctx {
                 InstanceCtx::MOSFET(m) => {
                     for kv in &m.params {
-                        if ["l", "w", "nf", "wnflag"]
-                            .iter()
-                            .any(|k| kv.k.eq_ignore_ascii_case(k))
-                        {
+                        if SIZES.iter().any(|k| kv.k.eq_ignore_ascii_case(k)) {
                             extend(&mut all, &self.sel.names(&kv.v)?);
                         }
+                    }
+                    for v in &m.positional {
+                        extend(&mut all, &self.sel.names(v)?);
                     }
                     // the ranges of the bins it may use, read where each is
                     // defined: those of the top level read the top level's
                     // parameters (the same everywhere), those of this subckt
-                    // its own; those of a subckt around it (a definition
-                    // nested in another) the parameters of that subckt's
-                    // instance, which are not followed: unknown
+                    // its own; those of an instance above it the parameters
+                    // of that instance, which are not followed: unknown
                     let name = m.mname.to_ascii_lowercase();
-                    let last = lexical.len() - 1;
-                    for (depth, &ast) in lexical.iter().enumerate().skip(1) {
+                    let last = inner.len() - 1;
+                    for (depth, &ast) in inner.iter().enumerate().skip(1) {
                         let index = self.sel.index(ast);
                         for bin in index.bins.get(&name).into_iter().flatten() {
-                            if depth < last {
+                            let names = self.sel.limit_names(bin.model)?;
+                            if depth < last && !names.is_empty() {
                                 return None;
                             }
-                            extend(&mut all, &self.sel.limit_names(bin.model)?);
+                            extend(&mut all, &names);
                         }
                     }
                 }
@@ -805,8 +893,8 @@ impl<'a, 's> Usage<'a, 's> {
                     for kv in &x.params {
                         extend(&mut all, &self.sel.names(&kv.v)?);
                     }
-                    if let Some((child, inner)) = resolve(&x.cktname, lexical) {
-                        extend(&mut all, &self.reads(child, &inner)?.outside);
+                    if let Some(child) = resolve(&x.cktname, &inner) {
+                        extend(&mut all, &self.reads(child, &inner, inner_visible)?.outside);
                     }
                 }
                 _ => {}
@@ -825,21 +913,23 @@ impl<'a, 's> Usage<'a, 's> {
         })
     }
 
-    /// The counts of the instances of `ast` (context `context`); `scopes`
-    /// and `lexical` as in [`Walk::ast`]
+    /// The counts of the instances of `ast` (context `context`, seeing the
+    /// definitions numbered `visible`); `scopes` and `on_path` as in
+    /// [`Walk::ast`]
     fn level(
         &mut self,
         ast: &'a AST<'s>,
         scopes: &[&Scope<'_>],
-        lexical: &[&'a AST<'s>],
+        on_path: &[&'a AST<'s>],
         context: usize,
+        visible: usize,
     ) -> Counts {
         let scope = *scopes.last().expect("the top level at least");
         let mut counts = Counts::new();
         for inst in &ast.instance {
             match &inst.ctx {
                 InstanceCtx::MOSFET(m) => {
-                    let used = match self.sel.select(m, scopes, lexical) {
+                    let used = match self.sel.select(m, scopes, on_path) {
                         Ok(s) => {
                             let addr = ptr::from_ref(s.model) as usize;
                             self.models.entry(addr).or_insert(s.model);
@@ -850,7 +940,7 @@ impl<'a, 's> Usage<'a, 's> {
                     *counts.entry(used).or_default() += 1;
                 }
                 InstanceCtx::Subckt(x) => {
-                    let Some((def, inner)) = resolve(&x.cktname, lexical) else {
+                    let Some(def) = resolve(&x.cktname, on_path) else {
                         continue;
                     };
                     if self.expanding.iter().any(|s| ptr::eq(*s, def))
@@ -858,32 +948,26 @@ impl<'a, 's> Usage<'a, 's> {
                     {
                         continue;
                     }
-                    let values: Vec<_> = x.params.iter().map(|kv| scope.eval(&kv.v)).collect();
-                    let passed: Passed = x
-                        .params
-                        .iter()
-                        .zip(&values)
-                        .map(|(kv, v)| {
-                            let v = v.as_ref().map(|f| f.to_bits()).map_err(|e| e.to_string());
-                            (kv.k.to_ascii_lowercase(), v)
-                        })
-                        .collect();
                     let addr = ptr::from_ref(def) as usize;
-                    let binds =
-                        !passed.is_empty() || !def.params.is_empty() || !def.ast.param.is_empty();
+                    // (a line that passes nothing needs no new instance to
+                    // look in the memo)
+                    let child =
+                        (!x.params.is_empty()).then(|| instance_scope(scope, def, &x.params));
                     let key = if self.unkept.contains(&addr) {
                         None
                     } else {
-                        let key = match self.reads(def, &inner) {
+                        let key = match self.reads(def, on_path, visible) {
                             Some(reads) => MemoKey::Reads(
                                 addr,
-                                passed
-                                    .into_iter()
-                                    .filter(|(k, _)| reads.all.contains(k))
-                                    .collect(),
+                                visible,
+                                passed_values(child.as_ref(), &x.params, Some(&reads.all)),
                                 reads.outside.iter().map(|n| scope.binding(n)).collect(),
                             ),
-                            None => MemoKey::Context(addr, passed, context),
+                            None => MemoKey::Context(
+                                addr,
+                                passed_values(child.as_ref(), &x.params, None),
+                                context,
+                            ),
                         };
                         if let Some(c) = self.memo.get(&key) {
                             add(&mut counts, c);
@@ -892,23 +976,30 @@ impl<'a, 's> Usage<'a, 's> {
                         }
                         Some(key)
                     };
+                    let binds = !x.params.is_empty()
+                        || !def.params.is_empty()
+                        || !def.ast.param.is_empty()
+                        || !def.ast.model.is_empty()
+                        || !def.ast.subckt.is_empty();
                     let inner_context = if binds {
                         self.next_context += 1;
                         self.next_context
                     } else {
                         context
                     };
-                    let child =
-                        instance_scope(scope, def, x.params.iter().map(|kv| &*kv.k).zip(values));
-                    let depth = inner.len() - 2;
-                    let inner_scopes: Vec<_> = scopes[..=depth]
-                        .iter()
-                        .copied()
-                        .chain(once(&child))
-                        .collect();
+                    let inner_visible = self.visible_below(visible, def);
+                    let child = child.unwrap_or_else(|| instance_scope(scope, def, &[]));
+                    let inner_scopes: Vec<_> = scopes.iter().copied().chain(once(&child)).collect();
+                    let inner: Vec<_> = on_path.iter().copied().chain(once(&def.ast)).collect();
                     self.path.push(&inst.name);
                     self.expanding.push(def);
-                    let c = self.level(&def.ast, &inner_scopes, &inner, inner_context);
+                    let c = self.level(
+                        &def.ast,
+                        &inner_scopes,
+                        &inner,
+                        inner_context,
+                        inner_visible,
+                    );
                     self.expanding.pop();
                     self.path.pop();
                     let c: Rc<[(Use, u64)]> = c.into_iter().collect();
@@ -975,16 +1066,16 @@ struct Walk<'a, 's, F> {
 }
 
 impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
-    /// `lexical`: the definitions around `ast`, from the top level to `ast`
-    /// itself (where its models and subckts are looked up); `scopes`: their
-    /// parameters, the top level's and those of the instances (above, and
-    /// of `ast` last) that they define
-    fn ast(&mut self, ast: &'a AST<'s>, scopes: &[&Scope<'_>], lexical: &[&'a AST<'s>]) {
+    /// `on_path`: the definitions on the instance path of `ast`, from the top
+    /// level to `ast` itself (where its models and subckts are looked up);
+    /// `scopes`: their parameters, the top level's and those of the instances
+    /// (`ast`'s last)
+    fn ast(&mut self, ast: &'a AST<'s>, scopes: &[&Scope<'_>], on_path: &[&'a AST<'s>]) {
         let scope = *scopes.last().expect("the top level at least");
         for inst in &ast.instance {
             match &inst.ctx {
                 InstanceCtx::MOSFET(m) => {
-                    let selection = self.sel.select(m, scopes, lexical);
+                    let selection = self.sel.select(m, scopes, on_path);
                     (self.f)(MosfetModel {
                         path: self.path.iter().copied().chain(once(&*inst.name)).join("."),
                         instance: inst,
@@ -993,7 +1084,7 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
                     });
                 }
                 InstanceCtx::Subckt(x) => {
-                    let Some((def, inner)) = resolve(&x.cktname, lexical) else {
+                    let Some(def) = resolve(&x.cktname, on_path) else {
                         continue;
                     };
                     if self.expanding.iter().any(|s| ptr::eq(*s, def))
@@ -1001,19 +1092,9 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
                     {
                         continue;
                     }
-                    // the values passed on the instance line are computed
-                    // where the instance is
-                    let child = instance_scope(
-                        scope,
-                        def,
-                        x.params.iter().map(|kv| (&*kv.k, scope.eval(&kv.v))),
-                    );
-                    let depth = inner.len() - 2;
-                    let inner_scopes: Vec<_> = scopes[..=depth]
-                        .iter()
-                        .copied()
-                        .chain(once(&child))
-                        .collect();
+                    let child = instance_scope(scope, def, &x.params);
+                    let inner_scopes: Vec<_> = scopes.iter().copied().chain(once(&child)).collect();
+                    let inner: Vec<_> = on_path.iter().copied().chain(once(&def.ast)).collect();
                     self.path.push(&inst.name);
                     self.expanding.push(def);
                     self.ast(&def.ast, &inner_scopes, &inner);

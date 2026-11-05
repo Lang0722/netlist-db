@@ -1,3 +1,4 @@
+use super::number_prefix;
 use super::utils::{
     close_parens, continuation, integer, key_str, key_value, loss_sep, multiline_sep, name,
     name_char, node_sep, ports_params, space, space1, span_text, trailing_delims, value,
@@ -195,30 +196,75 @@ fn _inductor(i: LocatedSpan) -> IResult<LocatedSpan, InstanceCtxBuilder> {
         }),
     ))
 }
+/// A value in quotes
+#[inline]
+fn quoted_value(i: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
+    if i.fragment().starts_with(['\'', '"']) {
+        value(i)
+    } else {
+        fail(i, ErrorKind::Verify)
+    }
+}
+
 #[inline]
 fn _mosfet(i: LocatedSpan) -> IResult<LocatedSpan, InstanceCtxBuilder> {
-    map_res(ports_params, |(ports, params)| match ports.len() {
-        4 => Ok(InstanceCtxBuilder::MOSFET(MOSFETBuilder {
-            nd: ports[0],
-            ng: ports[1],
-            ns: ports[2],
-            nb: None,
-            mname: ports[3],
-            params,
-        })),
-        5 => Ok(InstanceCtxBuilder::MOSFET(MOSFETBuilder {
-            nd: ports[0],
-            ng: ports[1],
-            ns: ports[2],
-            nb: Some(ports[3]),
-            mname: ports[4],
-            params,
-        })),
-        0 => Err("There is no model name".to_string()),
-        n => Err(format!(
-            "MOSFET is 3/4 ports device, but found {} port(s)",
-            n - 1
-        )),
+    let base = i;
+    let line = (ports_params, opt((multiline_sep(quoted_value), args)));
+    map_res(line, |((mut ports, mut params), quoted)| {
+        let mut after = Vec::new();
+        if let Some((first, (values, more))) = quoted {
+            if !params.is_empty() {
+                return Err("MOSFET has a quoted value after `key=value`".to_string());
+            }
+            after.push(first);
+            after.extend(values);
+            params.extend(more);
+        }
+        // The values after the model name: numbers, names of parameters and
+        // quoted expressions. The model is the last word that is no number
+        // (nodes may be numbers), after 3 or 4 nodes; a line with more words
+        // than that has 4 nodes.
+        let number = |s: &Span| number_prefix(span_text(base, *s));
+        let mut positional = Vec::new();
+        if let Some(model) = ports.iter().rposition(|s| number(s).is_none()) {
+            let model = model.min(4);
+            if model >= 3 {
+                positional = ports[model + 1..]
+                    .iter()
+                    .map(|s| match number(s) {
+                        Some((v, _)) => ValueBuilder::Num(v),
+                        None => ValueBuilder::Expr(*s),
+                    })
+                    .collect();
+                ports.truncate(model + 1);
+            }
+        }
+        positional.extend(after);
+        match ports.len() {
+            4 => Ok(InstanceCtxBuilder::MOSFET(MOSFETBuilder {
+                nd: ports[0],
+                ng: ports[1],
+                ns: ports[2],
+                nb: None,
+                mname: ports[3],
+                positional,
+                params,
+            })),
+            5 => Ok(InstanceCtxBuilder::MOSFET(MOSFETBuilder {
+                nd: ports[0],
+                ng: ports[1],
+                ns: ports[2],
+                nb: Some(ports[3]),
+                mname: ports[4],
+                positional,
+                params,
+            })),
+            0 => Err("There is no model name".to_string()),
+            n => Err(format!(
+                "MOSFET is 3/4 ports device, but found {} port(s)",
+                n - 1
+            )),
+        }
     })
     .parse_complete(i)
 }

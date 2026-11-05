@@ -155,6 +155,8 @@ pub struct MOSFETBuilder {
     pub ns: Span,
     pub nb: Option<Span>,
     pub mname: Span,
+    /// the values after the model name: L, W, AD, AS, PD, PS, NRD, NRS
+    pub positional: Vec<ValueBuilder>,
     pub params: Vec<KeyValueBuilder>,
 }
 /// https://eda-cpu1.eias.junzhuo.site/~junzhuo/hspice/index.htm#page/hspice_11/diode_element.htm

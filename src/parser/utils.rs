@@ -27,7 +27,7 @@ use crate::{
 use crate::{
     ast::{LocalAST, SubcktBuilder},
     err::{ParseError, ParseErrorInner},
-    instance::InstanceBuilder,
+    instance::{InstanceBuilder, InstanceCtxBuilder},
     parser::{
         cmds::{init_condition, nodeset},
         instance::{instance, unsupported_controlled_form},
@@ -111,23 +111,25 @@ fn unit(i: LocatedSpan) -> IResult<LocatedSpan, Unit> {
         take_while1(|c: char| c.is_ascii_alphabetic()),
         |s: LocatedSpan| {
             let u = s.fragment().to_ascii_uppercase();
-            match u.as_str() {
-                "DB" => return Unit::DB,
-                "MIN" => return Unit::Factor(60.0),
-                "HR" => return Unit::Factor(3600.0),
-                "DAY" => return Unit::Factor(86400.0),
-                "YR" => return Unit::Factor(31536000.0),
-                "ME" | "Z" => return Unit::Factor(1e+6),
-                "MI" => return Unit::Factor(25.4e-6),
-                _ => {}
+            if u.starts_with("DB") {
+                return Unit::DB;
             }
             // HSPICE scale factors: the leading letters select the factor and
-            // the rest is ignored, so `10pF` is 10p, `1kohm` is 1k, `1.8V` is 1.8
-            // (and `1M` is milli, not mega).
-            Unit::Factor(if u.starts_with("MEG") {
+            // the rest is ignored, so `10pF` is 10p, `1kohm` is 1k, `1.8V` is
+            // 1.8, `1meter` is mega, `1minute` is 60 (and `1M` is milli, not
+            // mega). As measured on HSPICE P-2019.06.
+            Unit::Factor(if u.starts_with("MIN") {
+                60.0
+            } else if u.starts_with("ME") {
                 1e+6
-            } else if u.starts_with("MIL") {
+            } else if u.starts_with("MI") {
                 25.4e-6
+            } else if u.starts_with("HR") {
+                3600.0
+            } else if u.starts_with("DAY") {
+                86400.0
+            } else if u.starts_with("YR") {
+                31536000.0
             } else {
                 match u.as_bytes()[0] {
                     b'T' => 1e+12,
@@ -140,6 +142,8 @@ fn unit(i: LocatedSpan) -> IResult<LocatedSpan, Unit> {
                     b'P' => 1e-12,
                     b'F' => 1e-15,
                     b'A' => 1e-18,
+                    b'Z' => 1e-21,
+                    b'Y' => 1e-24,
                     _ => 1.0,
                 }
             })
@@ -162,16 +166,21 @@ pub(super) fn float(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
     }
 }
 
-/// A number with an optional scale factor. A number too large for `f64`
-/// (`1e999`) is not a number here: it is kept as written, as an expression.
+/// A number with an optional scale factor, which an exponent makes void
+/// (`1e-3k` is 0.001, in HSPICE too). A number too large for `f64` (`1e999`)
+/// is not a number here: it is kept as written, as an expression.
 #[inline]
 pub(super) fn float_unit(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
-    let (rest, f) = map((float, opt(unit)), |(f, u)| match u {
+    let (after, f) = float(i)?;
+    let digits = &i.fragment()[..i.fragment().len() - after.fragment().len()];
+    let has_exponent = digits.contains(['e', 'E']);
+    let (rest, u) = opt(unit).parse_complete(after)?;
+    let f = match u {
+        Some(_) if has_exponent => f,
         Some(Unit::Factor(u)) => f * u,
         Some(Unit::DB) => 10.0_f64.powf(f / 20.0),
         None => f,
-    })
-    .parse_complete(i)?;
+    };
     if f.is_finite() {
         Ok((rest, f))
     } else {
@@ -1297,9 +1306,14 @@ pub(super) fn title_line(i: LocatedSpan) -> Option<(LocatedSpan, Span, bool)> {
     let rest = skip_statement(i);
     let (start, _) = space(i).ok()?;
     let element = line.starts_with(|c: char| "RCLVIMQDXEFGHKrclvimqdxefghk".contains(c))
-        && instance(start).is_ok_and(|(end, _)| {
-            end_of_statement(end)
-                .is_ok_and(|(end, ())| end.location_offset() >= rest.location_offset())
+        && instance(start).is_ok_and(|(end, inst)| {
+            // (a title of plain words can read as a MOSFET whose L and W are
+            // names of parameters: `mux 2 pra 1 com transmission gate`)
+            let words = matches!(&inst.ctx, InstanceCtxBuilder::MOSFET(m)
+                if m.positional.iter().any(|v| matches!(v, ValueBuilder::Expr(_))));
+            !words
+                && end_of_statement(end)
+                    .is_ok_and(|(end, ())| end.location_offset() >= rest.location_offset())
         });
     Some((rest, raw_span(i, rest), element))
 }

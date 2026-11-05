@@ -15,6 +15,11 @@
 // `--subckt NAME`, those of an instance of the subckt NAME with its default
 // parameters. A netlist without instances at the top level (a library) is
 // shown subckt by subckt.
+//
+// The parameters follow the last `.option parhier` of the netlist. Without one
+// they follow HSPICE's default, `global`, and a note on stderr says so. A
+// netlist that a `parhier=local` testbench includes has no such line: pass a
+// file that holds it as one more file.
 use netlist_db::{
     AST, FileId,
     models::{ModelUsage, MosfetModel, Short},
@@ -128,6 +133,9 @@ async fn main() {
     let parsed_in = start.elapsed();
     if has_err {
         eprintln!("(the netlist has errors; install a logger to see them)");
+    }
+    if ast.option_value("parhier").is_none() {
+        eprintln!("(no `.option parhier` in the netlist: parhier=global, HSPICE's default)");
     }
     let mut out = BufWriter::new(stdout().lock());
     if summary {

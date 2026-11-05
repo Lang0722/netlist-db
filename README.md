@@ -17,9 +17,9 @@ Concurrent/Parallel SPICE (HSPICE) parser, under building.
 + HSPICE's model selector: the model bin (`nch.1`, `nch.2`, ...) each MOSFET uses (`models`)
 
 ## Model selection
-For a binned model library, HSPICE chooses for each MOSFET the bin `name.N`
-whose ranges hold its length and width (`LMIN <= L < LMAX`,
-`WMIN <= W < WMAX`). `AST::mosfet_models` gives every MOSFET of the circuit
+For a binned model library, HSPICE chooses for each MOSFET the first bin
+`name.suffix`, in netlist order, whose ranges hold its length and width
+(`LMIN <= L < LMAX`, `WMIN <= W/NF < WMAX`). `AST::mosfet_models` gives every MOSFET of the circuit
 with its instance path, its L and W (with `.param`, subckt and instance
 parameters resolved) and the model chosen for it, or why none could be:
 
@@ -36,16 +36,39 @@ for m in ast.mosfet_models() {
 `AST::mosfet_models_of` does the same for one subckt (e.g. a library cell),
 and `AST::select_model` for a given model name, L and W.
 
-The parameters follow HSPICE's rules: a subckt instance has its `.subckt`
-defaults, its `.param` statements (which replace a default of the same
-name) and the values passed on its line (computed where the line is, and
-used over both); a name is resolved from the closest level that has it with
-`.option parhier=local`, or from the top-most definition with the default
-`parhier=global` (a value passed being used over a definition). The ranges
-of a bin are evaluated where the model is defined: the top level's
-parameters for a top-level model, the instance's for a model inside a
-subckt. `W/NF` is compared when `WNFLAG` is set on the instance, else in
-the model, else by `.option wnflag`.
+These rules were measured on HSPICE P-2019.06 (`scripts/hspice_kit`).
+
+Parameters: a subckt instance has its `.subckt` defaults, its `.param`
+statements (which replace a default of the same name) and the values passed
+on its line (used over both, and computed in the new instance). A name is
+resolved from the closest level that has it with `.option parhier=local`, or
+from the level closest to the top with the default `parhier=global`, also
+over a value passed below it. A text that reads its own name reads that name
+at the level above; a value passed whose text leads back to it through other
+names is computed, as a whole, at the level above.
+
+The last `.option parhier` of the deck decides, wherever it is, also in an
+included file or a `.lib` section, but not inside a subckt. A netlist that a
+`parhier=local` testbench includes has no such line: give `model_select` one
+more file that holds it (`model_select netlist.sp local.sp`). It notes on
+stderr when it finds none.
+
+Models: at each level of the MOSFET's instance path, from its own up to the
+top, the model of that name, else the first bin that holds L and W; a bin that
+does not hold them hides nothing. A model or subckt defined in the subckt of
+an instance above is seen, so one line can use different models on different
+paths. A bin must set its four limits. The ranges of a bin are evaluated where
+the model is defined. `W/NF` is compared unless `WNFLAG=0` on the instance or,
+without one, `.option wnflag=0`; a `WNFLAG` in a model is ignored. A value at
+most 2e-15 (relative) below a limit counts as on it. L and W may also be the
+first two values after the model name.
+
+Known gaps (`scripts/hspice_kit/README.md`): HSPICE evaluates the ranges of a
+bin in the instance of the first MOSFET that looks at it, which matters only
+if a level below the model binds, differently, a name those ranges read (so
+for at most one MOSFET per bin, and for none if the ranges are numbers); the
+creation-order rules of `.param` functions; and `M1 d g 0 a pl pw` (3 nodes,
+then names of parameters after the model name), which is reported as an error.
 
 A hierarchical netlist can hold far more transistors than fit in a list (a
 30 MB netlist can flatten to hundreds of millions). `AST::for_each_mosfet_model`
