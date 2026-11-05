@@ -1,0 +1,32 @@
+{
+ "case": "nested_global",
+ "resistors": [
+  {
+   "path": "x6.xi.r6",
+   "value": 3.0
+  },
+  {
+   "path": "x7.xi.r7",
+   "value": 2.0
+  },
+  {
+   "path": "x8.xi.r8",
+   "value": 6.0
+  },
+  {
+   "path": "x10.xi.r10",
+   "value": 45.0
+  },
+  {
+   "path": "x9.xm.xi.r9",
+   "value": 4.0
+  }
+ ],
+ "totals": {
+  "resistors": 5,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 11
+ },
+ "extra": {}
+}

@@ -1,0 +1,37 @@
+{
+ "case": "elem_dotted_name_collision_rev",
+ "resistors": [
+  {
+   "path": "rt2",
+   "value": 1.0
+  },
+  {
+   "path": "rt1",
+   "value": 1.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 2
+ },
+ "extra": {
+  "shared_path_resistors": [
+   {
+    "path": "x0.ra.rb",
+    "circuit": 1,
+    "definition": "wrap",
+    "element": "ra.rb",
+    "value": 3.0
+   },
+   {
+    "path": "x0.ra.rb",
+    "circuit": 2,
+    "definition": "cell",
+    "element": "rb",
+    "value": 2.0
+   }
+  ]
+ }
+}

@@ -1,0 +1,36 @@
+{
+ "case": "include_in_subckt",
+ "resistors": [
+  {
+   "path": "x1.ri",
+   "value": 7.0
+  },
+  {
+   "path": "x1.rj",
+   "value": 6.0
+  },
+  {
+   "path": "x1.r0",
+   "value": 1.0
+  },
+  {
+   "path": "x2.ri",
+   "value": 7.0
+  },
+  {
+   "path": "x2.rj",
+   "value": 10.0
+  },
+  {
+   "path": "x2.r0",
+   "value": 1.0
+  }
+ ],
+ "totals": {
+  "resistors": 6,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 2
+ },
+ "extra": {}
+}

@@ -1,0 +1,33 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 21:56:36 2026
+  **error** (deck.sp:2) syntax error at or before ")" "=" "'2'" 
+
+Syntax reference: 
+Syntax
+Simple parameter assignment:
+.PARAM ParamName=RealNumber
+Algebraic parameter assignments:
+.PARAM ParamName='AlgebraicExpression'
+.PARAM ParamName1=ParamName2
+User-defined functions:
+.PARAM ParamName(pv1[pv2])='Expression'
+predefined analysis functions:
+.PARAM FunctionName=Value
+Optimized parameter assignment:
+.PARAM parameter=OPTxxx (initial_guess, low_limit,
++ upper_limit)
+.PARAM parameter=OPTxxx (initial_guess, low_limit,
++ upper_limit, delta)
+.PARAM paramname=str('string')
+
+
+
+               ***** job aborted

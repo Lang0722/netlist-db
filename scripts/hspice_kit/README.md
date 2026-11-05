@@ -9,8 +9,7 @@ where the results are compared (the netlist-db session).
 
 ## Where things stand
 
-Branch `fix/stability-and-hspice-gaps` of the fork (`VERSION` gives the
-commit the answers come from).
+Branch `main` of the fork (`VERSION` gives the commit the answers come from).
 
 What netlist-db does now:
 - parses HSPICE decks robustly (checked on 3,315 public decks), with `.lib`
@@ -24,7 +23,7 @@ What netlist-db does now:
 
 What is verified (scripts/verify_params, scripts/gen_big_netlist.py):
 - HSPICE P-2019.06-SP1-1 on this kit (`make_kit.py OUTDIR --random 30`):
-  L and W equal on all 8,645 MOSFETs (5,296 of them under `parhier=local`), and
+  L and W equal on all 8,672 MOSFETs (5,297 of them under `parhier=local`), and
   the bin on all but the 5 of the first known gap below; every deck HSPICE stops
   on, netlist-db reports an error for, but for `q_limits_same_scope`;
 - a 200,000-line, 30 MB deck with 300,000,000 MOSFETs: every count equals
@@ -73,6 +72,20 @@ What HSPICE answered (each is a deck of this kit or a probe case):
    (`.options`, capital letters, spaces around `=`, among other options, on a `+`
    line, quoted), but not one inside a subckt (`q_parhier_*`). One in an `.inc`
    file or a `.lib` section counts too (run by hand, once).
+10. A MOSFET line has at most 7 nodes (`q_nodes_*`). The model name is the first word
+    after the fourth node that names a model, else the fourth word if it names one
+    (`q_two_model_words*`, `q_node_model_name`). After four nodes, a word that
+    starts with a digit stops HSPICE (`q_digit_word_*`). Any number of values can
+    follow the model name (`q_positional_numbers_9`, `q_positional_names_*`). `OFF`
+    takes a place and gives no value (`q_off_*`).
+11. Quotes in a group stop HSPICE (`q_group_quotes`, `q_quote_in_group`), but not in
+    `agauss`, `gauss`, `aunif`, `unif`, `limit` and `str`, when the call is the whole
+    value (`q_stat_quotes*`, `q_str_quotes`). A line inside quotes must be a `+` line
+    (`q_quoted_*`). `.temp` takes no group (`q_temp_*`). A value in parentheses does
+    not go on on a `+` line of a MOSFET line (`q_mos_group_lines`).
+
+`golden/NOTES.md` ("Probes for the merge of the two parser branches") lists more
+forms, also those on which netlist-db is known to differ.
 
 Known gaps, reported by `compare_hspice.py` but not failing it:
 - HSPICE evaluates the limits of each bin in the instance of the first MOSFET
@@ -85,10 +98,9 @@ Known gaps, reported by `compare_hspice.py` but not failing it:
   reaches at most one MOSFET per bin, and none for a bin whose limits are numbers
   (`grep -iE '(lmin|lmax|wmin|wmax) *= *[^0-9.+ -]' FILES` lists the others). On
   such a deck HSPICE can also stop.
-- `M1 d g 0 a pl pw` (3 nodes, then names of parameters after the model name,
-  `q_positional_names_3`): HSPICE knows the models when it reads the line.
-  netlist-db's parser does not: it takes `a` for a 4th node, then reports that
-  there is no model `pl`.
+- A value in parentheses over a `+` line of a MOSFET line (`q_mos_group_lines`):
+  HSPICE reads a part of it. netlist-db reports an error, so it gives no wrong
+  value.
 
 Known gaps not in this kit:
 - a definition instantiated inside itself: HSPICE stops. netlist-db skips that
@@ -99,6 +111,9 @@ Known gaps not in this kit:
 - `m` on an X line: HSPICE computes it at the level of the line, netlist-db in
   the new instance. This can change a result only if an expression reads `m`;
 - `20db`: HSPICE gives 9.99999907, netlist-db 10.
+- `OFF` after a `key=value` on a MOSFET line (`M1 d g 0 0 nch l=2u w=1u OFF`):
+  HSPICE runs it. netlist-db reports an error and does not count that MOSFET;
+- `M1 d g 0 0 nch l=max(1u,2u) w=1u`: HSPICE stops, netlist-db reads L=2u.
 
 ## On the HSPICE machine
 
@@ -137,6 +152,9 @@ Also useful, if you can (optional):
   ...): netlist-db reports an error for their MOSFET, and that is agreement. If
   HSPICE runs one of them, it chose a model netlist-db does not: the comparison
   shows which.
+- For other `q_*` decks (`q_stray_ends`, `q_two_functions`, ...), netlist-db
+  reports an error in the text of the deck (`expected/NAME.text_error`). HSPICE
+  should stop on them. If HSPICE runs one, the comparison says so.
 - The other decks (`chain_*`, `matrix_*`, `lattice4_*`, `tree6`, `bins`,
   `scale`, `library`, `r_*`) should run cleanly. Each MOSFET's L, W and bin
   are read from `.measure` of LV1, LV2, LV9 (and the `.op` table; LV9 is not
@@ -166,7 +184,7 @@ netlist-db, or a new rule to measure.
 | | |
 |---|---|
 | `decks/` | the decks for HSPICE (`MANIFEST.tsv`: what each checks) |
-| `expected/` | netlist-db's answers: per MOSFET (index, path, L, W, NF, model), per probe case |
+| `expected/` | netlist-db's answers: per MOSFET (index, path, L, W, NF, model), per probe case, and `NAME.text_error` if netlist-db reports an error in the text of a deck |
 | `run_hspice.sh` | runs HSPICE on all decks, packs the results |
 | `compare_hspice.py` | compares the results with `expected/` (run where netlist-db is) |
 | `bin/` | `model_select` (static), `gen_big_netlist.py` |

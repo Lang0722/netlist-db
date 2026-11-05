@@ -1,0 +1,14 @@
+{
+ "case": "brace_quoted_elem",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:4) Undefined parameter or function definition \"[a]\" for r1. Please enter a defined name.",
+  "braces": "rejected inside quotes in an element value"
+ }
+}

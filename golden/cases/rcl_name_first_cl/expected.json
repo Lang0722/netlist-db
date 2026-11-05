@@ -1,0 +1,76 @@
+{
+ "case": "rcl_name_first_cl",
+ "resistors": [
+  {
+   "path": "r11",
+   "value": 1000.0
+  },
+  {
+   "path": "r14",
+   "value": 1000.0
+  },
+  {
+   "path": "r15",
+   "value": 1000.0
+  },
+  {
+   "path": "r2",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 3,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "temp": 125.0,
+  "capacitors": {
+   "c1": {
+    "model": null,
+    "c": 2e-12,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "c_at_temp": 2.8e-12
+   },
+   "c2": {
+    "model": null,
+    "c": 2e-12,
+    "tc1": 0.004,
+    "tc2": 1e-05,
+    "c_at_temp": 3e-12
+   },
+   "c3": {
+    "model": null,
+    "c": 2e-12,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "c_at_temp": 2.8e-12
+   }
+  },
+  "inductors": {
+   "l1": {
+    "model": null,
+    "l": 2e-09,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "l_at_temp": 2.8e-09
+   },
+   "l4": {
+    "model": null,
+    "l": 2e-09,
+    "tc1": 0.004,
+    "tc2": 1e-05,
+    "l_at_temp": 3e-09
+   },
+   "l5": {
+    "model": null,
+    "l": 2e-09,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "l_at_temp": 2.8e-09
+   }
+  }
+ }
+}

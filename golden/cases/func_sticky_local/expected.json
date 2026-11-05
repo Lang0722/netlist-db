@@ -1,0 +1,28 @@
+{
+ "case": "func_sticky_local",
+ "resistors": [
+  {
+   "path": "x0.xl.rc",
+   "value": 2000.0
+  },
+  {
+   "path": "x1.xl.rc",
+   "value": 2000.0
+  },
+  {
+   "path": "x3.xl.rd",
+   "value": 3000.0
+  },
+  {
+   "path": "x4.xl.rd",
+   "value": 2000.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 8
+ },
+ "extra": {}
+}

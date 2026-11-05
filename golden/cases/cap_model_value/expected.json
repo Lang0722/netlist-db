@@ -1,0 +1,21 @@
+{
+ "case": "cap_model_value",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 1,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "order": "model_value",
+  "value_read": 1e-12,
+  "model": "cmod",
+  "source": ".option list cap eff 1.0000p, node2 2, model cmod (the .op listing prints no capacitors)"
+ }
+}

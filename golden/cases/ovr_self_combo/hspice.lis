@@ -1,0 +1,116 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 15:24:16 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * ovr_self_combo: overrides that name the overridden name, functions in two instance levels (parhier=local)
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x1.                             cc                 1.00 
+        2 x2.                             mid                1.00 
+        3 x3.                             cb                 1.00 
+        4 x4.                             ce                 1.00 
+        5 x5.                             fo                 1.00 
+        6 x2.xc.                          cc                 1.00 
+        7 x5.xm.                          fm                 1.00 
+        8 x5.xm.xl.                       fl                 1.00 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * ovr_self_combo: overrides that name the overridden name, functions in two instance levels (parhier=local)
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage      node    =voltage      node    =voltage
+
+ +0:1       =   1.0000  0:2       =   1.0000  0:3       =   1.0000 
+ +0:4       =   1.0000  0:5       =   1.0000 
+
+
+ **** voltage sources
+
+ subckt                                                         
+ element  0:v1       0:v2       0:v3       0:v4       0:v5      
+  volts      1.0000     1.0000     1.0000     1.0000     1.0000 
+  current -166.6667m   -1.1667   -83.3333m  -41.6667m -285.7143u
+  power    166.6667m    1.1667    83.3333m   41.6667m  285.7143u
+
+     total voltage source power dissipation=    1.4586        watts
+
+
+
+ **** resistors
+
+ subckt   x1         x1         x3         x4         x2.xc      x2.xc     
+ element  1:r1       1:r2       3:r3       4:r4       6:r1       6:r2      
+  r value   24.0000     8.0000    12.0000    24.0000     1.0000     6.0000 
+  v drop     1.0000     1.0000     1.0000     1.0000     1.0000     1.0000 
+  current   41.6667m  125.0000m   83.3333m   41.6667m    1.0000   166.6667m
+  power     41.6667m  125.0000m   83.3333m   41.6667m    1.0000   166.6667m
+
+ subckt   x5.xm      x5.xm.xl  
+ element  7:r6       8:r5      
+  r value    7.0000k    7.0000k
+  v drop     1.0000     1.0000 
+  current  142.8571u  142.8571u
+  power    142.8571u  142.8571u
+
+
+          ***** job concluded
+ ******  
+ * ovr_self_combo: overrides that name the overridden name, functions in two instance levels (parhier=local)
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       6 # elements   =      13
+  # resistors   =       8 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       5
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  readin             0.01
+  errchk             0.00
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         98.59 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       30.35 seconds
+           job started at     15:24:16 11/01/2026
+           job ended   at     15:24:46 11/01/2026
+           job total runtime        30.35 seconds
+
+

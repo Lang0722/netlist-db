@@ -1,0 +1,14 @@
+{
+ "case": "mos_digit_model",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3)  Model name must start with a letter, syntax error at or before \"5vnmos\" \"nmos\" \"level\" \"=\" \"1\" \"kp\" \"=\" \"1e-4\" \"vto\" \"=\" \"0.5\"",
+  "digit_first_model_name": "rejected"
+ }
+}

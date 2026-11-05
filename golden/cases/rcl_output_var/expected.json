@@ -1,0 +1,25 @@
+{
+ "case": "rcl_output_var",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 2000.0
+  },
+  {
+   "path": "r2",
+   "value": 998.4985
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 1,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "skip_value_check": [
+   "r1",
+   "r2"
+  ]
+ }
+}

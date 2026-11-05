@@ -89,7 +89,7 @@ async fn multiple_top_files_do_not_race() {
 use crate::{
     ast::{ASTBuilder, Segment, Value},
     err::ParseErrorInner,
-    instance::{ControlledKind, CurrentSource, Instance, InstanceCtx, TranSource, VoltageSource},
+    instance::{ControlledKind, Instance, InstanceCtx, Source, source_args},
 };
 use std::collections::HashMap;
 
@@ -108,18 +108,34 @@ fn kind(e: &ParseErrorInner) -> &'static str {
         ParseErrorInner::Nom(_) => "Syntax",
         ParseErrorInner::Unknown(_) => "UnknownCommand",
         ParseErrorInner::CircularDefinition(..) => "CircularDefinition",
-        ParseErrorInner::Trailing => "Trailing",
+        ParseErrorInner::TrailingText => "Trailing",
         ParseErrorInner::OrphanContinuation => "OrphanContinuation",
-        ParseErrorInner::StrayEnds => "StrayEnds",
-        ParseErrorInner::UnterminatedSubckt(_) => "UnterminatedSubckt",
+        ParseErrorInner::StrayEnds { .. } => "StrayEnds",
+        ParseErrorInner::MissingEnds { .. } => "UnterminatedSubckt",
         ParseErrorInner::DuplicateSubckt(_) => "DuplicateSubckt",
         ParseErrorInner::Unsupported(_) => "Unsupported",
         ParseErrorInner::NonHspice(_) => "NonHspice",
         ParseErrorInner::Internal(_) => "Internal",
-        ParseErrorInner::TooDeep(_) => "TooDeep",
+        ParseErrorInner::NestingTooDeep { .. } => "TooDeep",
         ParseErrorInner::Encrypted { .. } => "Encrypted",
         ParseErrorInner::Encoding(_) => "Encoding",
         ParseErrorInner::TitleIsElement => "TitleIsElement",
+        ParseErrorInner::AlterInSubckt => "AlterInSubckt",
+        ParseErrorInner::MissingUnprot => "MissingUnprot",
+        ParseErrorInner::PlusAfterTitle => "PlusAfterTitle",
+        ParseErrorInner::NodeCount { .. } => "NodeCount",
+        ParseErrorInner::LineInQuotes => "LineInQuotes",
+        ParseErrorInner::MosGroupLines => "MosGroupLines",
+        ParseErrorInner::NoModel { .. } => "NoModel",
+        ParseErrorInner::NoSubcktName => "NoSubcktName",
+        ParseErrorInner::TooManyValues { .. } => "TooManyValues",
+        ParseErrorInner::ValueThenModel { .. } => "ValueThenModel",
+        ParseErrorInner::BadPositional { .. } => "BadPositional",
+        ParseErrorInner::DigitFirstModel { .. } => "DigitFirstModel",
+        ParseErrorInner::NotModelName { .. } => "NotModelName",
+        ParseErrorInner::BadSource { .. } => "BadSource",
+        ParseErrorInner::NoValue { .. } => "NoValue",
+        ParseErrorInner::BadValue { .. } => "BadValue",
     }
 }
 
@@ -139,7 +155,8 @@ fn diagnostics(parsed: &Parsed) -> Vec<Diag> {
                         walk(&subckt.ast, out);
                     }
                 }
-                Segment::Include(res) => {
+                Segment::Alter { .. } => {}
+                Segment::Include { res, .. } => {
                     if let Some(Err(e)) = res.get() {
                         out.push(Diag {
                             kind: kind(&e.err),
@@ -165,7 +182,6 @@ fn diag(kind: &'static str, line: u32) -> Diag {
         warning: matches!(
             kind,
             "UnknownCommand"
-                | "StrayEnds"
                 | "DuplicateSubckt"
                 | "NonHspice"
                 | "Encrypted"
@@ -214,6 +230,21 @@ fn num(v: &Value<'_>) -> f64 {
     }
 }
 
+/// The value of an R, C or L element, or the like
+fn value_of(v: &Option<Value<'_>>) -> f64 {
+    num(v.as_ref().expect("a value"))
+}
+
+/// The arguments of a source function, each on its own
+fn func_args(s: &Source<'_>) -> Vec<String> {
+    let f = s.func.as_ref().expect("a function");
+    source_args(&f.args)
+        .split([' ', ','])
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * b.abs()
 }
@@ -243,7 +274,7 @@ async fn bad_statement_keeps_rest_of_file() {
          .ends INV\n",
     )])
     .await;
-    assert_eq!(diagnostics(&parsed), [diag("Syntax", 2)]);
+    assert_eq!(diagnostics(&parsed), [diag("NodeCount", 2)]);
     let (ast, has_err) = files.build(parsed);
     assert!(has_err);
     assert_eq!(names(&ast), ["M1", "M3"]);
@@ -272,6 +303,65 @@ async fn leftover_text_is_reported_not_reparsed() {
     assert_eq!(names(&ast), ["M2", "M3"]);
 }
 
+/// A group can start a value without a key too, and a `.endl` needs the end
+/// of a word: `.endlx` is an unknown command, as on HSPICE (probes on
+/// P-2019.06).
+#[tokio::test]
+async fn group_first_value_and_endl_word() {
+    let (_dir, parsed, files) = parse_text(&[
+        ("top.sp", "R1 a b (3k)\nV1 a 0 (1)\n.lib 'm.l' tt\n"),
+        ("m.l", ".lib tt\nR2 a b 1\n.endlx\nR3 a b 3\n.endl tt\n"),
+    ])
+    .await;
+    assert_eq!(diagnostics(&parsed), [diag("UnknownCommand", 3)]);
+    let (ast, _) = files.build(parsed);
+    assert_eq!(names(&ast), ["R1", "V1", "R2", "R3"]);
+    assert_eq!(ast.unknwon.len(), 1);
+    // HSPICE rejects a group in a `.temp` line, and reads a value in quotes
+    for (text, errors) in [
+        (".temp (50)\n", 1),
+        (".temp (25+25)\n", 1),
+        (".temp 25 (50)\n", 1),
+        (".temp '50'\n", 0),
+        (".temp 50 $ (a comment)\n", 0),
+    ] {
+        let (_dir, parsed, _) = parse_text(&[("top.sp", text)]).await;
+        assert_eq!(diagnostics(&parsed).len(), errors, "{text}");
+    }
+}
+
+/// A line inside quotes that is not a `+` line: HSPICE rejects the deck
+/// (golden `quoted_cmtline`, `quoted_blank_line`, `quoted_spaces_elem`,
+/// `quoted_dollarline_param`). Outside quotes these lines are passed over.
+#[tokio::test]
+async fn line_inside_quotes_is_an_error() {
+    for (text, line) in [
+        (".param b='2\n\n+ *3'\n", 1),
+        ("R0 a b 1\n.param b='2\n* c\n+ *3'\n", 2),
+        (".param b='2\n$ c\n+ *3'\n", 1),
+        ("R1 a b '2\n  \t\n+ *3'\n", 1),
+        ("M1 d g 0 0 a l='2\n\n+ *1u'\n", 1),
+        (".subckt s a w='2\n\n+ *3'\n.ends\n", 1),
+        (".model a nmos level='2\n\n+ *3'\n", 1),
+    ] {
+        let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+        assert_eq!(diagnostics(&parsed), [diag("LineInQuotes", line)], "{text}");
+        assert!(files.build(parsed).1, "{text}");
+    }
+    for text in [
+        ".param b='2\n+ *3'\n",
+        ".param b=2\n\n+ c=3\n",
+        ".param b=2\n* it's\n+ c=3\n",
+        ".param b=2 $ it's\n\n+ c=3\n",
+        ".param b=2 * it's\n\n.param c=3\n",
+        "R1 a b 1k $ it's\n\nR2 a b 1k\n",
+        ".param p=max(1,\n\n+ 3)\n",
+    ] {
+        let (_dir, parsed, _) = parse_text(&[("top.sp", text)]).await;
+        assert_eq!(diagnostics(&parsed), [], "{text}");
+    }
+}
+
 /// A `.ends` without `.subckt` used to end the file, silently.
 #[tokio::test]
 async fn stray_ends_does_not_truncate_the_file() {
@@ -282,7 +372,8 @@ async fn stray_ends_does_not_truncate_the_file() {
     .await;
     assert_eq!(diagnostics(&parsed), [diag("StrayEnds", 2)]);
     let (ast, has_err) = files.build(parsed);
-    assert!(!has_err, "a warning is not an error");
+    // (HSPICE stops at it with a syntax error)
+    assert!(has_err);
     assert_eq!(names(&ast), ["M1", "M2"]);
     assert!(ast.subckt.contains_key("inv"));
 }
@@ -489,27 +580,27 @@ async fn resistor_capacitor_inductor_params_and_models() {
         InstanceCtx::Resistor(r) => r,
         _ => panic!(),
     };
-    assert!(close(num(&r("R1").value), 1e3));
+    assert!(close(value_of(&r("R1").value), 1e3));
     assert_eq!(r("R1").params.len(), 2);
-    assert!(close(num(&r("R2").value), 2e3) && r("R2").params.is_empty());
-    assert_eq!(r("R3").mname.as_deref(), Some("rmod"));
-    assert!(close(num(&r("R3").value), 3e3));
-    assert_eq!(r("R4").mname.as_deref(), Some("rmod"));
-    assert!(close(num(&r("R4").value), 4e3) && r("R4").params.len() == 1);
+    assert!(close(value_of(&r("R2").value), 2e3) && r("R2").params.is_empty());
+    assert_eq!(r("R3").model.as_deref(), Some("rmod"));
+    assert!(close(value_of(&r("R3").value), 3e3));
+    assert_eq!(r("R4").model.as_deref(), Some("rmod"));
+    assert!(close(value_of(&r("R4").value), 4e3) && r("R4").params.len() == 1);
     let InstanceCtx::Capacitor(c1) = &inst(&ast, "C1").ctx else {
         panic!()
     };
-    assert_eq!(c1.mname.as_deref(), Some("cmod"));
-    assert!(close(num(&c1.value), 1e-15));
+    assert_eq!(c1.model.as_deref(), Some("cmod"));
+    assert!(close(value_of(&c1.value), 1e-15));
     let InstanceCtx::Capacitor(c2) = &inst(&ast, "C2").ctx else {
         panic!()
     };
-    assert!(close(num(&c2.value), 2e-15) && c2.params.len() == 1);
+    assert!(close(value_of(&c2.value), 2e-15) && c2.params.len() == 1);
     let InstanceCtx::Inductor(l1) = &inst(&ast, "L1").ctx else {
         panic!()
     };
-    assert_eq!(l1.mname.as_deref(), Some("lmod"));
-    assert!(close(num(&l1.value), 1e-9));
+    assert_eq!(l1.model.as_deref(), Some("lmod"));
+    assert!(close(value_of(&l1.value), 1e-9));
 }
 
 /// `DC`, `AC`, transient functions and PWL without parentheses used to be
@@ -536,41 +627,33 @@ async fn independent_sources() {
         InstanceCtx::Voltage(v) => &v.source,
         _ => panic!(),
     };
-    assert!(matches!(v("V1"), VoltageSource::Value(x) if close(num(x), 1.8)));
+    let dc = |s: &Source<'_>| num(&s.dc.as_ref().expect("a DC value").1);
+    assert!(close(dc(v("V1")), 1.8));
     for name in ["V2", "V3"] {
-        let VoltageSource::Spec(spec) = v(name) else {
-            panic!("{name}")
-        };
-        let Some(TranSource::Func { name: f, args, .. }) = &spec.tran else {
-            panic!()
-        };
-        assert_eq!(f.to_uppercase(), "PULSE");
+        let f = v(name).func.as_ref().expect(name);
+        assert_eq!(f.name.to_uppercase(), "PULSE");
+        let args = func_args(v(name));
         assert_eq!(args.len(), 7);
-        assert!(close(num(&args[1]), 1.8));
+        assert_eq!(args[1], "1.8");
     }
-    let VoltageSource::Spec(v4) = v("V4") else {
-        panic!()
-    };
-    assert_eq!(num(v4.dc.as_ref().unwrap()), 0.0);
-    let ac = v4.ac.as_ref().unwrap();
-    assert!(close(num(&ac.mag), 1.0) && close(num(ac.phase.as_ref().unwrap()), 90.0));
-    assert!(matches!(&v4.tran, Some(TranSource::Func { args, .. }) if args.len() == 3));
-    let VoltageSource::PWL(v5) = v("V5") else {
-        panic!()
-    };
-    assert_eq!(v5.points.len(), 2);
-    assert!(v5.repeat.is_some() && v5.delay.is_some());
-    assert!(matches!(v("V6"), VoltageSource::PWL(p) if p.points.len() == 2));
+    let v4 = v("V4");
+    assert_eq!(dc(v4), 0.0);
+    let (mag, phase) = (v4.ac_mag.as_ref().unwrap(), v4.ac_phase.as_ref().unwrap());
+    assert!(close(num(&mag.1), 1.0) && close(num(&phase.1), 90.0));
+    assert_eq!(func_args(v4).len(), 3);
+    let v5 = v("V5");
+    assert_eq!(func_args(v5).len(), 4);
+    let keys: Vec<_> = v5.params.iter().map(|kv| kv.k.to_string()).collect();
+    assert_eq!(keys, ["R", "TD"]);
+    assert_eq!(func_args(v("V6")).len(), 4);
     let i = |name| match &inst(&ast, name).ctx {
         InstanceCtx::Current(i) => &i.source,
         _ => panic!(),
     };
-    assert!(matches!(i("I1"), CurrentSource::Value(x) if close(num(x), 1e-3)));
-    assert!(matches!(i("I2"), CurrentSource::Spec(s) if s.ac.is_some()));
-    let VoltageSource::Spec(v7) = v("V7") else {
-        panic!()
-    };
-    assert!(matches!(&v7.dc, Some(Value::Expr(e)) if e == "vsupply"));
+    assert!(close(dc(i("I1")), 1e-3));
+    assert!(i("I2").ac_mag.is_some());
+    let v7 = v("V7");
+    assert!(matches!(&v7.dc, Some((_, Value::Expr(e))) if e == "vsupply"));
     assert_eq!(v7.params.len(), 1);
 }
 
@@ -657,7 +740,7 @@ async fn control_cards_are_kept_verbatim() {
     assert_eq!(ast.option.len(), 2);
     let text = ast.to_string();
     for line in [
-        ".global vdd vss",
+        ".GLOBAL vdd vss",
         ".temp 25",
         ".tran 1p 10n SWEEP data=d1",
         ".op",
@@ -691,7 +774,8 @@ C1 a 0 10fF
 V1 vdd 0 DC 1.8
 V2 in 0 DC 0 PULSE(0 1.8 0 10p 10p 1n 2n) AC 1 90 M=1
 V3 in 0 PWL(0 0 1n 1.8 R TD=1n)
-I1 0 a SIN(0 1m 1meg) PAT(1 0 0 1n 1n 5n b1010 r=1)
+I1 0 a SIN(0 1m 1meg)
+I2 0 a PAT(1 0 0 1n 1n 5n b1010 r=1)
 E1 out 0 POLY(2) a 0 b 0 0 1 1
 F1 out 0 vsense 2
 E2 out 0 VOL='V(a)*2'
@@ -849,7 +933,7 @@ async fn double_backslash_joins_lines_without_white_space() {
     ])
     .await;
     // `M9 d g` (too few nodes) is on line 6 of the file
-    assert_eq!(diagnostics(&parsed), [diag("Syntax", 6)]);
+    assert_eq!(diagnostics(&parsed), [diag("NodeCount", 6)]);
     let (ast, _) = files.build(parsed);
     assert_eq!(names(&ast), ["R0"], "the split include path resolves");
     let param = |k: &str| &ast.param.iter().find(|kv| kv.k == k).unwrap().v;
@@ -882,7 +966,7 @@ async fn backslash_then_plus() {
 /// whose `.ends` lines are missing), used to overflow the stack and abort.
 #[tokio::test]
 async fn deep_subckt_nesting_does_not_overflow_the_stack() {
-    use crate::parser::MAX_SUBCKT_DEPTH;
+    use crate::parser::MAX_NESTING;
     const DEPTH: usize = 400;
     let mut text = String::new();
     for i in 0..DEPTH {
@@ -893,16 +977,17 @@ async fn deep_subckt_nesting_does_not_overflow_the_stack() {
     let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
     let diags = diagnostics(&parsed);
     let too_deep: Vec<_> = diags.iter().filter(|d| d.kind == "TooDeep").collect();
-    assert_eq!(too_deep.len(), DEPTH - MAX_SUBCKT_DEPTH);
-    // the first `.subckt` too deep is reported on its own line
-    assert_eq!(*too_deep[0], diag("TooDeep", MAX_SUBCKT_DEPTH as u32 + 1));
+    // one error, for the first `.subckt` too deep, on its own line; the part
+    // below it is skipped
+    assert_eq!(too_deep, [&diag("TooDeep", MAX_NESTING as u32 + 1)]);
     let (ast, has_err) = files.build(parsed);
     assert!(has_err);
-    assert_eq!(count_instances(&ast), 1);
+    assert_eq!(count_instances(&ast), 0);
     // building and printing it do not overflow either
-    assert!(ast.to_string().contains("R1 a 0"));
+    assert!(ast.to_string().contains(".SUBCKT s0 a"), "{ast}");
 
-    // a cell library without `.ends`: every cell is kept
+    // a cell library without `.ends`: the cells up to the limit are kept, and
+    // the error names the limit
     let mut lib = String::new();
     for i in 0..500 {
         writeln!(lib, ".subckt cell{i} a b\nM1 a b 0 0 nch w=1u l=1u").unwrap();
@@ -910,7 +995,7 @@ async fn deep_subckt_nesting_does_not_overflow_the_stack() {
     let (_dir, parsed, files) = parse_text(&[("lib.sp", &lib)]).await;
     let (ast, has_err) = files.build(parsed);
     assert!(has_err);
-    assert_eq!(count_instances(&ast), 500);
+    assert_eq!(count_instances(&ast), MAX_NESTING);
 }
 
 /// `Subckt::append` on a subckt that instantiates itself used to recurse
@@ -987,7 +1072,7 @@ async fn library_sections_share_one_reading() {
     let dir = TempDir::new("lib");
     dir.write_bytes(
         "models.l",
-        b"* \xb5 library\n.lib tt\n.param d=0\n.lib 'models.l' core\n.lib 'models.l' io\n.endl tt\n\
+        b"* library\n.lib tt\n* \xb5\n.param d=0\n.lib 'models.l' core\n.lib 'models.l' io\n.endl tt\n\
           .lib core\n.model nch.1 nmos lmin=1e-8 lmax=1e-6 wmin=1e-8 wmax=1\n\
           .model nch.2 nmos lmin=1e-6 lmax=1e-4 wmin=1e-8 wmax=1\n.endl core\n\
           .lib io\n.model nio nmos level=54\n.endl io\n",
@@ -1000,19 +1085,9 @@ async fn library_sections_share_one_reading() {
     let (parsed, files) = parse_files(&[deck]).await;
     let mut kinds: Vec<_> = diagnostics(&parsed).iter().map(|d| d.kind).collect();
     kinds.sort();
-    // the encoding warning of each section read (tt, core, io), the missing
+    // the encoding warning of the section with the bad byte (tt), the missing
     // section, and each section of the missing file
-    assert_eq!(
-        kinds,
-        [
-            "Encoding",
-            "Encoding",
-            "Encoding",
-            "IO",
-            "IO",
-            "NoLibSection"
-        ]
-    );
+    assert_eq!(kinds, ["Encoding", "IO", "IO", "NoLibSection"]);
     let (ast, _) = files.build(parsed);
     let models: Vec<_> = ast.model.iter().map(|m| m.name.to_string()).collect();
     assert_eq!(models, ["nch.1", "nch.2", "nio"]);
@@ -1053,7 +1128,8 @@ async fn source_without_value() {
     let InstanceCtx::Voltage(v) = &inst(&ast, "V1").ctx else {
         panic!()
     };
-    assert!(matches!(&v.source, VoltageSource::Params(p) if p.is_empty()));
+    let s = &v.source;
+    assert!(s.dc.is_none() && s.ac_mag.is_none() && s.func.is_none() && s.params.is_empty());
     assert!(
         ast.to_string().contains("\nV1 a 0\nVm a b\nI1 c d"),
         "{ast}"
@@ -1084,7 +1160,7 @@ R2 a b 50 TC=0,0
     let InstanceCtx::Resistor(r) = &inst(&ast, "R1").ctx else {
         panic!()
     };
-    assert!(matches!(&r.value, Value::Expr(e) if e == "1e999"));
+    assert!(matches!(&r.value, Some(Value::Expr(e)) if e == "1e999"));
     let first = ast.to_string();
     assert!(first.contains("TC=0,0"), "{first}");
     assert!(first.contains("delay=OPT1 ( 0n, 0n, 5n )"), "{first}");
@@ -1093,6 +1169,57 @@ R2 a b 50 TC=0,0
     assert_eq!(diagnostics(&parsed2), [], "printed netlist:\n{first}");
     let (ast2, _) = files2.build(parsed2);
     assert_eq!(ast2.to_string(), first);
+
+    // HSPICE rejects a quote in a function call without quotes around it
+    // ("cannot use quotation marks"), but not in a statistical function or in
+    // `str`, when the call is the whole value. It also reads a group at the
+    // start of a value (probes on P-2019.06).
+    for text in [
+        ".param v=max(1,'2')\n",
+        ".param v=sin('p')\n",
+        ".param v=(1+'2')\n",
+        ".param v=2*agauss(0,0,'2')\n",
+        ".param v=agauss(0,0,'2')*2\n",
+        ".param v=max(1,agauss(0,0,'2'))\n",
+        ".param v=agauss(0,0,max(1,'2'))\n",
+        ".param v='max'(1,2)\n",
+    ] {
+        let (_dir, parsed, _) = parse_text(&[("top.sp", text)]).await;
+        assert_eq!(diagnostics(&parsed), [diag("Trailing", 1)], "{text}");
+    }
+    for text in [
+        ".param v=AGAUSS('1', 0, '2') w=2\n",
+        ".param v=agauss(0,0,\n+ '2')\n",
+        ".param v=gauss(1,0.1,'2')\n.param w=aunif(1,0.1,'2')\n",
+        ".param v=unif(1,0.1,'2')\n.param w=limit(1,0.1,'2')\n",
+        ".param v=str('x')\n.param w=str(\"x\")\n",
+        ".subckt s a w=agauss(1u,0,'2') f=str('x')\n.ends\nX1 a s w=agauss(1u,0,'2') f=str('x')\n",
+        "V1 a 0 PWL PWLFILE=str('x.pwl')\n",
+    ] {
+        let (_dir, parsed, _) = parse_text(&[("top.sp", text)]).await;
+        assert_eq!(diagnostics(&parsed), [], "{text}");
+    }
+    // ... and such a value has its nominal value
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".model a nmos level=54\n.param q=agauss(1u,0,'2')\nM1 d g 0 0 a l=q w=1u\n",
+    )])
+    .await;
+    assert_eq!(diagnostics(&parsed), []);
+    assert_sizes(&files.build(parsed).0, &[("M1", 1.0, 1.0)], "agauss");
+    // HSPICE takes commas in `.global`
+    let (_dir, parsed, files) = parse_text(&[("top.sp", ".global a,b, c\n+ d,\n+ e\n")]).await;
+    assert_eq!(diagnostics(&parsed), []);
+    assert_eq!(files.build(parsed).0.global.len(), 5);
+    let (_dir, parsed, files) = parse_text(&[(
+        "top.sp",
+        ".param p=(1+2)*1k q=max(1k, 3k)\nX1 a b s w=(3k)\n",
+    )])
+    .await;
+    assert_eq!(diagnostics(&parsed), []);
+    let (ast, _) = files.build(parsed);
+    assert_eq!(ast.param.len(), 2);
+    assert!(matches!(&ast.param[1].v, Value::Expr(e) if e == "max(1k, 3k)"));
 }
 
 /// HSPICE also delimits expressions with double quotes (2,641 `X` lines in
@@ -1282,18 +1409,25 @@ async fn more_hspice_statements() {
     let (ast, _) = files.build(parsed);
     assert_eq!(names(&ast), ["R1", "Vsig1", "cload", "R2"]);
     let keys: Vec<_> = ast.param.iter().map(|kv| kv.k.to_string()).collect();
-    assert_eq!(keys, ["a1", "square(X)", "a2", "fs(x)", "DelayTime"]);
+    assert_eq!(keys, ["a1", "a2", "DelayTime"]);
+    let funcs: Vec<_> = ast.param_func.iter().map(|f| f.name.to_string()).collect();
+    assert_eq!(funcs, ["square", "fs"]);
     let InstanceCtx::Voltage(v) = &inst(&ast, "Vsig1").ctx else {
         panic!()
     };
-    let VoltageSource::PWL(pwl) = &v.source else {
-        panic!("{:?}", v.source)
-    };
-    assert!(matches!(&pwl.pwlfile, Some(Value::Expr(e)) if e == "str(wav_left)"));
+    assert_eq!(v.source.func.as_ref().map(|f| &*f.name), Some("PWL"));
+    assert!(func_args(&v.source).is_empty());
+    assert_eq!(v.source.params[0].k, "PWLFILE");
+    assert!(matches!(&v.source.params[0].v, Value::Expr(e) if e == "str(wav_left)"));
+    assert!(
+        ast.to_string()
+            .contains("Vsig1 sig1 0 PWL PWLFILE=str(wav_left) TD="),
+        "{ast}"
+    );
     let InstanceCtx::Capacitor(c) = &inst(&ast, "cload").ctx else {
         panic!()
     };
-    assert!(close(num(&c.value), 1e-12));
+    assert!(close(value_of(&c.value), 1e-12));
 }
 
 /// A block encrypted for HSPICE (`.prot freelib`) used to give one error per
@@ -1350,7 +1484,7 @@ fn diagnostics_are_capped_per_file() {
     let file_id: FileId = PathBuf::from("x.sp").into();
     let mut reporter = Reporter::default();
     for _ in 0..MAX_DIAGNOSTICS_PER_FILE + 50 {
-        reporter.report(&ParseErrorInner::Trailing.with(None), &file_id, "");
+        reporter.report(&ParseErrorInner::TrailingText.with(None), &file_id, "");
     }
     assert_eq!(reporter.counts[&file_id], (MAX_DIAGNOSTICS_PER_FILE, 50, 0));
     assert!(reporter.finish());
@@ -1386,7 +1520,7 @@ async fn more_delimiters_and_continuations() {
     let InstanceCtx::Voltage(v) = &inst(&ast, "VC").ctx else {
         panic!()
     };
-    assert!(matches!(&v.source, VoltageSource::PWL(p) if p.points.len() == 3));
+    assert_eq!(func_args(&v.source).len(), 6);
     assert_eq!(nets(inst(&ast, "vdd")), ["0", "vdd"]);
     assert_eq!(nets(inst(&ast, "R9")), ["a", "b"]);
     let params: Vec<_> = ast.model.iter().map(|m| m.params.len()).collect();
@@ -2084,6 +2218,200 @@ async fn positional_length_and_width() {
         ],
         "printed",
     );
+}
+
+/// The model name of a MOSFET line is the first word after the fourth node that
+/// names a model, else the fourth word if it names one (`M1 d g 0 a pl pw`: 3
+/// nodes, then the names of L and W, deck `q_positional_names_3`). A line with no
+/// such word keeps the last word that is not a number, so the error names it.
+/// HSPICE reads the other lines below as the test does (decks
+/// `q_two_model_words*`, and probes on P-2019.06).
+#[tokio::test]
+async fn model_name_is_the_first_word_that_names_a_model() {
+    let text = ".model a nmos level=54\n.param pl=2u pw=1u\n\
+        M1 d g 0 a pl pw\nM2 d g 0 0 a pl pw\nM3 d g 0 a pl 1u\nM4 d g s e p b t a\n\
+        M5 d g 0 0 nosuch pl pw\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+    assert_eq!(diagnostics(&parsed), []);
+    let (ast, _) = files.build(parsed);
+    let models = ast.mosfet_models();
+    for (name, l, w) in [
+        ("M1", 2.0, 1.0),
+        ("M2", 2.0, 1.0),
+        ("M3", 2.0, 1.0),
+        ("M4", 100.0, 100.0),
+    ] {
+        let m = models.iter().find(|m| m.path == name).unwrap();
+        assert_eq!(m.mname, "a", "{name}");
+        let s = m.selection.as_ref().expect(name);
+        assert!(close(s.l * 1e6, l) && close(s.w * 1e6, w), "{name}: {s:?}");
+    }
+    let m = models.iter().find(|m| m.path == "M5").unwrap();
+    assert!(matches!(&m.selection, Err(crate::models::SelectError::NoModel(n)) if n == "pw"));
+
+    // two words name a model
+    let text = ".model a nmos level=54\n.model b nmos level=54\n.model n nmos level=54\n\
+        .param b=2u a=1u p=2u\n\
+        M1 d g 0 0 a b w=1u\nM2 d g 0 a b w=1u\nM3 d g 0 0 x a b w=1u\nM4 d g 0 b a w=1u\n\
+        M5 d g 0 0 a a b\nM6 d g 0 0 b b a\nM7 d g n n n l=1u w=1u\nM8 d g 0 n a p w=1u\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+    assert_eq!(diagnostics(&parsed), []);
+    let (ast, _) = files.build(parsed);
+    let models = ast.mosfet_models();
+    for (name, model, l, w) in [
+        ("M1", "a", 2.0, 1.0),
+        ("M2", "b", 100.0, 1.0),
+        ("M3", "a", 2.0, 1.0),
+        ("M4", "a", 100.0, 1.0),
+        ("M5", "a", 1.0, 2.0),
+        ("M6", "b", 2.0, 1.0),
+        ("M7", "n", 1.0, 1.0),
+        ("M8", "a", 2.0, 1.0),
+    ] {
+        let m = models.iter().find(|m| m.path == name).unwrap();
+        assert_eq!(m.mname, model, "{name}");
+        let s = m.selection.as_ref().expect(name);
+        assert!(close(s.l * 1e6, l) && close(s.w * 1e6, w), "{name}: {s:?}");
+    }
+}
+
+/// A MOSFET line with many words, as measured on HSPICE: any number of values
+/// after the model name (decks `q_positional_names_4`, `q_positional_names_8`,
+/// `q_positional_numbers_9`), up to 7 nodes before it (`q_nodes_7`). HSPICE
+/// stops at 8 nodes (`q_nodes_8`).
+#[tokio::test]
+async fn mosfet_line_with_many_words() {
+    let text = ".model a nmos level=54\n.param pl=2u pw=1u pa=1p pb=1p\n\
+        M1 d g 0 0 a pl pw pa pb\nM2 d g 0 a pl pw pa pb\n\
+        M3 d g 0 0 a pl pw pa pb pa pb pa pb\nM4 d g 0 0 a 2u 1u 1p 1p 1u 1u 1 1 1\n\
+        M5 d g 0 0 a pl pw pa pb w=3u\nM6 d g 0 0 x y z a pl pw\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+    assert_eq!(diagnostics(&parsed), []);
+    let (ast, has_err) = files.build(parsed);
+    assert!(!has_err);
+    let expected = [
+        ("M1", 2.0, 1.0),
+        ("M2", 2.0, 1.0),
+        ("M3", 2.0, 1.0),
+        ("M4", 2.0, 1.0),
+        ("M5", 2.0, 3.0),
+        ("M6", 2.0, 1.0),
+    ];
+    assert_sizes(&ast, &expected, "many words");
+    // printed, and read back
+    let printed = ast.to_string();
+    let (_dir2, parsed2, files2) = parse_text(&[("top.sp", &printed)]).await;
+    assert_eq!(diagnostics(&parsed2), [], "{printed}");
+    assert_sizes(&files2.build(parsed2).0, &expected, "printed");
+
+    let text = ".model a nmos level=54\nM1 d g 0 0 x y z w a l=1u w=1u\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+    assert_eq!(diagnostics(&parsed), []);
+    let (ast, _) = files.build(parsed);
+    let too_many = |e: &crate::models::SelectError| matches!(e, crate::models::SelectError::TooManyNodes { name, nodes: 8 } if name == "a");
+    let models = ast.mosfet_models();
+    assert!(models[0].selection.as_ref().is_err_and(too_many));
+    let usage = ast.model_usage();
+    assert_eq!(usage.errors.len(), 1);
+    assert!(too_many(&usage.errors[0].0));
+}
+
+/// `OFF` on a MOSFET line takes a place and gives no value. HSPICE's L and W
+/// (probes on P-2019.06).
+#[tokio::test]
+async fn off_takes_a_place() {
+    let lines = [
+        ("M1 d g 0 0 a OFF", 100.0, 100.0),
+        ("M1 d g 0 0 a OFF 1u", 100.0, 1.0),
+        ("M1 d g 0 0 a OFF 1u 2u", 100.0, 1.0),
+        ("M1 d g 0 0 a 1u OFF", 1.0, 100.0),
+        ("M1 d g 0 0 a 1u OFF 2u", 1.0, 100.0),
+        ("M1 d g 0 0 a 1u 2u OFF", 1.0, 2.0),
+        ("M1 d g 0 0 a 1u 2u OFF 3p", 1.0, 2.0),
+        ("M1 d g 0 0 a OFF OFF 1u 2u", 100.0, 100.0),
+        ("M1 d g 0 0 a OFF l=2u w=1u", 2.0, 1.0),
+        ("M1 d g 0 0 a OFF 1u 2u l=3u", 3.0, 1.0),
+        ("M1 d g 0 0 a OFF 1u 2u w=3u", 100.0, 3.0),
+        ("M1 d g 0 0 a OFF pl pw", 100.0, 1.0),
+        ("M1 d g 0 0 a pl OFF pw", 1.0, 100.0),
+        ("M1 d g 0 0 a pl pw OFF", 1.0, 2.0),
+        ("M1 d g 0 0 a off '1u' '2u'", 100.0, 1.0),
+        ("M1 d g 0 a OFF 1u 2u", 100.0, 1.0),
+    ];
+    for (line, l, w) in lines {
+        let text = format!(".model a nmos level=54\n.param pl=1u pw=2u\n{line}\n");
+        let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
+        assert_eq!(diagnostics(&parsed), [], "{line}");
+        let (ast, _) = files.build(parsed);
+        assert_sizes(&ast, &[("M1", l, w)], line);
+        // printed, and read back
+        let printed = ast.to_string();
+        let (_dir2, parsed2, files2) = parse_text(&[("top.sp", &printed)]).await;
+        assert_eq!(diagnostics(&parsed2), [], "{printed}");
+        assert_sizes(&files2.build(parsed2).0, &[("M1", l, w)], &printed);
+    }
+}
+
+/// After four nodes, HSPICE wants the model name: it stops on a word that starts
+/// with a digit there ("Model name is missing", decks `q_digit_word_5`). A sixth
+/// or seventh node can start with a digit.
+#[tokio::test]
+async fn mosfet_digit_first_fifth_word() {
+    let digit = |e: &crate::models::SelectError| matches!(e, crate::models::SelectError::DigitFifthWord { word, .. } if word == "5a");
+    let text = ".model a nmos level=54\nM1 d g 0 0 5a a l=1u w=1u\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+    assert_eq!(diagnostics(&parsed), []);
+    let (ast, _) = files.build(parsed);
+    assert!(ast.mosfet_models()[0].selection.as_ref().is_err_and(digit));
+    assert!(digit(&ast.model_usage().errors[0].0));
+    let text = ".model a nmos level=54\nM1 d g 0 0 x 6 a l=1u w=1u\n\
+        M2 d g 0 0 x y 7a a l=1u w=1u\nM3 d g 0 5 a l=1u w=1u\nM4 d g 5 a l=1u w=1u\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+    assert_eq!(diagnostics(&parsed), []);
+    let expected: Vec<_> = ["M1", "M2", "M3", "M4"].map(|n| (n, 1.0, 1.0)).into();
+    assert_sizes(&files.build(parsed).0, &expected, "digit-first nodes");
+}
+
+/// A value in parentheses on a MOSFET line cannot go on on a `+` line (see
+/// `parser::instance::_mosfet`). On `.param` and `X` lines it can. A comma can
+/// follow `.ends` and its name (probes on P-2019.06).
+#[tokio::test]
+async fn group_on_plus_lines_and_ends_commas() {
+    let text = ".model a nmos level=54\nM1 d g 0 0 a l=(1u\n+ +2u) w=1u\nM2 d g 0 0 a l=1u w=1u\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+    assert_eq!(diagnostics(&parsed), [diag("MosGroupLines", 2)]);
+    assert_sizes(&files.build(parsed).0, &[("M2", 1.0, 1.0)], "the next line");
+    let text = ".model a nmos level=54\n.subckt c d g w=1u\nM1 d g 0 0 a l=1u w=w\n.ends\n\
+        .param p=(1u+\n+ 2u)\n.param q=max(1u,\n+ 2u)\nM1 d g 0 0 a l=p w=q\n\
+        M2 d g 0 0 a l='(1u\n+ +2u)' w=1u\nX1 d g c w=(1u\n+ +2u)\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+    assert_eq!(diagnostics(&parsed), []);
+    let expected = [("M1", 3.0, 2.0), ("M2", 3.0, 1.0), ("X1.M1", 1.0, 3.0)];
+    assert_sizes(&files.build(parsed).0, &expected, "groups on + lines");
+    for ends in [
+        ".ends,",
+        ".ends,c1",
+        ".ends, c1",
+        ".ends ,c1",
+        ".ends , c1",
+        ".ends c1,",
+        ".ends (c1)",
+        ".ends (c1),",
+        ".ends,$ c",
+        ".ends c1 $ c",
+        ".ends $ c",
+        ".ends * c",
+        ".ends c1 * c",
+        ".ends\n+ c1",
+        ".ends c1",
+    ] {
+        let text = format!(
+            ".model a nmos level=54\n.subckt c1 d g\nM1 d g 0 0 a l=1u w=1u\n{ends}\nX1 d g c1\n"
+        );
+        let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
+        assert_eq!(diagnostics(&parsed), [], "{ends}");
+        assert_sizes(&files.build(parsed).0, &[("X1.M1", 1.0, 1.0)], ends);
+    }
 }
 
 /// Values after the model name may also be quoted expressions and names of

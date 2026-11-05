@@ -1,0 +1,20 @@
+[package]
+name = "netlist-query"
+description = "Query engine over HSPICE netlists for LLM tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+netlist-db = { path = ".." }
+netlist-expr = { path = "../expr" }
+# `HashTable` for the interner (no default hasher: the interner hashes)
+hashbrown = { version = "0.17", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+# peak RSS in the perf gate (`getrusage`)
+libc = "0.2"

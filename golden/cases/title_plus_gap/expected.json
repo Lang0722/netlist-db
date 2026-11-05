@@ -1,0 +1,14 @@
+{
+ "case": "title_plus_gap",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) unable to open file \"title_plus_gap probe deck\" .Either file doesn't exists or path is wrong. Please enter the correct file location.",
+  "line3_plus_after_comment": "error"
+ }
+}

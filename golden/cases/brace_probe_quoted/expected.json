@@ -1,0 +1,15 @@
+{
+ "case": "brace_probe_quoted",
+ "resistors": [],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "braces": "'{a}' inside quotes in a .probe output is the node [a], which is not found: the output is ignored with a warning; the job runs",
+  "warning": "**warning** (deck.sp:6) Unable to find referenced node [a]; Output variable ignored. Specify a valid node.",
+  "warning2": "**warning** (deck.sp:6) .print/.probe statement contains unused output; the unused output is ignored."
+ }
+}

@@ -1,0 +1,24 @@
+{
+ "case": "plus_after_cmtline",
+ "resistors": [
+  {
+   "path": "r2",
+   "value": 5000.0
+  },
+  {
+   "path": "rp",
+   "value": 4000.0
+  },
+  {
+   "path": "x1.rc",
+   "value": 3000.0
+  }
+ ],
+ "totals": {
+  "resistors": 3,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {}
+}

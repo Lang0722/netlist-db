@@ -1,0 +1,70 @@
+{
+ "case": "long_names",
+ "resistors": [
+  {
+   "path": "rverylongtoplevel",
+   "value": 11.0
+  },
+  {
+   "path": "x1.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "x2.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "x3.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "x4.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "x5.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "x6.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "x7.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "x8.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "x9.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "x10.rlongname_cell",
+   "value": 1.0
+  },
+  {
+   "path": "xtop_instance_name_very_long_123456789.xlonginstname_abcdef.rverylongelementname_abc",
+   "value": 7.0
+  },
+  {
+   "path": "xtop_instance_name_very_long_123456789.xlonginstname_abcdef.rshort",
+   "value": 9.0
+  }
+ ],
+ "totals": {
+  "resistors": 13,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 12
+ },
+ "extra": {
+  "listing_names": {
+   "rverylongtoplevel": "element row 0:rverylon",
+   "xtop_instance_name_very_long_123456789.xlonginstname_abcdef.rverylongelementname_abc": "subckt row xtop_insta, element row 12:rverylon",
+   "x10.rlongname_cell": "element row 11:rlongnam"
+  }
+ }
+}

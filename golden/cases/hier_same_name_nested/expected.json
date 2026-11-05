@@ -1,0 +1,28 @@
+{
+ "case": "hier_same_name_nested",
+ "resistors": [
+  {
+   "path": "x1.rout",
+   "value": 1.0
+  },
+  {
+   "path": "x1.xc.rin",
+   "value": 2.0
+  },
+  {
+   "path": "x2.xw.rw",
+   "value": 3.0
+  },
+  {
+   "path": "x2.xw.xt.rt2",
+   "value": 4.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 5
+ },
+ "extra": {}
+}

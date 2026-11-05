@@ -1,0 +1,13 @@
+{
+ "case": "dollar_func_body",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:2) Illegal character in statement in column    5 : x*2 $ c **error** (deck.sp:2)  Number is improperly formed in column   7 : x*2 $ c"
+ }
+}

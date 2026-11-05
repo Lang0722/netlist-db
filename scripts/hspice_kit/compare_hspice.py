@@ -114,17 +114,17 @@ def op_models(lis):
 # a value it cannot compute. Any other stop does not answer the question.
 NO_ANSWER = re.compile(r"definition of model/subckt .* is not found|does not fit into the wmax/wmin"
                        r"|must set all four|cannot redefine parameter|undefined parameter"
-                       r"|loop reference|must not be negative", re.I)
+                       r"|loop reference|must not be negative|model name is missing"
+                       r'|syntax error at or before "a" "l"', re.I)
 
 # Where netlist-db differs from HSPICE on purpose. Reported, but they do not
 # fail this comparison.
 # - The first MOSFET that looks at a bin reads the bin's limits in its own
 #   instance (see the known gap in src/models.rs).
-# - `M1 d g 0 a pl pw`: 3 nodes, then names of parameters after the model name.
-#   HSPICE knows the models when it reads the line; netlist-db's parser takes
-#   `a` for a 4th node and `pl` for the model, and then reports no model `pl`.
+# - A value in parentheses over a `+` line of a MOSFET line: HSPICE reads a part
+#   of it, and netlist-db reports an error.
 KNOWN_GAPS = {"q_limits_s1_s2", "q_limits_s2_s1", "q_limits_s1_s3", "q_limits_bfs", "q_limits_nested_local",
-              "q_limits_same_scope", ("case7", "local"), "q_positional_names_3"}
+              "q_limits_same_scope", ("case7", "local"), "q_mos_group_lines"}
 
 
 def bin_of(model):
@@ -140,6 +140,10 @@ def compare_deck(kit, results, name, verbose):
     want_error = [r for r in exp if r[6].startswith("error")]
     report = collections.Counter()
     diffs = []
+    if os.path.exists(os.path.join(kit, "expected", f"{name}.text_error")):
+        # netlist-db reports an error in the text of the deck: HSPICE should stop
+        verdict = "agree (HSPICE stops too)" if errs and not meas else "DIFFER: HSPICE ran it"
+        return verdict, errs[:3], report, diffs
     if want_error:
         # netlist-db finds no model for some MOSFET: HSPICE should stop, on
         # that (a stop on anything else does not tell)

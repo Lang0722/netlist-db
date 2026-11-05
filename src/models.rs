@@ -26,6 +26,12 @@
 //!   the line. HSPICE runs a line that calls a Verilog-A module (`.hdl`) or a
 //!   subckt in an encrypted block. This crate reads neither, so it reports
 //!   those lines too.
+//! - The model name is the first word after the fourth node of a MOSFET line that
+//!   names a model on the instance path, else the fourth word if it names one.
+//!   The words after it are values, in any number, and `OFF` takes a place among
+//!   them and gives no value. More than 7 nodes before it make HSPICE stop
+//!   ([`SelectError::TooManyNodes`]), and so does a fifth word that starts with a
+//!   digit before it ([`SelectError::DigitFifthWord`]).
 //! - The limits are evaluated where the model is defined: those of a model
 //!   of the top level with the top-level parameters (a subckt parameter of
 //!   the same name does not change them), those of a model inside a subckt
@@ -54,13 +60,14 @@ use crate::{
     AST, Subckt,
     ast::{KeyValue, Model, Value},
     eval::{Binding, EvalError, ParHier, Scope, expr_names, function_name},
-    instance::{Instance, InstanceCtx, MOSFET},
+    instance::{Instance, InstanceCtx, MOSFET, is_off},
     utlis::MAX_HIERARCHY_DEPTH,
 };
 use core::fmt;
 use indexmap::IndexSet;
 use itertools::Itertools as _;
 use std::{
+    borrow::Cow,
     cell::OnceCell,
     collections::{HashMap, HashSet},
     iter::once,
@@ -88,6 +95,13 @@ pub enum SelectError {
     /// line's instance path. HSPICE stops there. This is the one error that
     /// does not concern a MOSFET: the MOSFETs below the line are not known.
     NoSubckt(String),
+    /// More than 7 nodes before the model name of a MOSFET. HSPICE stops there
+    /// (deck `q_nodes_8`).
+    TooManyNodes { name: String, nodes: usize },
+    /// A word that starts with a digit after the fourth node of a MOSFET, and
+    /// the model name after it. HSPICE stops there: "Model name is missing"
+    /// (deck `q_digit_word_5`). A sixth or seventh node can start with a digit.
+    DigitFifthWord { name: String, word: String },
 }
 
 impl fmt::Display for SelectError {
@@ -108,6 +122,15 @@ impl fmt::Display for SelectError {
             Self::NoSubckt(name) => write!(
                 f,
                 "X line with no definition of subckt `{name}`: the MOSFETs below it are not counted"
+            ),
+            Self::TooManyNodes { name, nodes } => write!(
+                f,
+                "{nodes} nodes before the model name `{name}`: HSPICE reads at most 7"
+            ),
+            Self::DigitFifthWord { name, word } => write!(
+                f,
+                "the word `{word}` after the fourth node, before the model name `{name}`: \
+                 HSPICE wants the model name there, and a model name starts with a letter"
             ),
         }
     }
@@ -274,8 +297,66 @@ const SIZES: [&str; 4] = ["l", "w", "nf", "wnflag"];
 /// The parameters that the first values after the model name give
 const POSITIONAL: [&str; 2] = ["l", "w"];
 
-/// The size of a MOSFET, evaluated in `scope`
-fn size(m: &MOSFET<'_>, scope: &Scope<'_>, opts: &Options) -> Result<Size, SelectError> {
+/// The most nodes that HSPICE reads before the model name of a MOSFET
+/// (decks `q_nodes_7`, `q_nodes_8`)
+const MAX_MOSFET_NODES: usize = 7;
+
+/// The words of the MOSFET line `m` that can be its model name, the last one
+/// first. The parser takes the last word that is not a number, so in
+/// `M1 d g s b nch pl pw` it takes `pw`, with `nch` and `pl` in the place of
+/// nodes.
+fn name_words<'m, 's>(m: &'m MOSFET<'s>) -> impl Iterator<Item = &'m Cow<'s, str>> {
+    once(&m.mname)
+        .chain(m.extra_nodes.iter().rev())
+        .chain(&m.nb)
+}
+
+/// A MOSFET line as the selector reads it. [`Selector::read_line`] finds the
+/// model name in [`name_words`], and the words after
+/// it are values. HSPICE reads `M1 d g s b nch pl pw` so, with the parameters
+/// `pl` and `pw` as L and W (deck `q_positional_names`).
+#[derive(Clone, Copy)]
+struct MosLine<'m, 's> {
+    m: &'m MOSFET<'s>,
+    /// the place of the model name in [`name_words`]
+    model: usize,
+}
+
+impl<'m, 's> MosLine<'m, 's> {
+    fn name(self) -> &'m str {
+        name_words(self.m)
+            .nth(self.model)
+            .expect("a word of the line")
+    }
+
+    /// The number of words before the model name
+    fn nodes(self) -> usize {
+        3 + usize::from(self.m.nb.is_some()) + self.m.extra_nodes.len() - self.model
+    }
+
+    /// The value at the place `position` after the model name. A bare `OFF`
+    /// takes a place and gives no value.
+    fn value(self, position: usize) -> Option<Value<'s>> {
+        match self.model.checked_sub(position + 1) {
+            Some(word) => name_words(self.m).nth(word).map(|w| Value::Expr(w.clone())),
+            None => self
+                .m
+                .positional
+                .get(position - self.model)
+                .map(|(_, v)| v.clone()),
+        }
+        .filter(|v| !is_off(v))
+    }
+
+    /// The values after the model name
+    fn values(self) -> impl Iterator<Item = Value<'s>> {
+        (0..self.model + self.m.positional.len()).filter_map(move |p| self.value(p))
+    }
+}
+
+/// The size of the MOSFET `line`, evaluated in `scope`
+fn size(line: MosLine<'_, '_>, scope: &Scope<'_>, opts: &Options) -> Result<Size, SelectError> {
+    let m = line.m;
     let value = |key: &str| {
         // (a keyword wins over a number after the model name)
         let v = m
@@ -283,13 +364,13 @@ fn size(m: &MOSFET<'_>, scope: &Scope<'_>, opts: &Options) -> Result<Size, Selec
             .iter()
             .rev()
             .find(|kv| kv.k.eq_ignore_ascii_case(key))
-            .map(|kv| &kv.v)
+            .map(|kv| Cow::Borrowed(&kv.v))
             .or_else(|| {
                 let position = POSITIONAL.iter().position(|k| *k == key)?;
-                m.positional.get(position)
+                line.value(position).map(Cow::Owned)
             });
         match v {
-            Some(v) => scope.eval(v).map(Some).map_err(|error| SelectError::Eval {
+            Some(v) => scope.eval(&v).map(Some).map_err(|error| SelectError::Eval {
                 what: key.to_ascii_uppercase(),
                 error,
             }),
@@ -359,6 +440,7 @@ fn function_names(ast: &AST<'_>) -> HashSet<String> {
     let mut stack = vec![ast];
     while let Some(a) = stack.pop() {
         names.extend(a.param.iter().filter_map(|kv| function_name(&kv.k)));
+        names.extend(a.param_func.iter().map(|f| f.name.to_ascii_lowercase()));
         for def in a.subckt.values() {
             names.extend(def.params.iter().filter_map(|kv| function_name(&kv.k)));
             stack.push(&def.ast);
@@ -519,6 +601,35 @@ impl<'a, 's> Selector<'a, 's> {
         })
     }
 
+    /// How the level with the definitions `on_path` reads the MOSFET line `m`
+    ///
+    /// The model name is the first word after the fourth node that names a model
+    /// on the instance path, else the fourth word if it names one, else the last
+    /// word (so the error names it). The rest of the line after it holds values:
+    /// HSPICE reads `M1 d g 0 0 a b w=1u` with `b` as L, and `M1 d g 0 a b w=1u`
+    /// with `a` as a node (decks `q_two_model_words*`).
+    fn read_line<'m, 'l>(&mut self, m: &'m MOSFET<'l>, on_path: &[&'a AST<'s>]) -> MosLine<'m, 'l> {
+        let mut names_model = |word: &str| {
+            let key = word.to_ascii_lowercase();
+            on_path.iter().any(|&ast| {
+                let index = self.index(ast);
+                index.exact.contains_key(&key) || index.bins.contains_key(&key)
+            })
+        };
+        let after_fourth = m.extra_nodes.iter().chain(once(&m.mname));
+        let model = after_fourth
+            .into_iter()
+            .position(|word| names_model(word))
+            .map(|k| m.extra_nodes.len() - k)
+            .or_else(|| {
+                m.nb.as_deref()
+                    .is_some_and(&mut names_model)
+                    .then_some(m.extra_nodes.len() + 1)
+            })
+            .unwrap_or(0);
+        MosLine { m, model }
+    }
+
     /// The model of the MOSFET `m`, at the level whose instance path has the
     /// definitions `on_path` and the parameters `scopes` (its own last)
     fn select(
@@ -528,8 +639,22 @@ impl<'a, 's> Selector<'a, 's> {
         on_path: &[&'a AST<'s>],
     ) -> Result<Selection<'a, 's>, SelectError> {
         let scope = scopes.last().expect("the top level at least");
-        let size = size(m, scope, &self.opts)?;
-        self.choose(&m.mname, size, scopes, on_path)
+        let line = self.read_line(m, on_path);
+        let size = size(line, scope, &self.opts)?;
+        let selection = self.choose(line.name(), size, scopes, on_path)?;
+        if line.nodes() > MAX_MOSFET_NODES {
+            return Err(SelectError::TooManyNodes {
+                name: line.name().to_owned(),
+                nodes: line.nodes(),
+            });
+        }
+        if line.nodes() > 4 && m.extra_nodes[0].starts_with(|c: char| c.is_ascii_digit()) {
+            return Err(SelectError::DigitFifthWord {
+                name: line.name().to_owned(),
+                word: m.extra_nodes[0].to_string(),
+            });
+        }
+        Ok(selection)
     }
 }
 
@@ -553,6 +678,9 @@ fn instance_scope<'p>(scope: &'p Scope<'p>, def: &Subckt<'_>, line: &[KeyValue<'
     let mut child = scope.child();
     for kv in def.params.iter().chain(&def.ast.param) {
         child.define(kv);
+    }
+    for f in &def.ast.param_func {
+        child.define_func(f);
     }
     for kv in line {
         child.pass(kv);
@@ -890,15 +1018,16 @@ impl<'a, 's> Usage<'a, 's> {
                             extend(&mut all, &self.sel.names(&kv.v)?);
                         }
                     }
-                    for v in &m.positional {
-                        extend(&mut all, &self.sel.names(v)?);
+                    let line = self.sel.read_line(m, &inner);
+                    for v in line.values() {
+                        extend(&mut all, &self.sel.names(&v)?);
                     }
                     // the ranges of the bins it may use, read where each is
                     // defined: those of the top level read the top level's
                     // parameters (the same everywhere), those of this subckt
                     // its own; those of an instance above it the parameters
                     // of that instance, which are not followed: unknown
-                    let name = m.mname.to_ascii_lowercase();
+                    let name = line.name().to_ascii_lowercase();
                     let last = inner.len() - 1;
                     for (depth, &ast) in inner.iter().enumerate().skip(1) {
                         let index = self.sel.index(ast);
@@ -1004,6 +1133,7 @@ impl<'a, 's> Usage<'a, 's> {
                     let binds = !x.params.is_empty()
                         || !def.params.is_empty()
                         || !def.ast.param.is_empty()
+                        || !def.ast.param_func.is_empty()
                         || !def.ast.model.is_empty()
                         || !def.ast.subckt.is_empty();
                     let inner_context = if binds {
@@ -1101,10 +1231,11 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
             match &inst.ctx {
                 InstanceCtx::MOSFET(m) => {
                     let selection = self.sel.select(m, scopes, on_path);
+                    let mname = self.sel.read_line(m, on_path).name();
                     (self.f)(MosfetModel {
                         path: self.path.iter().copied().chain(once(&*inst.name)).join("."),
                         instance: inst,
-                        mname: &m.mname,
+                        mname,
                         selection,
                     });
                 }

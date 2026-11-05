@@ -1,0 +1,13 @@
+{
+ "case": "func_body_undef_global",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:2) Undefined function definition \"hq\". Please enter a defined name."
+ }
+}

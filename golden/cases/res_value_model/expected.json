@@ -1,0 +1,15 @@
+{
+ "case": "res_value_model",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:5) Element in r1 has three nodes defined,  element must have two nodes",
+  "order": "value_model rejected",
+  "value_token_read_as": "node"
+ }
+}

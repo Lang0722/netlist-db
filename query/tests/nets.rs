@@ -1,0 +1,699 @@
+//! Connectivity: `net_info` and `trace_net` (plan Task 9).
+
+use netlist_query::{LoadOptions, NetInfo, NetView, Netlist, Page, QueryError, TraceDir};
+use std::path::{Path, PathBuf};
+
+fn repo(rel: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
+}
+
+/// A deck written by `load_text`; its directory is removed on drop.
+struct Deck {
+    dir: PathBuf,
+}
+
+impl Drop for Deck {
+    fn drop(&mut self) {
+        _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn load(path: impl AsRef<Path>) -> Netlist {
+    Netlist::load(&LoadOptions::new(path.as_ref().to_path_buf())).unwrap()
+}
+
+fn load_text(name: &str, text: &str) -> (Deck, Netlist) {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("nets")
+        .join(format!("{name}-{}", std::process::id()));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let main = dir.join("main.sp");
+    std::fs::write(&main, text).unwrap();
+    let net = load(&main);
+    (Deck { dir }, net)
+}
+
+fn all() -> Page {
+    Page {
+        limit: 500,
+        cursor: None,
+    }
+}
+
+fn info(net: &Netlist, scope: &str, name: &str) -> NetInfo {
+    net.net_info(scope, name, NetView::Logical, &all())
+        .unwrap_or_else(|e| panic!("net_info({scope:?}, {name:?}): {e}"))
+}
+
+/// (element, pin role) of each connection.
+fn pins(i: &NetInfo) -> Vec<(String, String)> {
+    i.connections
+        .items
+        .iter()
+        .map(|c| (c.element.to_ascii_lowercase(), c.pin_role.clone()))
+        .collect()
+}
+
+fn owned(v: &[(&str, &str)]) -> Vec<(String, String)> {
+    v.iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
+}
+
+const BUF: &str = "* buffers\n\
+.subckt inv in out vdd vss\n\
+m1 out in vdd vdd pch w=2u l=0.1u\n\
+m2 out in vss vss nch w=1u l=0.1u\n\
+.ends\n\
+.subckt buf a y vdd vss\n\
+x1 a mid vdd vss inv\n\
+x2 mid y vdd vss inv\n\
+.ends\n\
+vdd vdd 0 1\n\
+xb1 n1 n2 vdd 0 buf\n\
+xb2 n2 n3 vdd 0 buf\n\
+rin n1 0 1k\n";
+
+#[test]
+fn net_info_inverter() {
+    let (_deck, net) = load_text("inverter", BUF);
+    let out = info(&net, "xb1.x1", "out");
+    assert_eq!(pins(&out), owned(&[("m1", "d"), ("m2", "d")]));
+    assert_eq!((out.total, out.is_port), (2, true));
+    assert_eq!((out.scope.as_str(), out.def.as_str()), ("xb1.x1", "inv"));
+    assert!(!out.connectivity_incomplete);
+    // the source and the bulk of each MOSFET; `vdd` is a port here
+    let vdd = info(&net, "xb1.x1", "VDD");
+    assert_eq!(pins(&vdd), owned(&[("m1", "s"), ("m1", "b")]));
+    // an `X` line pin has the port name of the definition it binds to
+    let mid = info(&net, "xb1", "mid");
+    assert_eq!(pins(&mid), owned(&[("x1", "out"), ("x2", "in")]));
+    assert!(!mid.is_port);
+    assert_eq!(mid.connections.items[0].callee.as_deref(), Some("inv"));
+    // the top level
+    let n2 = info(&net, "", "n2");
+    assert_eq!(pins(&n2), owned(&[("xb1", "y"), ("xb2", "a")]));
+    let n1 = info(&net, "", "n1");
+    assert_eq!(pins(&n1), owned(&[("xb1", "a"), ("rin", "1")]));
+}
+
+#[test]
+fn trace_down_through_ports() {
+    let (_deck, net) = load_text("trace_down", BUF);
+    let t = net.trace_net("", "n1", TraceDir::Down, 5, &all()).unwrap();
+    let hops: Vec<(String, String, String, String, u32)> = t
+        .hops
+        .items
+        .iter()
+        .map(|h| {
+            assert_eq!(h.direction, "down");
+            (
+                h.from_scope.clone(),
+                h.from_net.clone(),
+                h.to_scope.clone(),
+                h.to_net.clone(),
+                h.depth,
+            )
+        })
+        .collect();
+    let s = |a: &str, b: &str, c: &str, d: &str, n: u32| {
+        (a.to_owned(), b.to_owned(), c.to_owned(), d.to_owned(), n)
+    };
+    assert_eq!(
+        hops,
+        [s("", "n1", "xb1", "a", 1), s("xb1", "a", "xb1.x1", "in", 2)]
+    );
+    assert_eq!(t.hops.items[0].via_instance, "xb1");
+    assert!(!t.truncated);
+    // the depth bounds the trace
+    let one = net.trace_net("", "n1", TraceDir::Down, 1, &all()).unwrap();
+    assert_eq!(one.hops.total, 1);
+    // a supply goes into every instance, one level per step
+    let vdd = net.trace_net("", "vdd", TraceDir::Down, 2, &all()).unwrap();
+    let to: Vec<&str> = vdd.hops.items.iter().map(|h| h.to_scope.as_str()).collect();
+    assert_eq!(to, ["xb1", "xb2", "xb1.x1", "xb1.x2", "xb2.x1", "xb2.x2"]);
+}
+
+#[test]
+fn trace_up_from_port() {
+    let (_deck, net) = load_text("trace_up", BUF);
+    let t = net
+        .trace_net("xb1.x1", "in", TraceDir::Up, 5, &all())
+        .unwrap();
+    let hops: Vec<(String, String, String, String)> = t
+        .hops
+        .items
+        .iter()
+        .map(|h| {
+            assert_eq!(h.direction, "up");
+            (
+                h.from_scope.clone(),
+                h.from_net.clone(),
+                h.to_scope.clone(),
+                h.to_net.clone(),
+            )
+        })
+        .collect();
+    let s = |a: &str, b: &str, c: &str, d: &str| {
+        (a.to_owned(), b.to_owned(), c.to_owned(), d.to_owned())
+    };
+    assert_eq!(
+        hops,
+        [s("xb1.x1", "in", "xb1", "a"), s("xb1", "a", "", "n1")]
+    );
+    // a net that is not a port does not go up
+    let mid = net
+        .trace_net("xb1", "mid", TraceDir::Up, 5, &all())
+        .unwrap();
+    assert_eq!(mid.hops.total, 0);
+    // both ways: up to `n2` at the top, then down into `xb2`, never back
+    let both = net
+        .trace_net("xb1.x2", "out", TraceDir::Both, 3, &all())
+        .unwrap();
+    let got: Vec<(String, String, String)> = both
+        .hops
+        .items
+        .iter()
+        .map(|h| (h.direction.clone(), h.to_scope.clone(), h.to_net.clone()))
+        .collect();
+    let s = |a: &str, b: &str, c: &str| (a.to_owned(), b.to_owned(), c.to_owned());
+    assert_eq!(
+        got,
+        [
+            s("up", "xb1", "y"),
+            s("up", "", "n2"),
+            s("down", "xb2", "a"),
+        ]
+    );
+}
+
+#[test]
+fn global_and_ground() {
+    // golden `ground_alias`: `0`, `gnd`, `gnd!`, `ground`, `GND` are one net
+    let net = load(repo("golden/cases/ground_alias/deck.sp"));
+    for name in ["0", "gnd", "GND", "gnd!", "ground"] {
+        let g = info(&net, "", name);
+        assert!(g.is_ground, "{name}");
+        assert_eq!(g.total, 6, "{name}: {:?}", pins(&g));
+        assert!(g.caveats.iter().any(|c| c.contains("every level")));
+    }
+    let sub = info(&net, "xg", "0");
+    assert_eq!(pins(&sub), owned(&[("rs", "2")]));
+    // ground is not traced through ports
+    let t = net.trace_net("", "0", TraceDir::Both, 4, &all()).unwrap();
+    assert_eq!(t.hops.total, 0);
+    assert!(
+        t.caveats.iter().any(|c| c.contains("ground")),
+        "{:?}",
+        t.caveats
+    );
+    // golden `global_net`: `.global vdd` is the same net inside `load`,
+    // which has no `vdd` port; `vss` is not global
+    let net = load(repo("golden/cases/global_net/deck.sp"));
+    let inside = info(&net, "x1", "vdd");
+    assert!(inside.is_global && !inside.is_port);
+    assert_eq!(pins(&inside), owned(&[("rl", "1")]));
+    assert!(inside.caveats.iter().any(|c| c.contains("global_net")));
+    let top = info(&net, "", "vdd");
+    assert_eq!(pins(&top), owned(&[("vsup", "1")]));
+    let vss = info(&net, "x1", "vss");
+    assert!(!vss.is_global);
+    assert_eq!(pins(&vss), owned(&[("rv", "1")]));
+    let t = net.trace_net("", "vdd", TraceDir::Down, 3, &all()).unwrap();
+    assert_eq!(t.hops.total, 0);
+    assert!(t.caveats.iter().any(|c| c.contains(".global")));
+    // `a` of `x1` goes up to `n1`
+    let up = net.trace_net("x1", "a", TraceDir::Up, 1, &all()).unwrap();
+    assert_eq!(up.hops.items[0].to_net, "n1");
+}
+
+#[test]
+fn unknown_letter_incomplete() {
+    let (_deck, net) = load_text(
+        "unknown_letter",
+        "* t\nv1 in 0 1\nE1 out 0 in 0 2\nr1 out 0 1k\nr2 x 0 1k\n.subckt amp p q\nE2 q 0 p 0 3\n.ends\nxa x out amp\n",
+    );
+    let out = info(&net, "", "out");
+    assert!(out.connectivity_incomplete);
+    assert_eq!(out.incomplete_due_to, ["E1"]);
+    assert!(info(&net, "", "in").connectivity_incomplete);
+    let x = info(&net, "", "x");
+    assert!(!x.connectivity_incomplete && x.incomplete_due_to.is_empty());
+    // the pins of the unparsed type are `n1`, `n2`, …
+    assert!(pins(&out).contains(&("e1".to_owned(), "n1".to_owned())));
+    // a trace that reaches it says so
+    let t = net.trace_net("", "x", TraceDir::Down, 2, &all()).unwrap();
+    assert!(t.connectivity_incomplete);
+    assert_eq!(t.incomplete_due_to, ["xa.e2"]);
+    assert!(t.hops.items[0].connectivity_incomplete);
+}
+
+#[test]
+fn net_info_pages_high_fanout() {
+    let mut text = String::from("* fanout\nv1 hub 0 1\n");
+    for k in 0..999 {
+        text.push_str(&format!("r{k} hub n{k} 1k\n"));
+    }
+    let (_deck, net) = load_text("fanout", &text);
+    let p1 = net
+        .net_info("", "hub", NetView::Logical, &Page::default())
+        .unwrap();
+    assert_eq!(p1.total, 1000);
+    assert_eq!(p1.connections.total, 1000);
+    assert_eq!(p1.connections.items.len(), 50);
+    assert_eq!(p1.connections.next_cursor.as_deref(), Some("50"));
+    let p2 = net
+        .net_info(
+            "",
+            "hub",
+            NetView::Logical,
+            &Page {
+                limit: 50,
+                cursor: p1.connections.next_cursor.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(p2.connections.items[0].element, "r49");
+    // a page of 0 gives the counts only
+    let none = net
+        .net_info(
+            "",
+            "hub",
+            NetView::Logical,
+            &Page {
+                limit: 0,
+                cursor: None,
+            },
+        )
+        .unwrap();
+    assert!(none.connections.items.is_empty());
+    assert_eq!(none.total, 1000);
+}
+
+#[test]
+fn port_names_follow_the_binding() {
+    // one `X` line binds to two nested definitions with other port names
+    let (_deck, net) = load_text(
+        "dynamic_ports",
+        "* t\n.subckt t a b\nxn a b only\n.ends\n\
+         .subckt outer a b\n.subckt only p q\nro p q 5\n.ends\nxt a b t\n.ends\n\
+         .subckt outer2 a b\n.subckt only u v\nro u v 6\n.ends\nxt a b t\n.ends\n\
+         v1 1 0 1\nx1 1 0 outer\nx2 1 0 outer2\n",
+    );
+    assert_eq!(pins(&info(&net, "x1.xt", "a")), owned(&[("xn", "p")]));
+    assert_eq!(pins(&info(&net, "x2.xt", "a")), owned(&[("xn", "u")]));
+    let t = net.trace_net("x2", "a", TraceDir::Down, 2, &all()).unwrap();
+    let to: Vec<(String, String)> = t
+        .hops
+        .items
+        .iter()
+        .map(|h| (h.to_scope.clone(), h.to_net.clone()))
+        .collect();
+    assert_eq!(to, owned(&[("x2.xt", "a"), ("x2.xt.xn", "u")]));
+}
+
+#[test]
+fn unbound_and_mismatched_x_lines() {
+    let (_deck, net) = load_text(
+        "bad_x",
+        "* t\n.subckt cell a b\nr1 a b 1\n.ends\nv1 n 0 1\nx1 n 0 m cell\nx2 n 0 nosuch\n",
+    );
+    let n = info(&net, "", "n");
+    assert_eq!(pins(&n), owned(&[("v1", "1"), ("x1", "n1"), ("x2", "n1")]));
+    assert!(
+        n.caveats.iter().any(|c| c.contains("port_count_mismatch")),
+        "{:?}",
+        n.caveats
+    );
+    assert!(
+        n.caveats.iter().any(|c| c.contains("unresolved_subckt")),
+        "{:?}",
+        n.caveats
+    );
+    let t = net.trace_net("", "n", TraceDir::Down, 2, &all()).unwrap();
+    assert_eq!(t.hops.total, 0);
+    assert!(t.caveats.iter().any(|c| c.contains("port_count_mismatch")));
+    assert!(t.caveats.iter().any(|c| c.contains("unresolved_subckt")));
+}
+
+#[test]
+fn net_names_and_errors() {
+    let (_deck, net) = load_text(
+        "names",
+        "* t\n.subckt cell a b\nr1 a b 1\n.ends\nv1 net<3> 0 1\nr2 net<3> a:b 1\nx1.n a:b 0 cell\nr3 x1.n 0 1\n",
+    );
+    assert_eq!(
+        pins(&info(&net, "", "NET<3>")),
+        owned(&[("v1", "1"), ("r2", "1")])
+    );
+    assert_eq!(
+        pins(&info(&net, "", "a:b")),
+        owned(&[("r2", "2"), ("x1.n", "a")])
+    );
+    // a net name with a `.` is a plain name
+    assert_eq!(pins(&info(&net, "", "x1.n")), owned(&[("r3", "1")]));
+    match net.net_info("", "net<4>", NetView::Logical, &all()) {
+        Err(QueryError::NotFound { suggestions, .. }) => {
+            assert!(suggestions.iter().any(|s| s == "net<3>"), "{suggestions:?}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        net.net_info("", " ", NetView::Logical, &all()),
+        Err(QueryError::BadArgument(_))
+    ));
+    // a device is not a scope
+    match net.net_info("r2", "a", NetView::Logical, &all()) {
+        Err(QueryError::BadArgument(msg)) => {
+            assert!(msg.contains("not a subckt instance"), "{msg}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(net.net_info("x9", "a", NetView::Logical, &all()).is_err());
+    // the instance `x1.n` is a scope
+    assert_eq!(pins(&info(&net, "x1.n", "a")), owned(&[("r1", "1")]));
+}
+
+#[test]
+fn bare_netlist_top_level() {
+    let (_deck, net) = load_text(
+        "bare",
+        ".subckt cell a b\nr1 a b 1\n.ends\n.subckt top p\nx1 p 0 cell\n.ends\n",
+    );
+    match net.net_info("", "p", NetView::Logical, &all()) {
+        Err(QueryError::NotFound { .. }) => {}
+        other => panic!("{other:?}"),
+    }
+    let t = net.trace_net("", "0", TraceDir::Down, 1, &all()).unwrap();
+    assert_eq!(t.hops.total, 0);
+}
+
+#[test]
+fn trace_stops_at_its_step_limit() {
+    let n = 100_005;
+    let mut text = String::from("* t\n.subckt leaf a\nr1 a 0 1\n.ends\nv1 hub 0 1\n");
+    for k in 0..n {
+        text.push_str(&format!("x{k} hub leaf\n"));
+    }
+    let (_deck, net) = load_text("step_limit", &text);
+    let t = net
+        .trace_net("", "hub", TraceDir::Down, 3, &Page::default())
+        .unwrap();
+    assert!(t.truncated);
+    assert_eq!(t.hops.total, 100_000);
+    assert_eq!(t.hops.items.len(), 50);
+    assert!(t.caveats.iter().any(|c| c.contains("stopped")));
+}
+
+#[test]
+fn golden_angle_names() {
+    // golden `node_angle_names`: HSPICE accepts `<` and `>` in node names
+    // and in `.subckt` ports
+    let net = load(repo("golden/cases/node_angle_names/deck.sp"));
+    assert_eq!(
+        pins(&info(&net, "", "a<0>")),
+        owned(&[("r1", "2"), ("r2", "1"), ("r3", "1"), ("x1", "d<1>")])
+    );
+    assert_eq!(
+        pins(&info(&net, "", "b>c")),
+        owned(&[("r3", "2"), ("r4", "1")])
+    );
+    assert_eq!(pins(&info(&net, "x1", "D<1>")), owned(&[("rc", "1")]));
+    let up = net
+        .trace_net("x1", "d<1>", TraceDir::Up, 1, &all())
+        .unwrap();
+    assert_eq!(up.hops.items[0].to_net, "a<0>");
+}
+
+#[test]
+fn skipped_lines_make_nets_incomplete() {
+    // `DELAY` lines are skipped with a load Error: the nets of their
+    // definition can have pins that are not listed (review of Task 9)
+    let (_d, net) = load_text(
+        "delay",
+        "* delay\ng1 o1 0 delay in 0 td=1n\nv1 in 0 1\nvsense n2 0 0\nr1 o1 0 1\n.end\n",
+    );
+    let o1 = info(&net, "", "o1");
+    assert!(o1.connectivity_incomplete, "{o1:?}");
+    assert_eq!(o1.incomplete_due_to, ["g1"]);
+    assert!(
+        o1.caveats
+            .iter()
+            .any(|c| c.contains("skipped by a load error"))
+    );
+    let t = net.trace_net("", "in", TraceDir::Down, 3, &all()).unwrap();
+    assert!(t.connectivity_incomplete);
+    // a definition with no skipped line is not marked
+    let (_d, net) = load_text(
+        "delay_sub",
+        "* t\n.subckt s a b\ng1 a 0 delay b 0 td=1n\n.ends\nx1 1 2 s\nr1 1 2 1\nv1 1 0 1\n.end\n",
+    );
+    assert!(!info(&net, "", "1").connectivity_incomplete);
+    assert!(info(&net, "x1", "a").connectivity_incomplete);
+}
+
+#[test]
+fn trace_up_stops_at_a_mismatched_x_line() {
+    let (_d, net) = load_text(
+        "mismatch_up",
+        "* t\n.subckt cell a b\nr1 a b 1\n.ends\nx2 n1 cell\nv1 n1 0 1\n.end\n",
+    );
+    let up = net.trace_net("x2", "a", TraceDir::Up, 3, &all()).unwrap();
+    assert!(up.hops.items.is_empty(), "{:?}", up.hops.items);
+    assert!(
+        up.caveats
+            .iter()
+            .any(|c| c.contains("the trace stops there"))
+    );
+}
+
+#[test]
+fn port_that_is_global() {
+    let (_d, net) = load_text(
+        "port_global",
+        "* t\n.global vdd\n.subckt mid a b vdd\nr2 a vdd 1k\n.ends\nx1 n1 n2 n3 mid\nvdd vdd 0 1\n.end\n",
+    );
+    let i = info(&net, "x1", "vdd");
+    assert!(i.is_port && i.is_global);
+    assert!(
+        i.caveats.iter().any(|c| c.contains("not probed")),
+        "{:?}",
+        i.caveats
+    );
+}
+
+#[test]
+fn full_node_names() {
+    let net = load(repo("golden/cases/hier_counts/deck.sp"));
+    let local = info(&net, "x1.xm1", "n1");
+    for (scope, name) in [("", "x1.xm1.n1"), ("", " X1.XM1.N1 "), ("x1", "xm1.n1")] {
+        let full = info(&net, scope, name);
+        assert_eq!((full.scope.as_str(), full.net.as_str()), ("x1.xm1", "n1"));
+        assert_eq!(full.def, "mid");
+        assert_eq!(pins(&full), pins(&local));
+        assert!(
+            full.caveats[0].contains("read as an HSPICE full node name"),
+            "{:?}",
+            full.caveats
+        );
+        assert_eq!(full.caveats[1..], local.caveats[..]);
+    }
+    // a port of a deep instance
+    let port = info(&net, "", "x1.xm1.xl1.a");
+    assert_eq!(
+        (port.scope.as_str(), port.def.as_str()),
+        ("x1.xm1.xl1", "leaf")
+    );
+    assert!(port.is_port);
+    // a name of the scope as written is not split
+    assert!(info(&net, "x1.xm1", "n1").caveats.is_empty());
+    // the errors of the full-name reading
+    match net.net_info("", "x1.xm1.n9", NetView::Logical, &all()) {
+        Err(QueryError::NotFound {
+            what, suggestions, ..
+        }) => {
+            assert_eq!(what, "net in `mid`");
+            assert!(suggestions.iter().any(|s| s == "n1"), "{suggestions:?}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        net.net_info("", "x1.xm9.n1", NetView::Logical, &all()),
+        Err(QueryError::NotFound { .. })
+    ));
+    match net.net_info("", "x1.rs1.n1", NetView::Logical, &all()) {
+        Err(QueryError::BadArgument(msg)) => {
+            assert!(msg.contains("not a subckt instance"), "{msg}")
+        }
+        other => panic!("{other:?}"),
+    }
+    // a name with no instance part, or no net part, is not split
+    for bad in [".n1", "x1."] {
+        match net.net_info("", bad, NetView::Logical, &all()) {
+            Err(QueryError::NotFound { what, .. }) => assert_eq!(what, "net in `(top level)`"),
+            other => panic!("{bad}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn full_node_names_with_dotted_instances() {
+    // instance names with a `.`: the path is found as HSPICE names the
+    // instances (golden `hier_dotted_names`)
+    let net = load(repo("golden/cases/hier_dotted_names/deck.sp"));
+    let i = info(&net, "", "x0.xm.n.a");
+    assert_eq!((i.scope.as_str(), i.def.as_str()), ("x0.xm.n", "cell3"));
+    let i = info(&net, "", "x0.xm.a");
+    assert_eq!((i.scope.as_str(), i.def.as_str()), ("x0.xm", "cell3"));
+    let i = info(&net, "", "x0.n1");
+    assert_eq!((i.scope.as_str(), i.def.as_str()), ("x0", "wrap"));
+    assert_eq!(pins(&i), owned(&[("xq", "b"), ("rq", "1")]));
+    let i = info(&net, "", "x0.aaa.b");
+    assert_eq!((i.scope.as_str(), i.def.as_str()), ("x0.aaa", "cell"));
+    // a net of the scope with a `.` in its name comes first
+    let (_deck, net) = load_text(
+        "full_names_literal",
+        "* t\n.subckt cell a b\nr1 a b 1\n.ends\nx1.n a 0 cell\nr3 x1.n 0 1\n",
+    );
+    let lit = info(&net, "", "x1.n");
+    assert_eq!(pins(&lit), owned(&[("r3", "1")]));
+    assert!(lit.caveats.is_empty(), "{:?}", lit.caveats);
+    let i = info(&net, "", "x1.n.b");
+    assert_eq!(
+        (i.scope.as_str(), pins(&i)),
+        ("x1.n", owned(&[("r1", "2")]))
+    );
+}
+
+#[test]
+fn trace_from_a_full_node_name() {
+    let net = load(repo("golden/cases/hier_counts/deck.sp"));
+    let t = net
+        .trace_net("", "x1.xm1.xl1.a", TraceDir::Up, 3, &all())
+        .unwrap();
+    assert_eq!((t.scope.as_str(), t.net.as_str()), ("x1.xm1.xl1", "a"));
+    let local = net
+        .trace_net("x1.xm1.xl1", "a", TraceDir::Up, 3, &all())
+        .unwrap();
+    assert_eq!(t.hops, local.hops);
+    assert_eq!(t.hops.total, 3);
+    assert_eq!(t.hops.items[2].to_net, "1");
+    assert!(
+        t.caveats[0].contains("read as an HSPICE full node name"),
+        "{:?}",
+        t.caveats
+    );
+    assert_eq!(t.caveats[1..], local.caveats[..]);
+    let rel = net
+        .trace_net("x1", "xm1.a", TraceDir::Down, 1, &all())
+        .unwrap();
+    assert_eq!(rel.scope, "x1.xm1");
+    assert_eq!(rel.hops.total, 3);
+    assert!(
+        net.trace_net("", "x1.xm1.n9", TraceDir::Up, 3, &all())
+            .is_err()
+    );
+}
+
+// ---- bug-hunt round 2: HSPICE full node names (golden `node_dotted_*`) ----
+
+#[test]
+fn full_node_name_with_a_dot_in_the_net() {
+    // `x1.n.1` is the net `n.1` of `x1`: the deck has no instance `x1.n`
+    let net = load(repo("golden/cases/node_dotted_in_subckt/deck.sp"));
+    let i = info(&net, "", "x1.n.1");
+    assert_eq!((i.scope.as_str(), i.net.as_str()), ("x1", "n.1"));
+    assert_eq!(i.caveats.len(), 1, "{:?}", i.caveats);
+    assert!(
+        i.caveats[0].contains("net `n.1` of instance `x1`"),
+        "{:?}",
+        i.caveats
+    );
+    let t = net
+        .trace_net("", "x1.n.1", TraceDir::Up, 1, &all())
+        .unwrap();
+    assert!(
+        t.caveats[0].contains("net `n.1` of instance `x1`"),
+        "{:?}",
+        t.caveats
+    );
+    // the errors come from the last-dot reading (no instance `x1.n`)
+    match net.net_info("", "x1.n.9", NetView::Logical, &all()) {
+        Err(QueryError::NotFound { what, name, .. }) => {
+            assert_eq!((what.as_str(), name.as_str()), ("element", "x1.n"))
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn nets_with_one_full_name_are_joined_by_hspice() {
+    let net = load(repo("golden/cases/node_dotted_collision/deck.sp"));
+    // the top-level net written `x1.n`, and the net `n` of `x1`
+    let top = info(&net, "", "x1.n");
+    assert_eq!(top.scope, "");
+    assert!(
+        top.caveats[0].contains("net `n` of instance `x1`") && top.caveats[0].contains("joins"),
+        "{:?}",
+        top.caveats
+    );
+    let inner = info(&net, "x1", "n");
+    assert!(
+        inner.caveats[0].contains("net `x1.n` at the top level"),
+        "{:?}",
+        inner.caveats
+    );
+    let t = net.trace_net("x1", "n", TraceDir::Up, 1, &all()).unwrap();
+    assert!(
+        t.caveats.iter().any(|c| c.contains("joins")),
+        "{:?}",
+        t.caveats
+    );
+    // two instances: `x1.n` (node `1`) and `x1` (node `n.1`)
+    let net = load(repo("golden/cases/node_dotted_two_splits_a/deck.sp"));
+    let i = info(&net, "", "x1.n.1");
+    assert_eq!(
+        (i.scope.as_str(), i.net.as_str(), i.def.as_str()),
+        ("x1.n", "1", "cella")
+    );
+    assert!(i.caveats[0].contains("read as an HSPICE full node name"));
+    assert!(
+        i.caveats[1].contains("net `n.1` of instance `x1`"),
+        "{:?}",
+        i.caveats
+    );
+    let other = info(&net, "x1", "n.1");
+    assert!(
+        other.caveats[0].contains("net `1` of instance `x1.n`"),
+        "{:?}",
+        other.caveats
+    );
+    // a net with no other reading has no such caveat
+    let plain = load(repo("golden/cases/hier_counts/deck.sp"));
+    assert!(info(&plain, "x1.xm1", "n1").caveats.is_empty());
+}
+
+#[test]
+fn trace_into_an_instance_whose_full_name_is_taken() {
+    // `x0.xq` is the top-level `X` line (cell3), which HSPICE creates
+    // first: the `xq` line of `wrap` under `x0` does not get that name
+    // (golden `hier_dotted_collision`)
+    let net = load(repo("golden/cases/hier_dotted_collision/deck.sp"));
+    let t = net.trace_net("", "1", TraceDir::Down, 2, &all()).unwrap();
+    let to: Vec<&str> = t.hops.items.iter().map(|h| h.to_scope.as_str()).collect();
+    assert_eq!(to, ["x0", "x0.xq", "x0.xq"]);
+    let renamed: Vec<&String> = t
+        .caveats
+        .iter()
+        .filter(|c| c.contains("full name of another instance"))
+        .collect();
+    assert_eq!(renamed.len(), 1, "{:?} {to:?}", t.caveats);
+    assert!(renamed[0].contains("`xq` in `wrap`"), "{renamed:?}");
+    // no dotted `X` line names: no such caveat
+    let (_deck, plain) = load_text("trace_plain", BUF);
+    let t = plain
+        .trace_net("", "n1", TraceDir::Down, 5, &all())
+        .unwrap();
+    assert!(!t.caveats.iter().any(|c| c.contains("another instance")));
+}

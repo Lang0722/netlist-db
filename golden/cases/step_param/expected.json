@@ -1,0 +1,20 @@
+{
+ "case": "step_param",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 2000.0
+  },
+  {
+   "path": "r2",
+   "value": 3000.0
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {}
+}

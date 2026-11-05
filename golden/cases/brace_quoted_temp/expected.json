@@ -1,0 +1,14 @@
+{
+ "case": "brace_quoted_temp",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) Undefined parameter or function definition \"[a]\" for temper@_1. Please enter a defined name.",
+  "braces": "rejected inside quotes in a .temp value"
+ }
+}

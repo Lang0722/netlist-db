@@ -1,0 +1,182 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 04:08:19 2026
+ scientific notation:
+ a=10**-18  f=10**-15  p=10**-12  n=10**-9  u=10**-6
+ m=10**-3   k=10**3    x=10**6    g=10**9 
+
+
+ circuit parameter definitions
+  parameter          =  value 
+
+
+
+
+
+ constants  - tnom         kt           vt           gapsi        ni
+            298.15000    4.1163e-21    25.69184m     1.11562    1.2565e+16 
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * cap_value_model: capacitor value, then model name (c1 1 2 1p cmod)
+
+ ****** cap model parameters tnom=  25.000 temp=  25.000 ******
+ *********************************
+ ***  model name:   0:cmod****
+ *********************************
+ 
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+    level=   0.                   w=   0.    meters         l=   0.    meters 
+      del=   0.    meters       tc1=   0.    /deg         tc2=   0.    /deg2  
+      vc1=   0.    /volt        vc2=   0.    /volt2       cox=   0.    f/m**2 
+     vmax=   0.    volts         di=   0.                tref=  25.00  deg k  
+   shrink=   1.00             scale=   1.00               cap=   0.    farad  
+    capsw=   0.    f/m        thick=   0.    meters      bulk=  gnd           
+  
+  **warning** (deck.sp:5) Capacitance value for element c1 is 0.000. Capacitance should be a positive, non-zero value.
+ ******  
+ * cap_value_model: capacitor value, then model name (c1 1 2 1p cmod)
+
+ ****** circuit element summary tnom=  25.000 temp=  25.000 ******
+
+
+ **** resistors
+
+  
+  
+                             
+ element name        0:r1    
+ node1               0:2     
+ node2               0:0     
+ model                       
+ res eff             1.0000k 
+ tc1                 0.      
+ tc2                 0.      
+ scale               1.0000  
+ m                   1.0000  
+ ac                  1.0000k 
+ temp               25.0000  
+ l                   0.      
+ w                   0.      
+ cap                 0.      
+ noise            1.000e+00  
+
+
+ **** capacitors
+  
+  
+                            
+ element name        0:c1   
+ node1               0:1    
+ node2               0:1p   
+ model               0:cmod 
+ cap eff             poly   
+ tc1                 unused 
+ tc2                 unused 
+ scale               unused 
+ ic                  0.     
+ m                   1.0000 
+ w                   unused 
+ l                   unused 
+ temp                unused 
+
+
+ **** independent sources
+
+     name         node1        node2      dc volt    ac mag    ac phase    type
+  v1  1                 0                    1.0000     0.         0.      dc   
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+
+ **info** rebuilding matrix with pivot option
+
+
+ **info** rebuilding matrix without pivot option
+
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * cap_value_model: capacitor value, then model name (c1 1 2 1p cmod)
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage      node    =voltage      node    =voltage
+
+ +0:1       =   1.0000  0:2       =   0.      0:1p      =   0.     
+
+
+ **** voltage sources
+
+ subckt             
+ element  0:v1      
+  volts      1.0000 
+  current    0.     
+  power      0.     
+
+     total voltage source power dissipation=    0.            watts
+
+
+
+ **** resistors
+
+ subckt             
+ element  0:r1      
+  r value    1.0000k
+  v drop     0.     
+  current    0.     
+  power      0.     
+
+
+          ***** job concluded
+ ******  
+ * cap_value_model: capacitor value, then model name (c1 1 2 1p cmod)
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       4 # elements   =       3
+  # resistors   =       1 # capacitors =       1 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           5
+  readin             0.01
+  errchk             0.01
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         97.06 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       30.36 seconds
+           job started at     04:08:19 11/01/2026
+           job ended   at     04:08:50 11/01/2026
+           job total runtime        30.36 seconds
+
+

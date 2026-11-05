@@ -1,0 +1,24 @@
+{
+ "case": "funcs_neg",
+ "resistors": [
+  {
+   "path": "rsqrt",
+   "value": 8.0
+  },
+  {
+   "path": "rlog",
+   "value": 5.3948
+  },
+  {
+   "path": "rlog10",
+   "value": 8.0
+  }
+ ],
+ "totals": {
+  "resistors": 3,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {}
+}

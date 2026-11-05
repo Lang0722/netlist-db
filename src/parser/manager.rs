@@ -1,11 +1,12 @@
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex as StdMutex},
 };
 use tokio::sync::{Mutex, OnceCell, oneshot};
 
+use super::ParseOptions;
 use crate::{ast::ASTBuilder, span::FileStorage};
 
 #[derive(Debug)]
@@ -14,12 +15,22 @@ pub struct ParseManager {
     done_tx: StdMutex<Option<oneshot::Sender<()>>>,
     pub file_storage: Mutex<FileStorage<ASTBuilder>>,
     /// The text of each library file whose sections are loaded (read once
-    /// for all its sections), and its encoding warning; or why it could not
-    /// be read
+    /// for all its sections), and its first line that is not UTF-8; or why it
+    /// could not be read
     pub(super) lib_text: Mutex<HashMap<PathBuf, Arc<OnceCell<SharedText>>>>,
+    /// `ParseOptions::lib_override`, in order: the file name (the last
+    /// component of the path; `None` when the path has none, which matches
+    /// no call), the section to replace and the section to load, all in
+    /// lowercase.
+    lib_override: Vec<(Option<String>, String, String)>,
+    /// One flag for each entry of `lib_override`: set when it changed the
+    /// section of a `.lib` call.
+    lib_override_matched: Vec<AtomicBool>,
+    /// `ParseOptions::skip_prot`
+    skip_prot: bool,
 }
 
-pub(super) type SharedText = Result<Arc<(String, Option<String>)>, (std::io::ErrorKind, String)>;
+pub(super) type SharedText = Result<Arc<(String, Option<u32>)>, (std::io::ErrorKind, String)>;
 
 /// One unit of outstanding work: [`ParseManager::wait`] does not return while
 /// a guard is alive. It is released on drop, so a task that panics still
@@ -33,24 +44,94 @@ impl Drop for TaskGuard {
     }
 }
 
+/// The last component of `path`, in lowercase.
+fn file_name_lowercase(path: &Path) -> Option<String> {
+    path.file_name().map(|n| n.to_string_lossy().to_lowercase())
+}
+
 impl ParseManager {
+    /// A manager with the default options.
+    #[cfg(test)]
     pub(super) fn new() -> (Arc<Self>, oneshot::Receiver<()>) {
+        Self::with_options(&ParseOptions::default())
+    }
+
+    /// A manager whose parse uses `opts`.
+    pub(super) fn with_options(opts: &ParseOptions) -> (Arc<Self>, oneshot::Receiver<()>) {
         let (tx, done_rx) = oneshot::channel();
+        let lib_override = opts
+            .lib_override
+            .iter()
+            .map(|o| {
+                (
+                    file_name_lowercase(&o.file),
+                    o.from.to_lowercase(),
+                    o.to.to_lowercase(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let lib_override_matched = lib_override
+            .iter()
+            .map(|_| AtomicBool::new(false))
+            .collect();
         (
             Arc::new(ParseManager {
                 active_tasks: AtomicUsize::new(0),
                 done_tx: StdMutex::new(Some(tx)),
                 file_storage: Mutex::new(FileStorage::default()),
                 lib_text: Mutex::new(HashMap::new()),
+                lib_override,
+                lib_override_matched,
+                skip_prot: opts.skip_prot,
             }),
             done_rx,
         )
+    }
+
+    /// `ParseOptions::skip_prot`
+    pub(super) fn skip_prot(&self) -> bool {
+        self.skip_prot
     }
 
     /// Register one unit of work, released when the guard is dropped.
     pub(super) fn task_guard(self: &Arc<Self>) -> TaskGuard {
         self.active_tasks.fetch_add(1, Ordering::SeqCst);
         TaskGuard(self.clone())
+    }
+
+    /// The section that `.lib '<file_name>' <section>` loads (`section` is
+    /// in lowercase): the `to` section of the first override whose file
+    /// name is the file name of `file_name` (without its directory, in any
+    /// letter case) and whose `from` section is `section`, else `section`.
+    /// A call in the library itself (a section that calls another section
+    /// of its own file) is a call like any other.
+    pub(super) fn lib_section(&self, file_name: &Path, section: String) -> String {
+        if self.lib_override.is_empty() {
+            return section;
+        }
+        let Some(name) = file_name_lowercase(file_name) else {
+            return section;
+        };
+        let found = self
+            .lib_override
+            .iter()
+            .position(|(f, from, _)| f.as_deref() == Some(&name) && *from == section);
+        match found {
+            Some(k) => {
+                self.lib_override_matched[k].store(true, Ordering::Relaxed);
+                self.lib_override[k].2.clone()
+            }
+            None => section,
+        }
+    }
+
+    /// For each entry of `ParseOptions::lib_override`, in order: `true`
+    /// when it changed the section of a `.lib` call.
+    pub(super) fn lib_override_matched(&self) -> Vec<bool> {
+        self.lib_override_matched
+            .iter()
+            .map(|m| m.load(Ordering::Relaxed))
+            .collect()
     }
 
     /// start a new async parse task

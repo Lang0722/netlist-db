@@ -1,0 +1,14 @@
+{
+ "case": "ind_model_nolevel",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error**  L-model called by       0:l1       is not for L_element, its level must be 3",
+  "l_model_needs_level": 3
+ }
+}

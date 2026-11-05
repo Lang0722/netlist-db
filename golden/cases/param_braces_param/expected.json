@@ -1,0 +1,14 @@
+{
+ "case": "param_braces_param",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:2) Undefined parameter or function definition \"[3\" for c. Please enter a defined name. **error** (deck.sp:2) Undefined parameter or function definition \"a]\" for c. Please enter a defined name.",
+  "braces": "rejected in a .param value"
+ }
+}

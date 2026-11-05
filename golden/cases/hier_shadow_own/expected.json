@@ -1,0 +1,28 @@
+{
+ "case": "hier_shadow_own",
+ "resistors": [
+  {
+   "path": "x2.xc.rc",
+   "value": 3.0
+  },
+  {
+   "path": "x1.xm.xc.rc",
+   "value": 3.0
+  },
+  {
+   "path": "x1.xd.xc.rc",
+   "value": 2.0
+  },
+  {
+   "path": "x1.xn.xd.xc.rc",
+   "value": 4.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 10
+ },
+ "extra": {}
+}

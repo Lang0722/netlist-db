@@ -1,0 +1,14 @@
+{
+ "case": "brace_temp",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) syntax error at or before \"{a}\"",
+  "braces": "rejected without quotes in a .temp value"
+ }
+}

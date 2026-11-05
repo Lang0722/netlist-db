@@ -1,0 +1,424 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sat Oct 31 22:29:06 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * long_defs_mult: m= with engineering suffixes, long definition names, 3-digit circuit numbers
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 xc0.                            c                  1.00 
+        2 xc1.                            c                  1.00 
+        3 xc2.                            c                  1.00 
+        4 xc3.                            c                  1.00 
+        5 xc4.                            c                  1.00 
+        6 xc5.                            c                  1.00 
+        7 xc6.                            c                  1.00 
+        8 xc7.                            c                  1.00 
+        9 xc8.                            c                  1.00 
+       10 xc9.                            c                  1.00 
+       11 xc10.                           c                  1.00 
+       12 xc11.                           c                  1.00 
+       13 xc12.                           c                  1.00 
+       14 xc13.                           c                  1.00 
+       15 xc14.                           c                  1.00 
+       16 xc15.                           c                  1.00 
+       17 xc16.                           c                  1.00 
+       18 xc17.                           c                  1.00 
+       19 xc18.                           c                  1.00 
+       20 xc19.                           c                  1.00 
+       21 xc20.                           c                  1.00 
+       22 xc21.                           c                  1.00 
+       23 xc22.                           c                  1.00 
+       24 xc23.                           c                  1.00 
+       25 xc24.                           c                  1.00 
+       26 xc25.                           c                  1.00 
+       27 xc26.                           c                  1.00 
+       28 xc27.                           c                  1.00 
+       29 xc28.                           c                  1.00 
+       30 xc29.                           c                  1.00 
+       31 xc30.                           c                  1.00 
+       32 xc31.                           c                  1.00 
+       33 xc32.                           c                  1.00 
+       34 xc33.                           c                  1.00 
+       35 xc34.                           c                  1.00 
+       36 xc35.                           c                  1.00 
+       37 xc36.                           c                  1.00 
+       38 xc37.                           c                  1.00 
+       39 xc38.                           c                  1.00 
+       40 xc39.                           c                  1.00 
+       41 xc40.                           c                  1.00 
+       42 xc41.                           c                  1.00 
+       43 xc42.                           c                  1.00 
+       44 xc43.                           c                  1.00 
+       45 xc44.                           c                  1.00 
+       46 xc45.                           c                  1.00 
+       47 xc46.                           c                  1.00 
+       48 xc47.                           c                  1.00 
+       49 xc48.                           c                  1.00 
+       50 xc49.                           c                  1.00 
+       51 xc50.                           c                  1.00 
+       52 xc51.                           c                  1.00 
+       53 xc52.                           c                  1.00 
+       54 xc53.                           c                  1.00 
+       55 xc54.                           c                  1.00 
+       56 xc55.                           c                  1.00 
+       57 xc56.                           c                  1.00 
+       58 xc57.                           c                  1.00 
+       59 xc58.                           c                  1.00 
+       60 xc59.                           c                  1.00 
+       61 xc60.                           c                  1.00 
+       62 xc61.                           c                  1.00 
+       63 xc62.                           c                  1.00 
+       64 xc63.                           c                  1.00 
+       65 xc64.                           c                  1.00 
+       66 xc65.                           c                  1.00 
+       67 xc66.                           c                  1.00 
+       68 xc67.                           c                  1.00 
+       69 xc68.                           c                  1.00 
+       70 xc69.                           c                  1.00 
+       71 xc70.                           c                  1.00 
+       72 xc71.                           c                  1.00 
+       73 xc72.                           c                  1.00 
+       74 xc73.                           c                  1.00 
+       75 xc74.                           c                  1.00 
+       76 xc75.                           c                  1.00 
+       77 xc76.                           c                  1.00 
+       78 xc77.                           c                  1.00 
+       79 xc78.                           c                  1.00 
+       80 xc79.                           c                  1.00 
+       81 xc80.                           c                  1.00 
+       82 xc81.                           c                  1.00 
+       83 xc82.                           c                  1.00 
+       84 xc83.                           c                  1.00 
+       85 xc84.                           c                  1.00 
+       86 xc85.                           c                  1.00 
+       87 xc86.                           c                  1.00 
+       88 xc87.                           c                  1.00 
+       89 xc88.                           c                  1.00 
+       90 xc89.                           c                  1.00 
+       91 xc90.                           c                  1.00 
+       92 xc91.                           c                  1.00 
+       93 xc92.                           c                  1.00 
+       94 xc93.                           c                  1.00 
+       95 xc94.                           c                  1.00 
+       96 xc95.                           c                  1.00 
+       97 xc96.                           c                  1.00 
+       98 xc97.                           c                  1.00 
+       99 xc98.                           c                  1.00 
+      100 xc99.                           c                  1.00 
+      101 xk.                             c                  1.00k
+      102 xh.                             c                500.00m
+      103 xmeg.                           c                  1.00x
+      104 xd.                             very_long_definition_name_abcdef
+                                                                 1.00 
+      105 xdk.                            very_long_definition_name_abcdef
+                                                                 1.00k
+      106 xtop_instance_name_very_long_123456789.
+                                            very_long_definition_name_abcdef
+                                                               500.00m
+      107 xtop_instance_name_very_long_12345678b.
+                                            c                  2.00k
+             
+ Summary of Linear Res Distribution Info
+ -----------------------------------------------------
+ |Range                        |Total     |Percent(%)|
+ |-----------------------------+----------+----------|
+ |1.000000e-04  ~  1.000000e-03|1         |0.8772    |
+ |1.000000e-03  ~  1.000000e-02|1         |0.8772    |
+ |1.000000e-01  ~  1.000000e+00|2         |1.7544    |
+ |1.000000e+00  ~  1.000000e+03|109       |95.6140   |
+ |1.000000e+03  ~  1.000000e+05|1         |0.8772    |
+ -----------------------------------------------------
+              
+             
+ Summary of Linear Cap Distribution Info
+             
+ Summary of Detailed RC Type Statistics
+ -------------------------
+ |Element Type|Number    |
+ |------------+----------|
+ |Constant Res|114       |
+ |            |          |
+ -------------------------
+              
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * long_defs_mult: m= with engineering suffixes, long definition names, 3-digit circuit numbers
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+      node    =voltage        node    =voltage        node    =voltage
+
+ +  0:1       =   1.0000    0:n1      = 990.0000m   0:n10     = 900.0000m
+ +  0:n11     = 890.0000m   0:n12     = 880.0000m   0:n13     = 870.0000m
+ +  0:n14     = 860.0000m   0:n15     = 850.0000m   0:n16     = 840.0000m
+ +  0:n17     = 830.0000m   0:n18     = 820.0000m   0:n19     = 810.0000m
+ +  0:n2      = 980.0000m   0:n20     = 800.0000m   0:n21     = 790.0000m
+ +  0:n22     = 780.0000m   0:n23     = 770.0000m   0:n24     = 760.0000m
+ +  0:n25     = 750.0000m   0:n26     = 740.0000m   0:n27     = 730.0000m
+ +  0:n28     = 720.0000m   0:n29     = 710.0000m   0:n3      = 970.0000m
+ +  0:n30     = 700.0000m   0:n31     = 690.0000m   0:n32     = 680.0000m
+ +  0:n33     = 670.0000m   0:n34     = 660.0000m   0:n35     = 650.0000m
+ +  0:n36     = 640.0000m   0:n37     = 630.0000m   0:n38     = 620.0000m
+ +  0:n39     = 610.0000m   0:n4      = 960.0000m   0:n40     = 600.0000m
+ +  0:n41     = 590.0000m   0:n42     = 580.0000m   0:n43     = 570.0000m
+ +  0:n44     = 560.0000m   0:n45     = 550.0000m   0:n46     = 540.0000m
+ +  0:n47     = 530.0000m   0:n48     = 520.0000m   0:n49     = 510.0000m
+ +  0:n5      = 950.0000m   0:n50     = 500.0000m   0:n51     = 490.0000m
+ +  0:n52     = 480.0000m   0:n53     = 470.0000m   0:n54     = 460.0000m
+ +  0:n55     = 450.0000m   0:n56     = 440.0000m   0:n57     = 430.0000m
+ +  0:n58     = 420.0000m   0:n59     = 410.0000m   0:n6      = 940.0000m
+ +  0:n60     = 400.0000m   0:n61     = 390.0000m   0:n62     = 380.0000m
+ +  0:n63     = 370.0000m   0:n64     = 360.0000m   0:n65     = 350.0000m
+ +  0:n66     = 340.0000m   0:n67     = 330.0000m   0:n68     = 320.0000m
+ +  0:n69     = 310.0000m   0:n7      = 930.0000m   0:n70     = 300.0000m
+ +  0:n71     = 290.0000m   0:n72     = 280.0000m   0:n73     = 270.0000m
+ +  0:n74     = 260.0000m   0:n75     = 250.0000m   0:n76     = 240.0000m
+ +  0:n77     = 230.0000m   0:n78     = 220.0000m   0:n79     = 210.0000m
+ +  0:n8      = 920.0000m   0:n80     = 200.0000m   0:n81     = 190.0000m
+ +  0:n82     = 180.0000m   0:n83     = 170.0000m   0:n84     = 160.0000m
+ +  0:n85     = 150.0000m   0:n86     = 140.0000m   0:n87     = 130.0000m
+ +  0:n88     = 120.0000m   0:n89     = 110.0000m   0:n9      = 910.0000m
+ +  0:n90     = 100.0000m   0:n91     =  90.0000m   0:n92     =  80.0000m
+ +  0:n93     =  70.0000m   0:n94     =  60.0000m   0:n95     =  50.0000m
+ +  0:n96     =  40.0000m   0:n97     =  30.0000m   0:n98     =  20.0000m
+ +  0:n99     =  10.0000m   0:nb      = 999.5002m   0:nd      = 993.0487m
+ +  0:ndk     = 999.9930m   0:nh      = 333.3333m   0:nk      = 999.0010m
+ +  0:nmeg    = 999.9990m   0:nt      = 986.1933m
+
+
+ **** voltage sources
+
+ subckt               
+ element    0:v1      
+  volts        1.0000 
+  current     -6.3211m
+  power        6.3211m
+
+     total voltage source power dissipation=    6.3211m       watts
+
+
+
+ **** resistors
+
+ subckt                                                                   
+ element    0:rk         0:rh         0:rmeg       0:rd         0:rdk     
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop     999.0010m    333.3333m    999.9990m    993.0487m    999.9930m
+  current    999.0010u    333.3333u    999.9990u    993.0487u    999.9930u
+  power      998.0030u    111.1111u    999.9980u    986.1456u    999.9860u
+
+ subckt                               xc0          xc1          xc2       
+ element    0:rt         0:rb         1:rc         2:rc         3:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop     986.1933m    999.5002m     10.0000m     10.0000m     10.0000m
+  current    986.1933u    999.5002u     10.0000u     10.0000u     10.0000u
+  power      972.5772u    999.0007u    100.0000n    100.0000n    100.0000n
+
+ subckt     xc3          xc4          xc5          xc6          xc7       
+ element    4:rc         5:rc         6:rc         7:rc         8:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc8          xc9          xc10         xc11         xc12      
+ element    9:rc        10:rc        11:rc        12:rc        13:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc13         xc14         xc15         xc16         xc17      
+ element   14:rc        15:rc        16:rc        17:rc        18:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc18         xc19         xc20         xc21         xc22      
+ element   19:rc        20:rc        21:rc        22:rc        23:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc23         xc24         xc25         xc26         xc27      
+ element   24:rc        25:rc        26:rc        27:rc        28:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc28         xc29         xc30         xc31         xc32      
+ element   29:rc        30:rc        31:rc        32:rc        33:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc33         xc34         xc35         xc36         xc37      
+ element   34:rc        35:rc        36:rc        37:rc        38:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc38         xc39         xc40         xc41         xc42      
+ element   39:rc        40:rc        41:rc        42:rc        43:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc43         xc44         xc45         xc46         xc47      
+ element   44:rc        45:rc        46:rc        47:rc        48:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc48         xc49         xc50         xc51         xc52      
+ element   49:rc        50:rc        51:rc        52:rc        53:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc53         xc54         xc55         xc56         xc57      
+ element   54:rc        55:rc        56:rc        57:rc        58:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc58         xc59         xc60         xc61         xc62      
+ element   59:rc        60:rc        61:rc        62:rc        63:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc63         xc64         xc65         xc66         xc67      
+ element   64:rc        65:rc        66:rc        67:rc        68:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc68         xc69         xc70         xc71         xc72      
+ element   69:rc        70:rc        71:rc        72:rc        73:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc73         xc74         xc75         xc76         xc77      
+ element   74:rc        75:rc        76:rc        77:rc        78:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc78         xc79         xc80         xc81         xc82      
+ element   79:rc        80:rc        81:rc        82:rc        83:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc83         xc84         xc85         xc86         xc87      
+ element   84:rc        85:rc        86:rc        87:rc        88:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc88         xc89         xc90         xc91         xc92      
+ element   89:rc        90:rc        91:rc        92:rc        93:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc93         xc94         xc95         xc96         xc97      
+ element   94:rc        95:rc        96:rc        97:rc        98:rc      
+  r value      1.0000k      1.0000k      1.0000k      1.0000k      1.0000k
+  v drop      10.0000m     10.0000m     10.0000m     10.0000m     10.0000m
+  current     10.0000u     10.0000u     10.0000u     10.0000u     10.0000u
+  power      100.0000n    100.0000n    100.0000n    100.0000n    100.0000n
+
+ subckt     xc98         xc99         xk           xh           xmeg      
+ element   99:rc       100:rc       101:rc       102:rc       103:rc      
+  r value      1.0000k      1.0000k      1.0000       2.0000k      1.0000m
+  v drop      10.0000m     10.0000m    999.0010u    666.6667m    999.9990n
+  current     10.0000u     10.0000u    999.0010u    333.3333u    999.9990u
+  power      100.0000n    100.0000n    998.0030n    222.2222u    999.9980p
+
+ subckt     xd           xdk          xtop_insta   xtop_insta
+ element  104:rverylon 105:rverylon 106:rverylon 107:rc      
+  r value      7.0000       7.0000m     14.0000     500.0000m
+  v drop       6.9513m      7.0000u     13.8067m    499.7501u
+  current    993.0487u    999.9930u    986.1933u    999.5002u
+  power        6.9030u      6.9999n     13.6161u    499.5004n
+
+
+          ***** job concluded
+ ******  
+ * long_defs_mult: m= with engineering suffixes, long definition names, 3-digit circuit numbers
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =     108 # elements   =     115
+  # resistors   =     114 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  readin             0.01
+  errchk             0.01
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         98.91 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       29.97 seconds
+           job started at     22:29:06 10/31/2026
+           job ended   at     22:29:36 10/31/2026
+           job total runtime        29.97 seconds
+
+

@@ -1,0 +1,14 @@
+{
+ "case": "title_plus",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:2) unable to open file \"r1 1 0 1\" .Either file doesn't exists or path is wrong. Please enter the correct file location.",
+  "line2_plus": "error"
+ }
+}

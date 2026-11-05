@@ -1,0 +1,20 @@
+{
+ "case": "body_self_ref_global",
+ "resistors": [
+  {
+   "path": "x1.r1",
+   "value": 4.0
+  },
+  {
+   "path": "x2.r1",
+   "value": 4.0
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 2
+ },
+ "extra": {}
+}

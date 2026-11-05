@@ -1,0 +1,38 @@
+{
+ "case": "rcl_tc_kw_after",
+ "resistors": [
+  {
+   "path": "r4",
+   "value": 3000.0
+  },
+  {
+   "path": "r5",
+   "value": 7500.0
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "skip_value_check": [
+   "r4",
+   "r5"
+  ],
+  "temp": 125.0,
+  "tc": {
+   "r4": {
+    "r": 2000.0,
+    "tc1": 0.004,
+    "tc2": 1e-05
+   },
+   "r5": {
+    "r": 5000.0,
+    "tc1": 0.004,
+    "tc2": 1e-05
+   }
+  }
+ }
+}

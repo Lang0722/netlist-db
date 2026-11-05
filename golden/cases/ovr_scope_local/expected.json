@@ -1,0 +1,36 @@
+{
+ "case": "ovr_scope_local",
+ "resistors": [
+  {
+   "path": "r5",
+   "value": 10.0
+  },
+  {
+   "path": "x1.r1",
+   "value": 6.0
+  },
+  {
+   "path": "x2.r1",
+   "value": 15.0
+  },
+  {
+   "path": "x3.r3",
+   "value": 2.0
+  },
+  {
+   "path": "x4.r4",
+   "value": 15.0
+  },
+  {
+   "path": "x6.r6",
+   "value": 10.0
+  }
+ ],
+ "totals": {
+  "resistors": 6,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 5
+ },
+ "extra": {}
+}

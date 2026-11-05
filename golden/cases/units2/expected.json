@@ -1,0 +1,56 @@
+{
+ "case": "units2",
+ "resistors": [
+  {
+   "path": "r_min",
+   "value": 60.0
+  },
+  {
+   "path": "r_hr",
+   "value": 3600.0
+  },
+  {
+   "path": "r_day",
+   "value": 86400.0
+  },
+  {
+   "path": "r_yr",
+   "value": 31536000.0
+  },
+  {
+   "path": "r_db",
+   "value": 10.0
+  },
+  {
+   "path": "r_db6",
+   "value": 1.9953
+  },
+  {
+   "path": "r_meter",
+   "value": 1000000.0
+  },
+  {
+   "path": "r_ms",
+   "value": 0.001
+  },
+  {
+   "path": "r_mv",
+   "value": 0.001
+  },
+  {
+   "path": "r_mohm",
+   "value": 0.001
+  },
+  {
+   "path": "r_z",
+   "value": 1.0
+  }
+ ],
+ "totals": {
+  "resistors": 11,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {}
+}

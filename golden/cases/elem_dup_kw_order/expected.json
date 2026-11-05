@@ -1,0 +1,14 @@
+{
+ "case": "elem_dup_kw_order",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) syntax error at or before \"1k\"",
+  "positional_after_keyword": "syntax error"
+ }
+}

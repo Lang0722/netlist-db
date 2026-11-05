@@ -1,0 +1,24 @@
+{
+ "case": "case_mix",
+ "resistors": [
+  {
+   "path": "rtop",
+   "value": 2.0
+  },
+  {
+   "path": "x1.r1",
+   "value": 10.0
+  },
+  {
+   "path": "xb.xf.r1",
+   "value": 6.0
+  }
+ ],
+ "totals": {
+  "resistors": 3,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 3
+ },
+ "extra": {}
+}

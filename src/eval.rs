@@ -36,7 +36,7 @@
 
 use crate::{
     AST,
-    ast::{KeyValue, Value},
+    ast::{KeyValue, ParamFunc, Value},
 };
 use core::fmt;
 use std::{
@@ -218,6 +218,15 @@ impl<'p> Scope<'p> {
         } else {
             self.defs.insert(kv.k.to_ascii_lowercase(), body);
         }
+        self.cache.get_mut().clear();
+    }
+
+    /// Define a function, as `.param f(x)='...'` does
+    pub fn define_func(&mut self, f: &ParamFunc<'_>) {
+        let args = f.args.iter().map(|a| a.to_ascii_lowercase()).collect();
+        let body = Def::from(&Value::Expr(f.body.clone()));
+        self.funcs
+            .insert(f.name.to_ascii_lowercase(), Func { args, body });
         self.cache.get_mut().clear();
     }
 
@@ -511,6 +520,9 @@ impl<'s> AST<'s> {
         for kv in &self.param {
             scope.define(kv);
         }
+        for f in &self.param_func {
+            scope.define_func(f);
+        }
         scope
     }
 
@@ -744,10 +756,11 @@ impl<'e> Parser<'e> {
         Ok(e)
     }
 
+    /// The error on one line (the text of a value can hold `+` lines)
     fn error(&self, message: String) -> EvalError {
         EvalError::Syntax {
-            expr: self.s.trim().to_owned(),
-            message,
+            expr: self.s.trim().replace(['\r', '\n'], " "),
+            message: message.replace(['\r', '\n'], " "),
         }
     }
 
@@ -757,7 +770,8 @@ impl<'e> Parser<'e> {
         let mut line_start = false;
         while let Some(&c) = b.get(self.pos) {
             match c {
-                b' ' | b'\t' | b'\r' => {}
+                // (quotes only come in the arguments of a call, `agauss(0,0,'2')`)
+                b' ' | b'\t' | b'\r' | b'\'' | b'"' => {}
                 b'\n' => line_start = true,
                 b'+' if line_start => line_start = false,
                 _ => break,
@@ -1112,6 +1126,9 @@ mod tests {
         assert!(matches!(s.eval_str("2*"), Err(EvalError::Syntax { .. })));
         assert!(matches!(s.eval_str("(1"), Err(EvalError::Syntax { .. })));
         assert!(matches!(s.eval_str("1 2"), Err(EvalError::Syntax { .. })));
+        // on one line, for the listing of `model_select`
+        let e = s.eval_str("1\n+ x y").unwrap_err().to_string();
+        assert!(!e.contains('\n'), "{e}");
         assert_eq!(
             s.eval_str("1/0"),
             Err(EvalError::NotFinite("1/0".to_owned()))

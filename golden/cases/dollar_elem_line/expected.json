@@ -1,0 +1,13 @@
+{
+ "case": "dollar_elem_line",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:4) Illegal character in statement in column    8 : rval*3 $ c **error** (deck.sp:4)  Number is improperly formed in column  10 : rval*3 $ c"
+ }
+}

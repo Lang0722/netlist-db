@@ -1,0 +1,102 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sat Oct 31 21:50:08 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * include_in_subckt: .include inside a .subckt body
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x1.                             holder             1.00 
+        2 x2.                             holder             1.00 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * include_in_subckt: .include inside a .subckt body
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage
+
+ +0:1       =   1.0000 
+
+
+ **** voltage sources
+
+ subckt             
+ element  0:v1      
+  volts      1.0000 
+  current   -2.5524 
+  power      2.5524 
+
+     total voltage source power dissipation=    2.5524        watts
+
+
+
+ **** resistors
+
+ subckt   x1         x1         x1         x2         x2         x2        
+ element  1:ri       1:rj       1:r0       2:ri       2:rj       2:r0      
+  r value    7.0000     6.0000     1.0000     7.0000    10.0000     1.0000 
+  v drop     1.0000     1.0000     1.0000     1.0000     1.0000     1.0000 
+  current  142.8571m  166.6667m    1.0000   142.8571m  100.0000m    1.0000 
+  power    142.8571m  166.6667m    1.0000   142.8571m  100.0000m    1.0000 
+
+
+          ***** job concluded
+ ******  
+ * include_in_subckt: .include inside a .subckt body
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       2 # elements   =       7
+  # resistors   =       6 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  readin             0.02
+  errchk             0.00
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         96.06 megabytes
+           total cpu time            0.03 seconds
+           total elapsed time       29.86 seconds
+           job started at     21:50:08 10/31/2026
+           job ended   at     21:50:38 10/31/2026
+           job total runtime        29.86 seconds
+
+

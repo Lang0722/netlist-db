@@ -1,0 +1,30 @@
+{
+ "case": "dspf_backannot",
+ "resistors": [],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 2,
+  "subckt_instances": null
+ },
+ "extra": {
+  "dspf_summary": {
+   "nets_parsed": 2,
+   "nets_expanded": 2,
+   "error_nets": 0,
+   "resistors_parsed": 5,
+   "resistors_written": 5,
+   "capacitors_parsed": 3,
+   "capacitors_written": 3,
+   "mosfets_parsed": 0,
+   "mosfets_written": 0,
+   "new_nets": 5
+  },
+  "sim_dspf_option": ".option sim_dspf=\"inv inv.dspf\"",
+  "rail_option": ".option sim_dspf_rail=on",
+  "expanded_nets": [
+   "xi.a",
+   "xi.y"
+  ]
+ }
+}

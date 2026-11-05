@@ -301,152 +301,107 @@ pub trait SpiceFmt: Sized {
     }
     fn voltage<W: fmt::Write>(&self, t: &instance::Voltage<'_>, f: &mut W) -> fmt::Result {
         write!(f, "{} {}", t.n1, t.n2)?;
-        if matches!(&t.source, instance::VoltageSource::Params(p) if p.is_empty()) {
-            return Ok(());
-        }
-        write!(f, " ")?;
-        self.voltage_source(&t.source, f)
+        self.source(&t.source, f)
     }
     fn current<W: fmt::Write>(&self, t: &instance::Current<'_>, f: &mut W) -> fmt::Result {
         write!(f, "{} {}", t.n1, t.n2)?;
-        if matches!(&t.source, instance::CurrentSource::Params(p) if p.is_empty()) {
-            return Ok(());
-        }
-        write!(f, " ")?;
-        self.current_source(&t.source, f)
+        self.source(&t.source, f)
     }
-    fn voltage_source<W: fmt::Write>(
-        &self,
-        t: &instance::VoltageSource<'_>,
-        f: &mut W,
-    ) -> fmt::Result {
-        match t {
-            instance::VoltageSource::Params(params) => {
-                display_inline(f, params.iter(), |t, f| self.key_value(t, f), ' ', false)
-            }
-            instance::VoltageSource::Value(t) => self.value(t, f),
-            instance::VoltageSource::PWL(t) => self.pwl(t, f),
-            instance::VoltageSource::Spec(t) => self.source_spec(t, f),
-        }
-    }
-    fn current_source<W: fmt::Write>(
-        &self,
-        t: &instance::CurrentSource<'_>,
-        f: &mut W,
-    ) -> fmt::Result {
-        match t {
-            instance::CurrentSource::Params(params) => {
-                display_inline(f, params.iter(), |t, f| self.key_value(t, f), ' ', false)
-            }
-            instance::CurrentSource::Value(t) => self.value(t, f),
-            instance::CurrentSource::PWL(t) => self.pwl(t, f),
-            instance::CurrentSource::Spec(t) => self.source_spec(t, f),
-        }
-    }
-    fn source_spec<W: fmt::Write>(&self, t: &instance::SourceSpec<'_>, f: &mut W) -> fmt::Result {
-        let mut sep = "";
-        if let Some(dc) = &t.dc {
-            write!(f, "DC ")?;
+    /// The source of a V or I line, after a space: a DC value alone as a
+    /// bare value, else `DC v`, the function on one line, `AC mag [phase]`
+    /// and the parameters.
+    fn source<W: fmt::Write>(&self, t: &instance::Source<'_>, f: &mut W) -> fmt::Result {
+        let alone = t.func.is_none() && t.ac_mag.is_none() && t.params.is_empty();
+        if let Some((_, dc)) = &t.dc {
+            write!(f, " {}", if alone { "" } else { "DC " })?;
             self.value(dc, f)?;
-            sep = " ";
         }
-        if let Some(tran) = &t.tran {
-            write!(f, "{sep}")?;
-            self.tran_source(tran, f)?;
-            sep = " ";
+        if let Some(func) = &t.func {
+            if func.args.is_empty() {
+                // (`PWL PWLFILE=...`: the file holds the points)
+                write!(f, " {}", func.name)?;
+            } else {
+                write!(f, " {}({})", func.name, instance::source_args(&func.args))?;
+            }
         }
-        if let Some(ac) = &t.ac {
-            write!(f, "{sep}AC ")?;
-            self.value(&ac.mag, f)?;
-            if let Some(phase) = &ac.phase {
+        if let Some((_, mag)) = &t.ac_mag {
+            write!(f, " AC ")?;
+            self.value(mag, f)?;
+            if let Some((_, phase)) = &t.ac_phase {
                 write!(f, " ")?;
                 self.value(phase, f)?;
             }
-            sep = " ";
         }
-        for param in &t.params {
-            write!(f, "{sep}")?;
-            self.key_value(param, f)?;
-            sep = " ";
-        }
-        Ok(())
-    }
-    fn tran_source<W: fmt::Write>(&self, t: &instance::TranSource<'_>, f: &mut W) -> fmt::Result {
-        match t {
-            instance::TranSource::PWL(t) => self.pwl(t, f),
-            instance::TranSource::Func { name, args, params } => {
-                write!(f, "{name}(")?;
-                display_inline(f, args.iter(), |t, f| self.value(t, f), ' ', true)?;
-                display_inline(
-                    f,
-                    params.iter(),
-                    |t, f| self.key_value(t, f),
-                    ' ',
-                    args.is_empty(),
-                )?;
-                write!(f, ")")
-            }
-        }
-    }
-    fn time_value_point<W: fmt::Write>(
-        &self,
-        t: &instance::TimeValuePoint<'_>,
-        f: &mut W,
-    ) -> fmt::Result {
-        self.value(&t.time, f)?;
-        write!(f, " ")?;
-        self.value(&t.value, f)
-    }
-    fn pwl<W: fmt::Write>(&self, t: &instance::PWL<'_>, f: &mut W) -> fmt::Result {
-        write!(f, "PWL(",)?;
-        display_wrap(
+        display_inline(
             f,
-            t.points.iter(),
-            |t, f| self.time_value_point(t, f),
-            "+ ",
+            t.params.iter(),
+            |t, f| {
+                if t.k.eq_ignore_ascii_case("pwlfile") {
+                    write!(f, "{}=", t.k)?;
+                    self.file_value(&t.v, f)
+                } else {
+                    self.key_value(t, f)
+                }
+            },
             ' ',
-            1,
-        )?;
-        if let Some(file) = &t.pwlfile {
-            write!(f, "\n+ PWLFILE=")?;
-            self.file_value(file, f)?;
-        }
-        for (key, value) in [
-            ("R", &t.repeat),
-            ("TD", &t.delay),
-            ("RSTOP", &t.rstop),
-            ("STOPVALUE", &t.stopvalue),
-            ("STOPSLOPE", &t.stopslope),
-        ] {
-            if let Some(value) = value {
-                write!(f, "\n+ {key}=")?;
-                self.value(value, f)?;
-            }
-        }
-        write!(f, ")",)
+            false,
+        )
     }
     fn resistor<W: fmt::Write>(&self, t: &instance::Resistor<'_>, f: &mut W) -> fmt::Result {
-        write!(f, "{} {} ", t.n1, t.n2)?;
-        if let Some(mname) = &t.mname {
-            write!(f, "{mname} ")?;
+        write!(f, "{} {}", t.n1, t.n2)?;
+        if let Some(model) = &t.model {
+            write!(f, " {model}")?;
         }
-        self.value(&t.value, f)?;
+        if let Some(value) = &t.value {
+            write!(f, " ")?;
+            self.value(value, f)?;
+        }
+        // the numbers after the value: `tc1 tc2`
+        display_inline(
+            f,
+            t.positional.iter(),
+            |(_, t), f| self.value(t, f),
+            ' ',
+            false,
+        )?;
         display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn capacitor<W: fmt::Write>(&self, t: &instance::Capacitor<'_>, f: &mut W) -> fmt::Result {
-        write!(f, "{} {} ", t.n1, t.n2)?;
-        if let Some(mname) = &t.mname {
-            write!(f, "{mname} ")?;
+        write!(f, "{} {}", t.n1, t.n2)?;
+        if let Some(model) = &t.model {
+            write!(f, " {model}")?;
         }
-        self.value(&t.value, f)?;
+        if let Some(value) = &t.value {
+            write!(f, " ")?;
+            self.value(value, f)?;
+        }
+        // the numbers after the value: `tc1 tc2`
+        display_inline(
+            f,
+            t.positional.iter(),
+            |(_, t), f| self.value(t, f),
+            ' ',
+            false,
+        )?;
         display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn inductor<W: fmt::Write>(&self, t: &instance::Inductor<'_>, f: &mut W) -> fmt::Result {
-        write!(f, "{} {} ", t.n1, t.n2)?;
-        self.value(&t.value, f)?;
-        if let Some(mname) = &t.mname {
-            write!(f, " {mname}")?;
+        write!(f, "{} {}", t.n1, t.n2)?;
+        if let Some(model) = &t.model {
+            write!(f, " {model}")?;
         }
+        if let Some(value) = &t.value {
+            write!(f, " ")?;
+            self.value(value, f)?;
+        }
+        // the numbers after the value: `tc1 tc2`
+        display_inline(
+            f,
+            t.positional.iter(),
+            |(_, t), f| self.value(t, f),
+            ' ',
+            false,
+        )?;
         display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn controlled_source<W: fmt::Write>(
@@ -512,17 +467,23 @@ pub trait SpiceFmt: Sized {
     fn mosfet<W: fmt::Write>(&self, t: &instance::MOSFET<'_>, f: &mut W) -> fmt::Result {
         write!(
             f,
-            "{} {} {}{} {}",
+            "{} {} {}{}",
             t.nd,
             t.ng,
             t.ns,
             OptionDispaly(&t.nb, |nb, f| write!(f, " {nb}")),
-            t.mname,
         )?;
-        for v in &t.positional {
-            f.write_char(' ')?;
-            self.value(v, f)?;
-        }
+        // the nodes after the 4th node come before the model name
+        display_inline(f, t.extra_nodes.iter(), |t, f| write!(f, "{t}"), ' ', false)?;
+        write!(f, " {}", t.mname)?;
+        // the numbers after the model name: `l w ad as pd ps nrd nrs`
+        display_inline(
+            f,
+            t.positional.iter(),
+            |(_, t), f| self.value(t, f),
+            ' ',
+            false,
+        )?;
         display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn bjt<W: fmt::Write>(&self, t: &instance::BJT<'_>, f: &mut W) -> fmt::Result {
@@ -535,10 +496,26 @@ pub trait SpiceFmt: Sized {
             OptionDispaly(&t.ns, |ns, f| write!(f, " {ns}")),
             t.mname,
         )?;
+        // the number after the model name: `area`
+        display_inline(
+            f,
+            t.positional.iter(),
+            |(_, t), f| self.value(t, f),
+            ' ',
+            false,
+        )?;
         display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn diode<W: fmt::Write>(&self, t: &instance::Diode<'_>, f: &mut W) -> fmt::Result {
         write!(f, "{} {} {}", t.nplus, t.nminus, t.mname,)?;
+        // the numbers after the model name: `area pj`
+        display_inline(
+            f,
+            t.positional.iter(),
+            |(_, t), f| self.value(t, f),
+            ' ',
+            false,
+        )?;
         display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
     }
     fn model_type<W: fmt::Write>(&self, t: &ast::ModelType<'_>, f: &mut W) -> fmt::Result {
@@ -588,6 +565,11 @@ pub trait SpiceFmt: Sized {
         self.ast(&t.ast, f)?;
         write!(f, "\n.ENDS {}", t.name)
     }
+    fn param_func<W: fmt::Write>(&self, t: &ast::ParamFunc<'_>, f: &mut W) -> fmt::Result {
+        write!(f, ".PARAM {}(", t.name)?;
+        display_inline(f, t.args.iter(), |t, f| write!(f, "{t}"), ',', true)?;
+        write!(f, ")='{}'", t.body)
+    }
     fn unknwon<W: fmt::Write>(&self, t: &ast::Unknwon<'_>, f: &mut W) -> fmt::Result {
         write!(f, ".{}", t.cmd)?;
         if t.raw.is_empty() {
@@ -636,6 +618,11 @@ pub trait SpiceFmt: Sized {
         if !t.param.is_empty() {
             write!(f, "\n.PARAM ",)?;
             display_wrap(f, t.param.iter(), |t, f| self.key_value(t, f), "+ ", ' ', 4)?;
+        }
+        display_multiline(f, t.param_func.iter(), |t, f| self.param_func(t, f))?;
+        if !t.global.is_empty() {
+            write!(f, "\n.GLOBAL")?;
+            display_inline(f, t.global.iter(), |t, f| write!(f, "{t}"), ' ', false)?;
         }
         display_multiline(f, t.model.iter(), |t, f| self.model(t, f))?;
         display_multiline(f, t.subckt.values(), |t, f| self.subckt(t, f))?;

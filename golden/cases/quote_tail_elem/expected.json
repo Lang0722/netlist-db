@@ -1,0 +1,29 @@
+{
+ "case": "quote_tail_elem",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 2000.0
+  },
+  {
+   "path": "rc",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "tc": {
+   "r1": {
+    "r": 2000.0,
+    "tc1": 0.0,
+    "tc2": 0.0
+   }
+  },
+  "source": ".option list element summary (res eff, tc1, tc2); .op r value"
+ }
+}

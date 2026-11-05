@@ -1,0 +1,110 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 11:27:15 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * hier_shadow_own: a name nested in p's own def and in an ancestor's def
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x1.                             outer              1.00 
+        2 x2.                             mid                1.00 
+        3 x1.xm.                          mid                1.00 
+        4 x1.xd.                          deep               1.00 
+        5 x1.xn.                          mid2               1.00 
+        6 x2.xc.                          cell               1.00 
+        7 x1.xm.xc.                       cell               1.00 
+        8 x1.xd.xc.                       cell               1.00 
+        9 x1.xn.xd.                       deep               1.00 
+       10 x1.xn.xd.xc.                    cell               1.00 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * hier_shadow_own: a name nested in p's own def and in an ancestor's def
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+     node    =voltage       node    =voltage       node    =voltage
+
+ + 0:1       =   1.0000   0:2       =   2.0000   0:3       =   3.0000 
+
+
+ **** voltage sources
+
+ subckt                                      
+ element   0:v1        0:v2        0:v3      
+  volts       1.0000      2.0000      3.0000 
+  current  -583.3333m    -1.0000     -1.0000 
+  power     583.3333m     2.0000      3.0000 
+
+     total voltage source power dissipation=    5.5833        watts
+
+
+
+ **** resistors
+
+ subckt    x2.xc       x1.xm.xc    x1.xd.xc    x1.xn.xd.x
+ element   6:rc        7:rc        8:rc       10:rc      
+  r value     3.0000      3.0000      2.0000      4.0000 
+  v drop      3.0000      1.0000      2.0000      1.0000 
+  current     1.0000    333.3333m     1.0000    250.0000m
+  power       3.0000    333.3333m     2.0000    250.0000m
+
+
+          ***** job concluded
+ ******  
+ * hier_shadow_own: a name nested in p's own def and in an ancestor's def
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       4 # elements   =       7
+  # resistors   =       4 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       3
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.01           1           1
+  readin             0.02
+  errchk             0.01
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         95.01 megabytes
+           total cpu time            0.03 seconds
+           total elapsed time       30.57 seconds
+           job started at     11:27:15 11/01/2026
+           job ended   at     11:27:45 11/01/2026
+           job total runtime        30.57 seconds
+
+

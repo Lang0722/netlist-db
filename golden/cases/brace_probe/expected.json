@@ -1,0 +1,14 @@
+{
+ "case": "brace_probe",
+ "resistors": [],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "braces": "a .probe output with {...} is ignored with a warning; the job runs",
+  "warning": "**warning** (deck.sp:6) .probe is ignored because of syntax error at or before \"{a}\""
+ }
+}

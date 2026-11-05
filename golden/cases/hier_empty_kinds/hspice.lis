@@ -1,0 +1,274 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 11:27:15 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * hier_empty_kinds: instances of empty subckts, and devices of several types inside subckts
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x1.                             empty              1.00 
+        2 x2.                             onlyprm            1.00 
+        3 x3.                             onlyx              1.00 
+        4 x4.                             kinds              1.00 
+        5 x5.                             kinds              2.00 
+        6 x3.xe.                          empty              1.00 
+ ******  
+ * hier_empty_kinds: instances of empty subckts, and devices of several types inside subckts
+
+ ****** diode model parameters tnom=  25.000 temp=  25.000 ******
+ ********************************************************
+ *** common model parameters model name:   0:dm      ****
+ ********************************************************
+
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+
+   1*** dc breakdown parameters ***
+       vb=   0.    volts        ibv=   1.00m amps   
+
+   2*** parasitic resistance parameters ***
+       rs=   0.    ohms   
+
+   3*** capacitance parameters ***
+       fc= 500.00m              fcs= 500.00m                m= 500.00m        
+     mjsw= 330.00m               pb= 800.00m volts        php= 800.00m volts  
+       tt=   0.    secs         cjo=   0.    f/area       cjp=   0.    f/pj   
+
+   4*** temperature effect parameters ***
+     tlev=   0.               tlevc=   0.                 tcv=   0.    v/deg k
+      trs=   0.    /deg         cta=   0.    /deg         ctp=   0.    /deg   
+      xti=   3.00            xtitun=   3.00               keg=   1.00         
+       eg=   1.11  ev          gap1= 702.00u  ev/deg     gap2=   1.11k  deg   
+     ttt1=   0.    /deg        ttt2=   0.    /deg2        tm1=   0.    /deg   
+      tm2=   0.    /deg2        tpb=   0.    v/deg k     tphp=   0.    v/deg k
+     tref=  25.00   deg c 
+
+   5*** noise parameters ***
+       kf=   0.                  af=   1.00         
+
+   ***  level   1  model parameters  ***
+
+    level=   1.00                is=  10.00f amps         jsw=   0.    amps   
+        n=   1.00               nbv=   1.00                ik=   0.    amp    
+     area=   1.00                pj=   0.                 ikr=   0.    amp    
+    expli=   0.    amps      explir=   0.    amps        jtun=   0.    amps   
+   jtunsw=   0.    amps        ntun=  30.00         
+  
+  **warning** For .option genk=1, 0 implicit mutual inductors are generated!
+
+  
+             
+ Warning:'1 connection nodes' occurs 3 times
+ Summary of 1 connection from the following nodes:
+ -----------------------
+ |Node      |Subckt    |
+ |----------+----------|
+ |t1        |0         |
+ |t2        |0         |
+ |t3        |0         |
+ -----------------------
+              
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * hier_empty_kinds: instances of empty subckts, and devices of several types inside subckts
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage      node    =voltage      node    =voltage
+
+ +0:1       =   1.0000  0:t1      =   0.      0:t2      =   0.     
+ +0:t3      =   0.      0:t4      = 666.6681m 0:t5      = 800.0000m
+ +4:n1      =   1.0000  4:n2      = 333.3319m 4:n3      = 333.3319m
+ +4:n4      = 500.0000m 4:n5      =   1.0000  4:n6      = 666.6724m
+ +4:n7      =   0.      4:n8      =  -1.0000  4:n9      = -50.0000m
+ +5:n1      =   1.0000  5:n2      = 200.0000m 5:n3      = 200.0000m
+ +5:n4      = 500.0000m 5:n5      =   1.0000  5:n6      = 800.0000m
+ +5:n7      =   0.      5:n8      =  -1.0000  5:n9      =-100.0000m
+
+
+ **** voltage sources
+
+ subckt              x4         x5        
+ element  0:v1       4:vk       5:vk      
+  volts      1.0000   500.0000m  500.0000m
+  current   -1.4667m -500.0000u   -1.0000m
+  power      1.4667m  250.0000u  500.0000u
+
+     total voltage source power dissipation=    2.2167m       watts
+
+
+
+ **** current sources
+
+ subckt   x4         x5        
+ element  4:ik       5:ik      
+  volts     -1.0000    -1.0000 
+  current    1.0000m    2.0000m
+  power      1.0000m    2.0000m
+
+
+     total current source power dissipation=   3.0000m       watts
+
+ **** resistors
+
+ subckt                                                          x4        
+ element  0:r1       0:r2       0:r3       0:r4       0:r5       4:rk      
+  r value    1.0000k    1.0000k    1.0000k    1.0000k    1.0000k    1.0000k
+  v drop     0.         0.         0.       666.6681m  800.0000m  333.3319m
+  current    0.         0.         0.       666.6681u  800.0000u  333.3319u
+  power      0.         0.         0.       444.4464u  640.0000u  111.1102u
+
+ subckt   x4         x4         x4         x4         x4         x4        
+ element  4:rl       4:rn7      4:rd       4:re       4:rg       4:rv      
+  r value    1.0000k    1.0000k    1.0000k    1.0000k    1.0000k    1.0000k
+  v drop   333.3319m    0.         4.3112u  333.3319m  333.3319m  500.0000m
+  current  333.3319u    0.         4.3112n  333.3319u  333.3319u  500.0000u
+  power    111.1102u    0.        18.5863f  111.1102u  111.1102u  250.0000u
+
+ subckt   x4         x4         x4         x5         x5         x5        
+ element  4:ri       4:rf       4:rh       5:rk       5:rl       5:rn7     
+  r value    1.0000k    1.0000k    1.0000k  500.0000   500.0000   500.0000 
+  v drop     1.0000    -1.0000   -50.0000m  200.0000m  200.0000m    0.     
+  current    1.0000m   -1.0000m  -50.0000u  400.0000u  400.0000u    0.     
+  power      1.0000m    1.0000m    2.5000u   80.0000u   80.0000u    0.     
+
+ subckt   x5         x5         x5         x5         x5         x5        
+ element  5:rd       5:re       5:rg       5:rv       5:ri       5:rf      
+  r value  500.0000   500.0000   500.0000   500.0000   500.0000   500.0000 
+  v drop    24.2223n  200.0000m  200.0000m  500.0000m    1.0000    -1.0000 
+  current   48.4447p  400.0000u  400.0000u    1.0000m    2.0000m   -2.0000m
+  power      1.1734a   80.0000u   80.0000u  500.0000u    2.0000m    2.0000m
+
+ subckt   x5        
+ element  5:rh      
+  r value  500.0000 
+  v drop  -100.0000m
+  current -200.0000u
+  power     20.0000u
+
+
+ **** inductors
+
+ subckt   x4.        x4.        x5.        x5.       
+ element  4:lk       4:lk2      5:lk       5:lk2     
+  l value    1.0000n    1.0000n  500.0000p  500.0000p
+  v drop     0.         0.         0.         0.     
+  current    0.         0.         0.         0.     
+  power      0.         0.         0.         0.     
+
+
+ **** voltage-controlled current sources
+
+
+ subckt     x4         x5      
+ element  4:gk       5:gk      
+  v drop  -333.3319m -200.0000m
+  current  333.3319u  400.0000u
+
+
+
+
+ **** voltage-controlled voltage sources
+
+
+ subckt     x4         x5      
+ element  4:ek       5:ek      
+  volts    333.3319m  200.0000m
+  current -333.3319u -400.0000u
+
+
+
+
+ **** current-controlled current sources
+
+
+   subckt   x4         x5      
+ element  4:fk       5:fk      
+  current   -1.0000m   -2.0000m
+
+
+
+
+ **** current-controlled voltage sources
+
+
+ subckt     x4         x5      
+ element  4:hk       5:hk      
+  volts    -50.0000m -100.0000m
+  current   50.0000u  200.0000u
+
+
+
+
+ **** diodes
+
+
+ subckt     x4         x5      
+ element  4:dk       5:dk      
+ model    0:dm       0:dm      
+  id         4.3108n   48.0447p
+  vd       333.3276m  200.0000m
+  req        5.9598x  534.5268x
+  cap        0.         0.     
+
+
+
+
+          ***** job concluded
+ ******  
+ * hier_empty_kinds: instances of empty subckts, and devices of several types inside subckts
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =      25 # elements   =      48
+  # resistors   =      25 # capacitors =       2 # inductors   =       4
+  # mutual_inds =       2 # vccs       =       2 # vcvs        =       2
+  # cccs        =       2 # ccvs       =       2 # volt_srcs   =       3
+  # curr_srcs   =       2 # diodes     =       2 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.02           1          11
+  readin             0.02
+  errchk             0.03
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         97.49 megabytes
+           total cpu time            0.07 seconds
+           total elapsed time       30.62 seconds
+           job started at     11:27:15 11/01/2026
+           job ended   at     11:27:45 11/01/2026
+           job total runtime        30.62 seconds
+
+

@@ -1,0 +1,195 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 16:15:04 2026
+ scientific notation:
+ a=10**-18  f=10**-15  p=10**-12  n=10**-9  u=10**-6
+ m=10**-3   k=10**3    x=10**6    g=10**9 
+
+
+ circuit parameter definitions
+  parameter          =  value 
+
+     0:rval                                                    =   2.0000k      
+     0:cval                                                    =   2.0000p      
+     0:lval                                                    =   2.0000n      
+
+
+
+
+ constants  - tnom         kt           vt           gapsi        ni
+            298.15000    4.1163e-21    25.69184m     1.11562    1.2565e+16 
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * rcl_quoted_more: a quoted value in the r, c or l value place, then the value keyword (no .temp)
+
+ ****** circuit element summary tnom=  25.000 temp=  25.000 ******
+
+
+ **** resistors
+
+  
+  
+                                                              
+ element name        0:r14      0:r15      0:r33      0:r35   
+ node1               0:14       0:15       0:34       0:36    
+ node2               0:0        0:0        0:0        0:0     
+ model                                                        
+ res eff             2.0000k    2.0000k    1.0000k    1.0000k 
+ tc1                 0.         4.0000m    0.         0.      
+ tc2                 0.         0.         0.         0.      
+ scale               1.0000     1.0000     1.0000     1.0000  
+ m                   1.0000     1.0000     1.0000     1.0000  
+ ac                  2.0000k    2.0000k    1.0000k    1.0000k 
+ temp               25.0000    25.0000    25.0000    25.0000  
+ l                   0.         0.         0.         0.      
+ w                   0.         0.         0.         0.      
+ cap                 0.         0.         0.         0.      
+ noise               1.0000     1.0000  1.000e+00  1.000e+00  
+
+
+ **** capacitors
+  
+  
+                                        
+ element name        0:c1       0:c2    
+ node1               0:31       0:32    
+ node2               0:0        0:0     
+ model                                  
+ cap eff             2.0000p    2.0000p 
+ tc1                 0.         0.      
+ tc2                 0.         0.      
+ scale               1.0000     1.0000  
+ ic                  0.         0.      
+ m                   1.0000     1.0000  
+ w                   0.         0.      
+ l                   0.         0.      
+ temp               25.0000    25.0000  
+
+
+ **** inductors
+  
+  
+                                        
+ element name        0:l1       0:l2    
+ node1               0:33       0:35    
+ node2               0:34       0:36    
+ model                                  
+ ind eff             2.0000n    2.0000n 
+ res eff             0.         0.      
+ tc1                 0.         0.      
+ tc2                 0.         0.      
+ nt                  1.0000     1.0000  
+ ic                  0.         0.      
+ m                   1.0000     1.0000  
+
+
+ **** independent sources
+
+     name         node1        node2      dc volt    ac mag    ac phase    type
+  v14  14                0                    1.0000     0.         0.      dc   
+  v15  15                0                    1.0000     0.         0.      dc   
+  v31  31                0                    1.0000     0.         0.      dc   
+  v32  32                0                    1.0000     0.         0.      dc   
+  v33  33                0                    1.0000     0.         0.      dc   
+  v35  35                0                    1.0000     0.         0.      dc   
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * rcl_quoted_more: a quoted value in the r, c or l value place, then the value keyword (no .temp)
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage      node    =voltage      node    =voltage
+
+ +0:14      =   1.0000  0:15      =   1.0000  0:31      =   1.0000 
+ +0:32      =   1.0000  0:33      =   1.0000  0:34      =   1.0000 
+ +0:35      =   1.0000  0:36      =   1.0000 
+
+
+ **** voltage sources
+
+ subckt                                                                    
+ element  0:v14      0:v15      0:v31      0:v32      0:v33      0:v35     
+  volts      1.0000     1.0000     1.0000     1.0000     1.0000     1.0000 
+  current -500.0000u -500.0000u    0.         0.        -1.0000m   -1.0000m
+  power    500.0000u  500.0000u    0.         0.         1.0000m    1.0000m
+
+     total voltage source power dissipation=    3.0000m       watts
+
+
+
+ **** resistors
+
+ subckt                                              
+ element  0:r14      0:r15      0:r33      0:r35     
+  r value    2.0000k    2.0000k    1.0000k    1.0000k
+  v drop     1.0000     1.0000     1.0000     1.0000 
+  current  500.0000u  500.0000u    1.0000m    1.0000m
+  power    500.0000u  500.0000u    1.0000m    1.0000m
+
+
+ **** inductors
+
+ subckt                        
+ element  0:l1       0:l2      
+  l value    2.0000n    2.0000n
+  v drop     0.         0.     
+  current    0.         0.     
+  power      0.         0.     
+
+
+          ***** job concluded
+ ******  
+ * rcl_quoted_more: a quoted value in the r, c or l value place, then the value keyword (no .temp)
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       9 # elements   =      14
+  # resistors   =       4 # capacitors =       2 # inductors   =       2
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       6
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  readin             0.01
+  errchk             0.00
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         97.48 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       30.19 seconds
+           job started at     16:15:04 11/01/2026
+           job ended   at     16:15:34 11/01/2026
+           job total runtime        30.19 seconds
+
+

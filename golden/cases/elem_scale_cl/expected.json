@@ -1,0 +1,33 @@
+{
+ "case": "elem_scale_cl",
+ "resistors": [
+  {
+   "path": "r2",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 1,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "capacitors": {
+   "c1": {
+    "c": 1e-12,
+    "scale": 3.0,
+    "cap_eff": 3e-12
+   }
+  },
+  "inductors": {
+   "l1": {
+    "l": 1e-09,
+    "scale": 3.0,
+    "ind_eff": 3e-09,
+    "op_l_value": 3e-09
+   }
+  },
+  "source": ".option list element summary (cap eff, scale; ind eff, and `nt` 3.0000 in the place of the scale); .op l value"
+ }
+}

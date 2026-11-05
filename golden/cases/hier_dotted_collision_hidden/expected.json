@@ -1,0 +1,11 @@
+{
+ "case": "hier_dotted_collision_hidden",
+ "resistors": [],
+ "totals": {
+  "resistors": 5,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 4
+ },
+ "extra": {}
+}

@@ -1,0 +1,15 @@
+{
+ "case": "hier_dotted_collision_below",
+ "resistors": [],
+ "totals": {
+  "resistors": 5,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 5
+ },
+ "extra": {
+  "collided_circuits": [
+   4
+  ]
+ }
+}

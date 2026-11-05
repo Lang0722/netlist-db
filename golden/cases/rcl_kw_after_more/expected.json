@@ -1,0 +1,50 @@
+{
+ "case": "rcl_kw_after_more",
+ "resistors": [
+  {
+   "path": "r6",
+   "value": 2000.0
+  },
+  {
+   "path": "r7",
+   "value": 7500.0
+  },
+  {
+   "path": "r8",
+   "value": 2800.0
+  },
+  {
+   "path": "r9",
+   "value": 7000.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "skip_value_check": [
+   "r7",
+   "r8",
+   "r9"
+  ],
+  "temp": 125.0,
+  "tc": {
+   "r7": {
+    "r": 5000.0,
+    "tc1": 0.004,
+    "tc2": 1e-05
+   },
+   "r8": {
+    "r": 2000.0,
+    "tc1": 0.004
+   },
+   "r9": {
+    "r": 5000.0,
+    "tc1": 0.004
+   }
+  }
+ }
+}

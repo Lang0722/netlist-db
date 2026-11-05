@@ -1,0 +1,13 @@
+{
+ "case": "rcl_quoted_dollar",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:4) Undefined parameter or function definition \"rval $ c\" for r1. Please enter a defined name."
+ }
+}

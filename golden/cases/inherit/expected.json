@@ -1,0 +1,24 @@
+{
+ "case": "inherit",
+ "resistors": [
+  {
+   "path": "x1.xc.r1",
+   "value": 3.0
+  },
+  {
+   "path": "x1.xc.r2",
+   "value": 4.0
+  },
+  {
+   "path": "x1.xc.r3",
+   "value": 6.0
+  }
+ ],
+ "totals": {
+  "resistors": 3,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 2
+ },
+ "extra": {}
+}

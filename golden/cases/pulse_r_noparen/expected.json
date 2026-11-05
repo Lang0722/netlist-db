@@ -1,0 +1,14 @@
+{
+ "case": "pulse_r_noparen",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:3) Undefined parameter or function definition \"r\" for v1. Please enter a defined name.",
+  "r_read_as": "a fifth PULSE argument: the parameter name r, which is not defined, so HSPICE rejects the line"
+ }
+}

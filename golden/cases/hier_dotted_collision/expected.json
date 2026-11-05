@@ -1,0 +1,41 @@
+{
+ "case": "hier_dotted_collision",
+ "resistors": [
+  {
+   "path": "rt2",
+   "value": 1.0
+  },
+  {
+   "path": "rt1",
+   "value": 1.0
+  },
+  {
+   "path": "x0.rw",
+   "value": 4.0
+  },
+  {
+   "path": "x0.rq",
+   "value": 1.0
+  },
+  {
+   "path": "x0.xq.rc",
+   "value": 3.0
+  }
+ ],
+ "totals": {
+  "resistors": 6,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 3
+ },
+ "extra": {
+  "unnamed_circuit_resistors": [
+   {
+    "circuit": 3,
+    "definition": "cell",
+    "element": "rc",
+    "value": 2.0
+   }
+  ]
+ }
+}

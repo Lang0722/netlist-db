@@ -73,18 +73,20 @@ impl FileId {
             FileId::Include { path } | FileId::Section { path, section: _ } => path,
         }
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum EndReason<'a> {
-    Include {
-        file_name: &'a Path,
-        section: Option<String>,
-    },
-    /// end of the input
-    End,
-    /// `.ends` closed the current `.subckt`
-    Ends,
+    /// This file (or section) by the canonical form of its path (`..`
+    /// and links resolved), when that form is another path. `None` also
+    /// when the file cannot be found.
+    pub fn canonical(&self) -> Option<FileId> {
+        let canon = std::fs::canonicalize(self.path()).ok()?;
+        (canon != self.path()).then(|| match self {
+            FileId::Include { .. } => FileId::Include { path: canon },
+            FileId::Section { section, .. } => FileId::Section {
+                path: canon,
+                section: section.clone(),
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -126,6 +128,11 @@ impl<Parsed: Default> FileStorage<Parsed> {
                 *vacant_entry.insert(ParsedId(files_num))
             }
         }
+    }
+    /// Adds `alias` as another key of the file `id`: the same file reached
+    /// by a path spelled another way. An existing key is kept.
+    pub fn alias(&mut self, alias: FileId, id: ParsedId) {
+        self.id2idx.entry(alias).or_insert(id);
     }
     pub fn update_ctx(&mut self, parsed_id: &ParsedId, file_ctx: String, parsed: Parsed) {
         self.file[parsed_id.0] = file_ctx;

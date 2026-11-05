@@ -1,0 +1,39 @@
+{
+ "case": "global_net",
+ "resistors": [
+  {
+   "path": "rvss",
+   "value": 1000.0
+  },
+  {
+   "path": "x1.rl",
+   "value": 1000.0
+  },
+  {
+   "path": "x1.rg",
+   "value": 1000.0
+  },
+  {
+   "path": "x1.rv",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {
+  "global_nets": [
+   "vdd"
+  ],
+  "not_global": [
+   "vss"
+  ],
+  "currents": {
+   "x1.rl": 0.001,
+   "x1.rv": 0.0
+  }
+ }
+}

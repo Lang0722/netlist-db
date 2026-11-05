@@ -1,0 +1,111 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sat Oct 31 21:50:08 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * nested_global: nested overrides and defaults under .option parhier=global
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x6.                             out6               1.00 
+        2 x7.                             out7               1.00 
+        3 x8.                             out8               1.00 
+        4 x9.                             out9               1.00 
+        5 x10.                            out10              1.00 
+        6 x6.xi.                          in6                1.00 
+        7 x7.xi.                          in7                1.00 
+        8 x8.xi.                          in8                1.00 
+        9 x9.xm.                          mid9               1.00 
+       10 x10.xi.                         in10               1.00 
+       11 x9.xm.xi.                       in9                1.00 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * nested_global: nested overrides and defaults under .option parhier=global
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+     node    =voltage
+
+ + 0:1       =   1.0000 
+
+
+ **** voltage sources
+
+ subckt              
+ element   0:v1      
+  volts       1.0000 
+  current    -1.2722 
+  power       1.2722 
+
+     total voltage source power dissipation=    1.2722        watts
+
+
+
+ **** resistors
+
+ subckt    x6.xi       x7.xi       x8.xi       x10.xi      x9.xm.xi  
+ element   6:r6        7:r7        8:r8       10:r10      11:r9      
+  r value     3.0000      2.0000      6.0000     45.0000      4.0000 
+  v drop      1.0000      1.0000      1.0000      1.0000      1.0000 
+  current   333.3333m   500.0000m   166.6667m    22.2222m   250.0000m
+  power     333.3333m   500.0000m   166.6667m    22.2222m   250.0000m
+
+
+          ***** job concluded
+ ******  
+ * nested_global: nested overrides and defaults under .option parhier=global
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       2 # elements   =       6
+  # resistors   =       5 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.01           1           1
+  readin             0.02
+  errchk             0.01
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         95.05 megabytes
+           total cpu time            0.04 seconds
+           total elapsed time       30.22 seconds
+           job started at     21:50:08 10/31/2026
+           job ended   at     21:50:38 10/31/2026
+           job total runtime        30.22 seconds
+
+

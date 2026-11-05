@@ -1,0 +1,20 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 08:39:41 2026
+  **error** (deck.sp:4) syntax error at or before "{a}" "1n" "1" ")" 
+
+Syntax reference: 
+Vxxx n+ n- [[DC=] dcval tranfun [AC=acmag acphase]]
+Ixxx n+ n- [[DC=] dcval tranfun [AC=acmag acphase]]
++ [M=val]
+
+
+
+               ***** job aborted

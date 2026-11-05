@@ -1,0 +1,30 @@
+*|DSPF 1.0
+*|DESIGN "inv"
+*|DIVIDER /
+*|DELIMITER :
+*|BUSBIT []
+*|GROUND_NET VSS
+.SUBCKT inv A Y VDD VSS
+*|NET A 1.2e-15
+*|P (A I 0 0 0)
+*|I (MN1:G MN1 G I 1e-16 0 0)
+*|I (MP1:G MP1 G I 1e-16 0 0)
+*|S (A:1 0 0)
+R1 A A:1 10
+R2 A:1 MN1:G 5
+R3 A:1 MP1:G 5
+C1 A:1 VSS 1e-16
+C2 MN1:G VSS 2e-16
+*|NET Y 8e-16
+*|P (Y O 0 0 0)
+*|I (MN1:D MN1 D B 0 0 0)
+*|I (MP1:D MP1 D B 0 0 0)
+R4 MN1:D Y 20
+R5 MP1:D Y 20
+C3 Y VSS 5e-16
+*
+* Instance Section
+*
+MN1 MN1:D MN1:G VSS VSS nch W=1u L=0.1u
+MP1 MP1:D MP1:G VDD VDD pch W=2u L=0.1u
+.ENDS

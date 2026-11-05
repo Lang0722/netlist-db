@@ -1,0 +1,14 @@
+{
+ "case": "title_plus_comment",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:2) unable to open file \"* title_plus_comment: line 1 is a comment, line 2 is a + line\" .Either file doesn't exists or path is wrong. Please enter the correct file location.",
+  "line2_plus": "error"
+ }
+}

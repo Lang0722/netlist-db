@@ -1,0 +1,22 @@
+{
+ "case": "ind_model_value",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "order": "model_value",
+  "inductors": 1,
+  "value_read": 1e-09,
+  "model": "lmod",
+  "source": ".op l value 1.0000n; .option list ind eff 1.0000n, node2 2, model lmod"
+ }
+}

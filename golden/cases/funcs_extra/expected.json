@@ -1,0 +1,64 @@
+{
+ "case": "funcs_extra",
+ "resistors": [
+  {
+   "path": "rnint",
+   "value": 3.0
+  },
+  {
+   "path": "rfloor",
+   "value": 2.0
+  },
+  {
+   "path": "rceil",
+   "value": 3.0
+  },
+  {
+   "path": "rsin",
+   "value": 10.8415
+  },
+  {
+   "path": "rcos",
+   "value": 10.5403
+  },
+  {
+   "path": "rtan",
+   "value": 11.5574
+  },
+  {
+   "path": "rasin",
+   "value": 10.5236
+  },
+  {
+   "path": "racos",
+   "value": 11.0472
+  },
+  {
+   "path": "ratan",
+   "value": 10.7854
+  },
+  {
+   "path": "rsinh",
+   "value": 11.1752
+  },
+  {
+   "path": "rcosh",
+   "value": 11.5431
+  },
+  {
+   "path": "rtanh",
+   "value": 10.7616
+  },
+  {
+   "path": "rdb",
+   "value": 30.0
+  }
+ ],
+ "totals": {
+  "resistors": 13,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {}
+}

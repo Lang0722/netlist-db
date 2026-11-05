@@ -1,0 +1,26 @@
+{
+ "case": "prot_param",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  },
+  {
+   "path": "r2",
+   "value": 2000.0
+  }
+ ],
+ "totals": {
+  "resistors": 3,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "merged_listing": "listing shows 2 resistors, statistics count 3",
+  "skip_value_check": [
+   "r1",
+   "r2"
+  ]
+ }
+}

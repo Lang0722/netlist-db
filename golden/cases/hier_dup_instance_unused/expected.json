@@ -1,0 +1,16 @@
+{
+ "case": "hier_dup_instance_unused",
+ "resistors": [
+  {
+   "path": "x1.rc",
+   "value": 2.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {}
+}

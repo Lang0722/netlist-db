@@ -1,0 +1,12 @@
+* models.lib: corner sections; tt and ff both call the base section
+.lib base
+.param rbase=100
+.endl base
+.lib tt
+.lib 'models.lib' base
+.param rcorner=1k
+.endl tt
+.lib ff
+.lib 'models.lib' base
+.param rcorner=2k
+.endl ff

@@ -1,0 +1,96 @@
+{
+ "case": "units",
+ "resistors": [
+  {
+   "path": "r_m",
+   "value": 0.001
+  },
+  {
+   "path": "r_mu",
+   "value": 0.001
+  },
+  {
+   "path": "r_meg",
+   "value": 1000000.0
+  },
+  {
+   "path": "r_megu",
+   "value": 1000000.0
+  },
+  {
+   "path": "r_x",
+   "value": 1000000.0
+  },
+  {
+   "path": "r_mil",
+   "value": 2.5399999999999997e-05
+  },
+  {
+   "path": "r_k",
+   "value": 2500.0
+  },
+  {
+   "path": "r_v",
+   "value": 1.0
+  },
+  {
+   "path": "r_t",
+   "value": 1000000000000.0
+  },
+  {
+   "path": "r_g",
+   "value": 1000000000.0
+  },
+  {
+   "path": "r_ek",
+   "value": 0.001
+  },
+  {
+   "path": "r_me",
+   "value": 1000000.0
+  },
+  {
+   "path": "r_mi",
+   "value": 2.5399999999999997e-05
+  },
+  {
+   "path": "r_pf",
+   "value": 10.0
+  },
+  {
+   "path": "r_a",
+   "value": 1.0
+  },
+  {
+   "path": "r_u",
+   "value": 1.0
+  },
+  {
+   "path": "r_n",
+   "value": 1.0
+  },
+  {
+   "path": "r_p",
+   "value": 1.0
+  },
+  {
+   "path": "r_f",
+   "value": 1.0
+  },
+  {
+   "path": "r_pm",
+   "value": 1.0
+  }
+ ],
+ "totals": {
+  "resistors": 20,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "warnings": [
+   "(deck.sp:13) nonstandard number 1e-3k is interpreted as 0.001"
+  ]
+ }
+}

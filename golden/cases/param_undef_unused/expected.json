@@ -1,0 +1,13 @@
+{
+ "case": "param_undef_unused",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:2) Undefined parameter or function definition \"b\" for a. Please enter a defined name."
+ }
+}

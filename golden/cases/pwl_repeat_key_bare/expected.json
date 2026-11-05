@@ -1,0 +1,41 @@
+{
+ "case": "pwl_repeat_key_bare",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "node_voltages": {
+   "1": 0.3
+  },
+  "sources": {
+   "v1": {
+    "type": "pwl",
+    "dc": 0.3,
+    "pwl": [
+     [
+      0.0,
+      0.3
+     ],
+     [
+      1e-09,
+      1.0
+     ]
+    ],
+    "repeat_delay": 0.0
+   }
+  },
+  "r_read_as": "R=1n then R: accepted, repeat delay 0 (the bare R). R=1n is at the last time point, and alone it drops the repeat (pwl_repeat_key_only), so this case alone cannot tell 'the last one wins' from 'R=1n is dropped'; pwl_repeat_key_bare_mid shows that the last one wins",
+  "info": "**info** (deck.sp:3) DC voltage reset to initial transient source value in source 0:v1. new dc=0.3000D+00",
+  "warning": "**warning** has discontinuity at the junction of repeated pwl source . A rise/fall time of 1e-15 second is added",
+  "source": ".option list independent sources (dc volt, repeat delay, pwl points); .op node voltages"
+ }
+}

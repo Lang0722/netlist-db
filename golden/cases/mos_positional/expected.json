@@ -1,0 +1,17 @@
+{
+ "case": "mos_positional",
+ "resistors": [],
+ "totals": {
+  "resistors": 0,
+  "capacitors": 0,
+  "mosfets": 2,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "positional_lw": {
+   "l": 2e-06,
+   "w": 1e-06
+  },
+  "source": ".option list element summary (l drawn, w drawn); M1 positional equals M2 keyword"
+ }
+}

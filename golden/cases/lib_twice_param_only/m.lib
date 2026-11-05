@@ -1,0 +1,4 @@
+* m.lib: section tt holds only a .param
+.lib tt
+.param pl=1k
+.endl tt

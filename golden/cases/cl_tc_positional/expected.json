@@ -1,0 +1,148 @@
+{
+ "case": "cl_tc_positional",
+ "resistors": [
+  {
+   "path": "r11",
+   "value": 1000.0
+  },
+  {
+   "path": "r12",
+   "value": 1000.0
+  },
+  {
+   "path": "r13",
+   "value": 1000.0
+  },
+  {
+   "path": "r14",
+   "value": 1000.0
+  },
+  {
+   "path": "r15",
+   "value": 1000.0
+  },
+  {
+   "path": "r16",
+   "value": 1000.0
+  },
+  {
+   "path": "r17",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 7,
+  "capacitors": 7,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "temp": 125.0,
+  "positional_after_value": [
+   "tc1",
+   "tc2"
+  ],
+  "capacitors": {
+   "c1": {
+    "model": "cmod",
+    "c": 1e-12,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "c_at_temp": 1.4e-12
+   },
+   "c2": {
+    "model": null,
+    "c": 1e-12,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "c_at_temp": 1.4e-12
+   },
+   "c3": {
+    "model": "cmod",
+    "c": 1e-12,
+    "tc1": 0.004,
+    "tc2": 1e-05,
+    "c_at_temp": 1.5e-12
+   },
+   "c4": {
+    "model": null,
+    "c": 1e-12,
+    "tc1": 0.004,
+    "tc2": 1e-05,
+    "c_at_temp": 1.5e-12
+   },
+   "c5": {
+    "model": "cmod",
+    "c": 1e-12,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "c_at_temp": 1.4e-12
+   },
+   "c6": {
+    "model": null,
+    "c": 1e-12,
+    "tc1": 0.004,
+    "tc2": 1e-05,
+    "c_at_temp": 1.5e-12
+   },
+   "c7": {
+    "model": null,
+    "c": 1e-12,
+    "tc1": 0.0,
+    "tc2": 0.0
+   }
+  },
+  "inductors": {
+   "l1": {
+    "model": "lmod",
+    "l": 1e-09,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "l_at_temp": 1.4e-09
+   },
+   "l2": {
+    "model": null,
+    "l": 1e-09,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "l_at_temp": 1.4e-09
+   },
+   "l3": {
+    "model": "lmod",
+    "l": 1e-09,
+    "tc1": 0.004,
+    "tc2": 1e-05,
+    "l_at_temp": 1.5e-09
+   },
+   "l4": {
+    "model": null,
+    "l": 1e-09,
+    "tc1": 0.004,
+    "tc2": 1e-05,
+    "l_at_temp": 1.5e-09
+   },
+   "l5": {
+    "model": "lmod",
+    "l": 1e-09,
+    "tc1": 0.004,
+    "tc2": 0.0,
+    "l_at_temp": 1.4e-09
+   },
+   "l6": {
+    "model": null,
+    "l": 1e-09,
+    "tc1": 0.004,
+    "tc2": 1e-05,
+    "l_at_temp": 1.5e-09
+   },
+   "l7": {
+    "model": null,
+    "l": 1e-09,
+    "tc1": 0.0,
+    "tc2": 0.0,
+    "l_at_temp": 1e-09
+   }
+  },
+  "source": ".option list element summary (model, cap eff / ind eff, tc1, tc2) and temperature-adjusted values (eff val at temp 125; c7 has no TC and is not in that table); .op l value (l7 1.0000n)"
+ }
+}

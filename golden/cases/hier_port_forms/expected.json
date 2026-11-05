@@ -1,0 +1,57 @@
+{
+ "case": "hier_port_forms",
+ "resistors": [
+  {
+   "path": "rt1",
+   "value": 1.0
+  },
+  {
+   "path": "rt2",
+   "value": 1.0
+  },
+  {
+   "path": "rt3",
+   "value": 1.0
+  },
+  {
+   "path": "rt4",
+   "value": 1.0
+  },
+  {
+   "path": "rt5",
+   "value": 1.0
+  },
+  {
+   "path": "x1.rc",
+   "value": 2.0
+  },
+  {
+   "path": "x2.rc",
+   "value": 1.5,
+   "m": 2.0
+  },
+  {
+   "path": "x3.rc",
+   "value": 1.0
+  },
+  {
+   "path": "x4.rc",
+   "value": 1.0
+  },
+  {
+   "path": "x4.rd",
+   "value": 1.0
+  },
+  {
+   "path": "x5.rm",
+   "value": 4.0
+  }
+ ],
+ "totals": {
+  "resistors": 11,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 5
+ },
+ "extra": {}
+}

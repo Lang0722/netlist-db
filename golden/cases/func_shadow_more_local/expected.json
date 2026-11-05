@@ -1,0 +1,13 @@
+{
+ "case": "func_shadow_more_local",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:27) Undefined parameter or function definition \"sgn\" for x8.xk.rk2. Please enter a defined name."
+ }
+}

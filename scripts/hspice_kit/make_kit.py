@@ -84,6 +84,13 @@ def listing(deck):
     return [line.split("\t") for line in out.splitlines()[1:]]
 
 
+def has_text_error(deck):
+    """Whether netlist-db reports an error in the text of a deck (it still
+    lists the MOSFETs it could read)"""
+    err = subprocess.run([MS, deck], capture_output=True, text=True, check=True).stderr
+    return "the netlist has errors" in err
+
+
 def finish(path, text):
     """Adds the analyses and the measures of every MOSFET to the deck `text`,
     writes it to `path`; returns netlist-db's listing of it"""
@@ -251,6 +258,22 @@ def decks():
          "one X line resolves under X1 and not under X2: HSPICE stops"),
         ("q_x_model_name", ".model nv nmos level=54\nM1 d g 0 0 nv l=1u w=1u\nX1 d g 0 nv\n",
          "an X line that calls the name of a model card: HSPICE stops"),
+        ("q_group_first", ".model nv nmos level=54\n.param pl=(1+1)*1u pw=max(1u, 3u)\n"
+         ".subckt c d g s w=(2u)\nM1 d g s s nv l=(1u) w=w\n.ends c\n"
+         "M1 d g 0 0 nv l=pl w=pw\nM2 d g 0 0 nv l=(1u) w=(2u)\nX1 d g 0 c\nX2 d g 0 c w=(3u)\n",
+         "a value that starts with a group, and spaces in a group"),
+        ("q_quote_in_group", ".model nv nmos level=54\n.param pw=max(1u,'2u')\nM1 d g 0 0 nv l=1u w=pw\n",
+         "a quote in a group without quotes around it: HSPICE stops"),
+        ("q_stray_ends", ".model nv nmos level=54\nM1 d g 0 0 nv l=1u w=1u\n.ends\nM2 d g 0 0 nv l=1u w=1u\n",
+         "a `.ends` with no open `.subckt`: HSPICE stops"),
+        ("q_two_functions", ".model nv nmos level=54\nM1 d g 0 0 nv l=1u w=1u\n"
+         "V1 d 0 SIN(0 1 1meg) PULSE(0 1 0 1n 1n 5n 10n)\n",
+         "two transient functions on a source: HSPICE stops"),
+        ("q_controlled_gain_key", ".model nv nmos level=54\nM1 d g 0 0 nv l=1u w=1u\nE1 d 0 g 0 gain=2\n",
+         "`gain=` on an E line: HSPICE stops"),
+        ("q_paren_names", ".model nv nmos level=54\n.subckt (via) d g s\nM1 d g s s nv l=1u w=1u\n.ends (via)\n"
+         "X1 d g 0 (via)\n",
+         "a subckt name in parentheses, also on `.ends`"),
     ]
     # where the limits of a bin that read a parameter are evaluated
     tg = (".param lb=2e-7\n.model tg.1 nmos level=54 lmin=1e-8 lmax='lb'\n"
@@ -401,7 +424,48 @@ def decks():
           ("q_positional_mix", a_model + "M1 d g 0 0 a 2u pw\nM2 d g 0 0 a pl 1u\nM3 d g 0 a 'pl' 1u\nM4 d g 0 0 a pl\n",
            "numbers, names and quoted expressions after the model name"),
           ("q_positional_names_3", a_model + "M1 d g 0 a pl pw\n",
-           "3 nodes, then names after the model name: netlist-db reads a 4th node and the model `pl`")]
+           "3 nodes, then names after the model name: the last word that names a model is the model"),
+          ("q_positional_names_4", a_model + ".param pa=1p pb=1p\nM1 d g 0 0 a pl pw pa pb\nM2 d g 0 a pl pw pa pb\n",
+           "4 names after the model name"),
+          ("q_positional_names_8", a_model + ".param pa=1p pb=1p\nM1 d g 0 0 a pl pw pa pb pa pb pa pb\n",
+           "8 names after the model name"),
+          ("q_positional_numbers_9", a_model + "M1 d g 0 0 a 2u 1u 1p 1p 1u 1u 1 1 1\n",
+           "9 numbers after the model name"),
+          ("q_nodes_5", a_model + "M1 d g 0 0 x a l=1u w=1u\n", "5 nodes before the model name"),
+          ("q_nodes_7", a_model + "M1 d g 0 0 x y z a l=1u w=1u\n", "7 nodes before the model name"),
+          ("q_nodes_8", a_model + "M1 d g 0 0 x y z w a l=1u w=1u\n", "8 nodes before the model name: HSPICE stops"),
+          ("q_two_model_words", a_model + ".model b nmos level=54\n.param b=2u\nM1 d g 0 0 a b w=1u\n",
+           "two words name a model: the first one after the fourth node, and the next is L"),
+          ("q_two_model_words_4", a_model + ".model b nmos level=54\n.param b=2u\nM1 d g 0 a b w=1u\n",
+           "the same, one of them in the place of the fourth node: that one is a node"),
+          ("q_two_model_words_6", a_model + ".model b nmos level=54\n.param b=2u\nM1 d g 0 0 x a b w=1u\n",
+           "the same, after a fifth node"),
+          ("q_node_model_name", ".model n nmos level=54\n.model a nmos level=54\nM1 d g n n a l=1u w=1u\nVn n 0 0\n",
+           "a node with the name of a model"),
+          ("q_temp_group", a_model + ".temp (50)\nM1 d g 0 0 a l=1u w=1u\n", "a group in a `.temp` line: HSPICE stops"),
+          ("q_temp_quoted_group", a_model + ".temp '(50)'\nM1 d g 0 0 a l=1u w=1u\n", "a group in quotes in a `.temp` line"),
+          ("q_stat_quotes", a_model + ".param q=agauss(1u,0,'2')\nM1 d g 0 0 a l=q w=1u\n",
+           "quotes in the arguments of a statistical function"),
+          ("q_stat_quotes_head", a_model + ".param q=2*agauss(1u,0,'2')\nM1 d g 0 0 a l=q w=1u\n",
+           "the same, with text before the call: HSPICE stops"),
+          ("q_group_quotes", a_model + ".param q=max(1u,'2u')\nM1 d g 0 0 a l=q w=1u\n",
+           "quotes in the arguments of max: HSPICE stops"),
+          ("q_str_quotes", a_model + ".param q=str('x')\nM1 d g 0 0 a l=1u w=1u\n", "quotes in str"),
+          ("q_global_commas", a_model + ".global vdd,vss\nM1 d g 0 0 a l=1u w=1u\n", "commas in .global"),
+          ("q_off_first", a_model + "M1 d g 0 0 a OFF 2u 1u\n", "OFF takes the place of L"),
+          ("q_off_second", a_model + "M1 d g 0 0 a 2u OFF 1u\n", "OFF takes the place of W"),
+          ("q_off_third", a_model + "M1 d g 0 0 a 2u 1u OFF 1p\n", "OFF takes the place of AD"),
+          ("q_off_names", a_model + "M1 d g 0 0 a OFF pl pw\n", "OFF, then names of parameters"),
+          ("q_off_keys", a_model + "M1 d g 0 0 a OFF 2u 1u l=3u\n", "OFF and a keyword"),
+          ("q_digit_word_5", a_model + "M1 d g 0 0 5 a l=1u w=1u\n", "a digit-first word after 4 nodes: HSPICE stops"),
+          ("q_digit_word_6", a_model + "M1 d g 0 0 x 6 a l=1u w=1u\n", "a digit-first sixth node"),
+          ("q_mos_group_lines", a_model + "M1 d g 0 0 a l=(1u\n+ +2u) w=1u\nM2 d g 0 0 a l=1u w=1u\n",
+           "a group over a line on a MOSFET line: HSPICE reads 1u"),
+          ("q_ends_comma", ".subckt c1 d g\nM1 d g 0 0 a l=2u w=1u\n.ends,c1\n" + a_model + "X1 d g c1\n", "a comma after .ends"),
+          ("q_quoted_blank_line", a_model + ".param q='2\n\n+ *1u'\nM1 d g 0 0 a l=q w=1u\n",
+           "a blank line inside quotes: HSPICE stops"),
+          ("q_quoted_comment_line", a_model + ".param q='2\n* a comment\n+ *1u'\nM1 d g 0 0 a l=q w=1u\n",
+           "a comment line inside quotes: HSPICE stops")]
     q.append(("q_limits_same_scope",
               local + tg + ".subckt s1 d g s lb=1e-6\nM1 d g s s tg l=5e-7 w=1u\nM2 d g s s tg l=5e-7 w=1u\n.ends s1\n"
               ".subckt s2 d g s lb=1e-6\nM1 d g s s tg l=5e-7 w=1u\n.ends s2\nX1 d g 0 s1\nX2 d g 0 s2\n",
@@ -520,6 +584,8 @@ def main():
             f.write("index\tpath\tmodel name\tL\tW\tNF\tmodel\n")
             for i, r in enumerate(rows):
                 f.write(f"{i}\t" + "\t".join(r) + "\n")
+        if has_text_error(path):
+            open(os.path.join(out, "expected", f"{name}.text_error"), "w").close()
         manifest.append(f"{name}\t{len(rows)}\t{what}")
     with open(os.path.join(out, "MANIFEST.tsv"), "w") as f:
         f.write("\n".join(manifest) + "\n")

@@ -1,0 +1,32 @@
+{
+ "case": "pe_scope_local",
+ "resistors": [
+  {
+   "path": "x1.r1",
+   "value": 2.0
+  },
+  {
+   "path": "x2.r2",
+   "value": 3.0
+  },
+  {
+   "path": "x2.xl.r3",
+   "value": 3.0
+  },
+  {
+   "path": "x3.xl.r4",
+   "value": 4.0
+  },
+  {
+   "path": "x4.xl.r5",
+   "value": 2.0
+  }
+ ],
+ "totals": {
+  "resistors": 5,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 7
+ },
+ "extra": {}
+}

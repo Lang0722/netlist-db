@@ -1,0 +1,16 @@
+{
+ "case": "parhier_global",
+ "resistors": [
+  {
+   "path": "x1.r1",
+   "value": 4.0
+  }
+ ],
+ "totals": {
+  "resistors": 1,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {}
+}

@@ -1,0 +1,30 @@
+{
+ "case": "nested_def",
+ "resistors": [
+  {
+   "path": "x2.rc",
+   "value": 1.0
+  },
+  {
+   "path": "x1.xc.rc",
+   "value": 2.0
+  },
+  {
+   "path": "x1.xd.xc.rc",
+   "value": 2.0
+  }
+ ],
+ "totals": {
+  "resistors": 3,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 5
+ },
+ "extra": {
+  "resolved_def": {
+   "x1.xc": "cell nested in outer",
+   "x1.xd.xc": "cell nested in outer (deep is nested in outer and instantiated inside outer, so text nesting and instance path give the same answer; see nested_def_dynamic)",
+   "x2": "top-level cell"
+  }
+ }
+}

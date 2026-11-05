@@ -1,0 +1,132 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 13:58:15 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * hier_dotted_collision_shift: circuits created after the later of two instances with one full name
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x0.                             wrap               1.00 
+        2 x0.xa.                          mid                1.00 
+        3 x9.                             other              1.00 
+        4 x0.xa.xb.                       cellb              1.00 
+        5 x9.xp.                          cella              1.00 
+        6 x0.xa.xb.xk.                    leafp              1.00 
+        7 .                               leafk              1.00 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ ******
+ * hier_dotted_collision_shift: circuits created after the later of two instances with one full name
+
+ ****** dc transfer curves tnom=  25.000 temp=  25.000 ******
+x
+
+ volt         current    current     current        current   
+             .rk        x0.xa.xb.rc x0.xa.xb.xk.rp x9.ro      
+    1.00000   117.6471m  250.0000m   115.7895m       73.6842m 
+y
+x
+
+ volt         current   
+             rt3        
+    1.00000   189.4737m 
+y
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * hier_dotted_collision_shift: circuits created after the later of two instances with one full name
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage      node    =voltage      node    =voltage
+
+ +0:1       =   1.0000  0:t1      = 250.0000m 0:t2      = 411.7647m
+ +0:t3      = 189.4737m
+
+
+ **** voltage sources
+
+ subckt             
+ element  0:v1      
+  volts      1.0000 
+  current -851.2384m
+  power    851.2384m
+
+     total voltage source power dissipation=  851.2384m       watts
+
+
+
+ **** resistors
+
+ subckt                                    x9         x0.xa.xb   x9.xp     
+ element  0:rt1      0:rt2      0:rt3      3:ro       4:rc       5:rc      
+  r value    1.0000     1.0000     1.0000    11.0000     3.0000     2.0000 
+  v drop   250.0000m  411.7647m  189.4737m  810.5263m  750.0000m  588.2353m
+  current  250.0000m  411.7647m  189.4737m   73.6842m  250.0000m  294.1176m
+  power     62.5000m  169.5502m   35.9003m   59.7230m  187.5000m  173.0104m
+
+ subckt   x0.xa.xb.x           
+ element  6:rp       7:rk      
+  r value    7.0000     5.0000 
+  v drop   810.5263m  588.2353m
+  current  115.7895m  117.6471m
+  power     93.8504m   69.2042m
+
+
+          ***** job concluded
+ ******  
+ * hier_dotted_collision_shift: circuits created after the later of two instances with one full name
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       5 # elements   =       9
+  # resistors   =       8 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  dc sweep           0.00           1           1
+  readin             0.02
+  errchk             0.00
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         96.42 megabytes
+           total cpu time            0.03 seconds
+           total elapsed time       31.02 seconds
+           job started at     13:58:15 11/01/2026
+           job ended   at     13:58:46 11/01/2026
+           job total runtime        31.02 seconds
+
+

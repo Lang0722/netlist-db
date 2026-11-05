@@ -1,0 +1,40 @@
+{
+ "case": "rcl_quoted_plus",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 6000.0
+  },
+  {
+   "path": "r2",
+   "value": 4000.0
+  },
+  {
+   "path": "r3",
+   "value": 8000.0
+  },
+  {
+   "path": "r4",
+   "value": 10000.0
+  },
+  {
+   "path": "r5",
+   "value": 3000.0
+  },
+  {
+   "path": "r6",
+   "value": 6000.0
+  },
+  {
+   "path": "r7",
+   "value": 1000.0
+  }
+ ],
+ "totals": {
+  "resistors": 7,
+  "capacitors": 1,
+  "mosfets": 0,
+  "subckt_instances": 0
+ },
+ "extra": {}
+}

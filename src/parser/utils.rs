@@ -1,37 +1,36 @@
-use std::{
-    path::Path,
-    sync::{Arc, LazyLock},
-};
+use regex::Regex;
+use std::{cell::OnceCell, path::Path, sync::LazyLock};
 
-use indexmap::IndexMap;
 use nom::{
     IResult, Input, Parser,
     branch::alt,
-    bytes::complete::{tag, tag_no_case, take_till, take_while, take_while1},
-    character::{char, complete::digit1},
-    combinator::{eof, map, map_res, opt, recognize, verify},
-    error::ErrorKind,
-    multi::{many0, many1},
-    sequence::preceded,
-};
-use regex::Regex;
-
-use super::{ast, manager::ParseManager};
-use crate::{
-    ast::{
-        DataBuilder, DataFileBuilder, DataFilesBuilder, DataValuesBuilder, KeyValueBuilder,
-        ModelBuilder, PnameColNumBuilder, TokenBuilder, UnknwonBuilder, ValueBuilder,
+    bytes::complete::{tag_no_case, take_while, take_while1},
+    character::{
+        char,
+        complete::{digit1, one_of},
     },
-    span::{EndReason, FileId, LocatedSpan, Pos, Span},
+    combinator::{map, map_res, opt, recognize},
+    error::ErrorKind,
+    multi::{many0, many1, separated_list0},
+    sequence::{delimited, preceded},
 };
+
 use crate::{
-    ast::{LocalAST, SubcktBuilder},
+    ast::LocalAST,
     err::{ParseError, ParseErrorInner},
-    instance::{InstanceBuilder, InstanceCtxBuilder},
+    instance::InstanceCtxBuilder,
     parser::{
         cmds::{init_condition, nodeset},
         instance::{instance, unsupported_controlled_form},
     },
+};
+use crate::{
+    ast::{
+        DataBuilder, DataFileBuilder, DataFilesBuilder, DataValuesBuilder, KeyValueBuilder,
+        ModelBuilder, ParamFuncBuilder, PnameColNumBuilder, TokenBuilder, UnknwonBuilder,
+        ValueBuilder,
+    },
+    span::{LocatedSpan, Pos, Span},
 };
 
 #[inline]
@@ -99,59 +98,8 @@ pub(super) fn key(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     map(take_while1(is_key), |s: LocatedSpan| s.into()).parse_complete(i)
 }
 
-enum Unit {
-    Factor(f64),
-    DB,
-}
-
-// hspice/index.htm#page/hspice_5/about_hspice_measurement_system.htm#wwID0EOGJM
-#[inline]
-fn unit(i: LocatedSpan) -> IResult<LocatedSpan, Unit> {
-    map(
-        take_while1(|c: char| c.is_ascii_alphabetic()),
-        |s: LocatedSpan| {
-            let u = s.fragment().to_ascii_uppercase();
-            if u.starts_with("DB") {
-                return Unit::DB;
-            }
-            // HSPICE scale factors: the leading letters select the factor and
-            // the rest is ignored, so `10pF` is 10p, `1kohm` is 1k, `1.8V` is
-            // 1.8, `1meter` is mega, `1minute` is 60 (and `1M` is milli, not
-            // mega). As measured on HSPICE P-2019.06.
-            Unit::Factor(if u.starts_with("MIN") {
-                60.0
-            } else if u.starts_with("ME") {
-                1e+6
-            } else if u.starts_with("MI") {
-                25.4e-6
-            } else if u.starts_with("HR") {
-                3600.0
-            } else if u.starts_with("DAY") {
-                86400.0
-            } else if u.starts_with("YR") {
-                31536000.0
-            } else {
-                match u.as_bytes()[0] {
-                    b'T' => 1e+12,
-                    b'G' => 1e+9,
-                    b'X' => 1e+6,
-                    b'K' => 1e+3,
-                    b'M' => 1e-3,
-                    b'U' => 1e-6,
-                    b'N' => 1e-9,
-                    b'P' => 1e-12,
-                    b'F' => 1e-15,
-                    b'A' => 1e-18,
-                    b'Z' => 1e-21,
-                    b'Y' => 1e-24,
-                    _ => 1.0,
-                }
-            })
-        },
-    )
-    .parse_complete(i)
-}
-
+/// A plain floating-point number, without scale factors (for simulator
+/// output files).
 #[inline]
 pub(super) fn float(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
     // SPICE numbers start with a digit or a dot (after an optional sign); this
@@ -166,25 +114,37 @@ pub(super) fn float(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
     }
 }
 
-/// A number with an optional scale factor, which an exponent makes void
-/// (`1e-3k` is 0.001, in HSPICE too). A number too large for `f64` (`1e999`)
-/// is not a number here: it is kept as written, as an expression.
+/// An HSPICE number with its scale factor or unit (`1m`, `1meg`, `10pF`,
+/// `20db`). The rules are those of [`netlist_expr::scan_number`], the one
+/// unit table of the repository (golden cases `units` and `units2`).
+///
+/// A plain number (digits, `.`, exponent) with no letter after it has no
+/// unit, so `fast_float2` reads it: the same value, about 7 times faster
+/// than `scan_number` for `8.1e-08`. Every other number goes to
+/// `scan_number`.
 #[inline]
 pub(super) fn float_unit(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
-    let (after, f) = float(i)?;
-    let digits = &i.fragment()[..i.fragment().len() - after.fragment().len()];
-    let has_exponent = digits.contains(['e', 'E']);
-    let (rest, u) = opt(unit).parse_complete(after)?;
-    let f = match u {
-        Some(_) if has_exponent => f,
-        Some(Unit::Factor(u)) => f * u,
-        Some(Unit::DB) => 10.0_f64.powf(f / 20.0),
-        None => f,
-    };
-    if f.is_finite() {
-        Ok((rest, f))
+    let s = i.fragment();
+    let b = s.as_bytes();
+    // `inf` and `nan` are names, not numbers
+    let digit_first = match b.first() {
+        Some(b'+' | b'-') => b.get(1),
+        first => first,
+    }
+    .is_some_and(|&c| c.is_ascii_digit() || c == b'.');
+    let number = if digit_first
+        && let Ok((f, len)) = fast_float2::parse_partial::<f64, _>(s)
+        && !b.get(len).is_some_and(u8::is_ascii_alphabetic)
+    {
+        Some((f, len))
     } else {
-        Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Float)))
+        netlist_expr::scan_number(s)
+    };
+    match number {
+        // A number too large for `f64` (`1e999`) is not a number here: it is
+        // kept as written, as an expression.
+        Some((f, len)) if f.is_finite() => Ok((i.take_from(len), f)),
+        _ => Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Float))),
     }
 }
 
@@ -199,7 +159,7 @@ pub(crate) fn number_prefix(s: &str) -> Option<(f64, usize)> {
 /// Whether `s` is an unquoted expression as a whole, such as
 /// `agauss(0,0,'2*p1')`
 pub(crate) fn is_formula_text(s: &str) -> bool {
-    formula(crate::span::span(s, 0)).is_ok_and(|(rest, _)| rest.is_empty())
+    assigned_value(crate::span::span(s, 0)).is_ok_and(|(rest, _)| rest.is_empty())
 }
 
 /// Whether `s` is a list of numbers separated by commas, such as `0,0` in
@@ -230,10 +190,13 @@ fn is_path(c: char) -> bool {
 fn is_key(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
+/// `!` is in names such as `gnd!` (ground) and `vdd!` (golden `ground_alias`).
+/// U+FFFD stands for a byte that is not UTF-8 (see `parser::decode`): it
+/// stays in its name, so the statement is kept.
 fn is_name(c: char) -> bool {
     // `<>` (bus bits) and `!` (global nets) are common in CDL netlists, `~`
     // (inverted signals) in netlists written by schematic editors
-    c.is_alphanumeric() || "/_.+-*^:@%#[]<>!|~".contains(c)
+    c.is_alphanumeric() || "/_.+-*^:@%#[]<>!|~".contains(c) || c == '\u{FFFD}'
 }
 
 /// A name: [`is_name`] characters, but not starting with `*`, which starts an
@@ -249,23 +212,30 @@ fn name_span(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
     take_while1(is_name).parse_complete(i)
 }
 fn is_formula(c: char) -> bool {
-    c.is_alphanumeric() || "/_.+-*^:".contains(c)
+    c.is_alphanumeric() || "/_.+-*^:".contains(c) || c == '\u{FFFD}'
+}
+
+/// A file path in `'…'` or `"…"`: the text between the quotes.
+#[inline]
+fn quoted_path(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
+    alt((|i| quoted(i, '\''), dquote)).parse_complete(i)
 }
 
 #[inline]
 pub(super) fn path(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
-    alt((
-        unquote,
-        map(dquote, |s: LocatedSpan| s.into()),
-        map(take_while1(is_path), |s: LocatedSpan| s.into()),
-    ))
+    map(
+        alt((quoted_path, take_while1(is_path))),
+        |s: LocatedSpan| s.into(),
+    )
     .parse_complete(i)
 }
 
 /// The text between the quote `q` at the start of `i` and the matching quote.
-/// The text may go on over `+` continuation lines, but not past the end of
-/// the statement: a quote that is not closed is an error, instead of taking
-/// in the lines up to the next quote in the file.
+/// The text may go on over `+` continuation lines (with blank lines and comment
+/// lines before them, which the reader of the text reports; a quote in such a
+/// comment line is the matching quote, golden `elem_unquoted_cmtline`), but
+/// not past the end of the statement: a quote that is not closed is an error,
+/// instead of taking in the lines up to the next quote in the file.
 fn quoted(i: LocatedSpan, q: char) -> IResult<LocatedSpan, LocatedSpan> {
     let (j, _) = char(q).parse_complete(i)?;
     let s: &str = j.fragment();
@@ -275,8 +245,7 @@ fn quoted(i: LocatedSpan, q: char) -> IResult<LocatedSpan, LocatedSpan> {
         if s[pos..].starts_with(q) {
             return Ok((j.take_from(pos + q.len_utf8()), j.take(pos)));
         }
-        let next_line = s[pos + 1..].trim_start_matches([' ', '\t', '\r']);
-        if !next_line.starts_with('+') {
+        if plus_line_after(&s[pos..]).is_none() {
             break;
         }
         from = pos + 1;
@@ -297,17 +266,13 @@ pub(super) fn integer(i: LocatedSpan) -> IResult<LocatedSpan, usize> {
 
 #[inline]
 pub(super) fn path_str(i: LocatedSpan) -> IResult<LocatedSpan, &str> {
-    alt((
-        unquote_str,
-        map(dquote, |s: LocatedSpan| {
+    map(
+        alt((quoted_path, take_while1(is_path))),
+        |s: LocatedSpan| {
             let _s: &str = s.fragment();
             _s
-        }),
-        map(take_while1(is_path), |s: LocatedSpan| {
-            let _s: &str = s.fragment();
-            _s
-        }),
-    ))
+        },
+    )
     .parse_complete(i)
 }
 
@@ -393,11 +358,52 @@ pub(super) fn trailing_delims(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
     }
 }
 
-/// An unquoted expression: formula characters, plus balanced `( ... )`
-/// groups such as `agauss(0,1,3)` or `2*(a+b)`. It does not start with `*`,
-/// which starts an inline comment.
+/// An expression without quotes: formula characters, and groups in
+/// parentheses after them, such as `agauss(1k,0.1k,3)` (HSPICE accepts it,
+/// golden `stat_nominal`) or `2*(a+b)`. A group has no spaces, quotes or `$`
+/// in it, except at the end of a line where it goes on on a `+` line (see
+/// [`paren_group_len`]). The expression ends before a `(` whose group does
+/// not close in its statement. A group can start the value: HSPICE reads
+/// `r1 1 0 (3k)` and `v1 1 0 (1)` (probes on P-2019.06).
 #[inline]
 pub(super) fn formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
+    let s = i.fragment();
+    // a `*` starts an inline comment
+    if s.starts_with('*') {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            i,
+            ErrorKind::TakeWhile1,
+        )));
+    }
+    let mut end = 0;
+    loop {
+        end = s[end..]
+            .find(|c: char| !is_formula(c))
+            .map_or(s.len(), |n| end + n);
+        match paren_group_len(&s[end..]) {
+            Some(n) => end += n,
+            None => break,
+        }
+    }
+    if end == 0 {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            i,
+            ErrorKind::TakeWhile1,
+        )));
+    }
+    let (rest, taken) = i.take_split(end);
+    Ok((rest, taken.into()))
+}
+
+/// An expression without quotes after the `=` of `key=value`: formula
+/// characters and `( ... )` groups that close on the line. Unlike in
+/// [`formula`], a group here can hold spaces and can start the value:
+/// HSPICE reads `.param p=max(1k, 3k)`, `w=(3k)` and `(1+2)*1k`, on `.param`,
+/// `.subckt`, `.model`, `X` and `M` lines (probes on P-2019.06). A quote in a
+/// group is rejected there: "the argument "3*1k" of function "max(1k," cannot
+/// use quotation marks", except in the calls of [`QUOTED_ARG_FUNCTIONS`]. No
+/// `(` of a source function comes here, because it has no `=` before it.
+pub(super) fn assigned_formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     let s: &str = i.fragment();
     if s.starts_with('*') {
         return Err(nom::Err::Error(nom::error::Error::new(
@@ -428,18 +434,16 @@ pub(super) fn formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     }
 }
 
-/// Length of the `( ... )` group at the start of `s` (which starts with `(`),
-/// skipping quoted text; `None` if it is not closed on the same line.
+/// Length of the `( ... )` group at the start of `s` (which starts with `(`);
+/// `None` if it holds a quote, or if it is not closed on the same line.
 fn balanced_group(s: &str) -> Option<usize> {
     debug_assert!(s.starts_with('('));
     let mut depth = 0_usize;
-    let mut quoted = false;
     for (idx, c) in s.char_indices() {
         match c {
-            '\n' => return None,
-            '\'' => quoted = !quoted,
-            '(' if !quoted => depth += 1,
-            ')' if !quoted => {
+            '\n' | '\'' | '"' => return None,
+            '(' => depth += 1,
+            ')' => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(idx + 1);
@@ -451,49 +455,155 @@ fn balanced_group(s: &str) -> Option<usize> {
     None
 }
 
+/// The length of the group in parentheses at the start of `s`, nested
+/// groups included, or `None` when `s` does not start with a group that
+/// closes before a space, a quote, a `$` or the end of its statement. At
+/// the end of a line (after spaces and a `$` comment), the group goes on on
+/// the next `+` line, after blank lines and comment lines (see
+/// [`plus_line_after`]): HSPICE reads `.param p=max(1k,` / `+ 3k)` as 3k,
+/// also with a blank line between (golden `paren_plus_call`,
+/// `paren_blank_call`). It rejects a `*` comment line there (golden
+/// `paren_cmtline_call`), which the text keeps for the reader of the
+/// statement to report.
+fn paren_group_len(s: &str) -> Option<usize> {
+    if !s.starts_with('(') {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut depth = 0_usize;
+    let mut k = 0;
+    while k < b.len() {
+        match b[k] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(k + 1);
+                }
+            }
+            b'\'' | b'"' => return None,
+            b' ' | b'\t' | b'\r' | b'\n' | b'$' => {
+                // only spaces and a `$` comment up to the end of the line
+                while matches!(b.get(k), Some(b' ' | b'\t' | b'\r')) {
+                    k += 1;
+                }
+                if b.get(k) == Some(&b'$') {
+                    k += s[k..].find('\n')?;
+                }
+                if b.get(k) != Some(&b'\n') {
+                    return None;
+                }
+                k += plus_line_after(&s[k..])?;
+                continue;
+            }
+            c if c.is_ascii_whitespace() => return None,
+            c if c >= 0x80 && s.is_char_boundary(k) && s[k..].starts_with(char::is_whitespace) => {
+                return None;
+            }
+            _ => {}
+        }
+        k += 1;
+    }
+    None
+}
+
+/// The length of the text at the start of `s`, which starts at a line end,
+/// up to the text of the next `+` line of the statement, after its `+` and
+/// its spaces. Blank lines and `*` and `$` comment lines before it are
+/// passed over, as [`comment_space_newline`] does. `None` when the
+/// statement ends first: the next line that is not blank and not a comment
+/// line is not a `+` line, or the input ends.
+pub(super) fn plus_line_after(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    let mut k = 0;
+    while b.get(k) == Some(&b'\n') {
+        k += 1;
+        while matches!(b.get(k), Some(b' ' | b'\t' | b'\r')) {
+            k += 1;
+        }
+        match b.get(k) {
+            Some(b'+') => {
+                k += 1;
+                while matches!(b.get(k), Some(b' ' | b'\t' | b'\r')) {
+                    k += 1;
+                }
+                return Some(k);
+            }
+            Some(b'*' | b'$') => k += s[k..].find('\n')?,
+            Some(b'\n') => {}
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// An expression in `'…'`: the text between the quotes. It fails when the
+/// text has a `{` or a `}`: HSPICE reads them as `[` and `]` also inside
+/// quotes (`'{a}'` is the name `[a]`) and rejects the deck (golden
+/// `brace_quoted_param`, `brace_quoted_elem`, `brace_quoted_fn`), as it
+/// rejects `{...}` without quotes (golden `param_braces`). So the
+/// statement fails, and it gives no value.
 #[inline]
 pub(super) fn unquote(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
-    map(|i| quoted(i, '\''), |s: LocatedSpan| s.into()).parse_complete(i)
+    let (rest, text) = quoted(i, '\'')?;
+    if text.fragment().contains(['{', '}']) {
+        return Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Char)));
+    }
+    Ok((rest, text.into()))
 }
 
-#[inline]
-pub(super) fn unquote_str(i: LocatedSpan) -> IResult<LocatedSpan, &str> {
-    map(
-        |i| quoted(i, '\''),
-        |s: LocatedSpan| {
-            let _s: &str = s.fragment();
-            _s
-        },
-    )
-    .parse_complete(i)
-}
-
-#[inline]
-pub(super) fn comment(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
-    recognize((alt((tag("*"), tag("$"))), take_till(|c| c == '\n'))).parse_complete(i)
-}
-
+/// Spaces (` `, tab, CR), comments (from `*` or `$` to the end of the line)
+/// and line ends, any number of them. After a line end, `+` lines with
+/// only spaces and a comment (`+ $Y=0.2`, as extraction tools write), each
+/// ended by a line end or by the end of the input, are passed over too,
+/// any number of them. Never fails; returns the rest and the text passed
+/// over.
+///
+/// A scan of the bytes: it is on the path of every statement end. It
+/// reads as the parser `many0((space, opt(comment), opt(('\n',
+/// many0((space, '+', space, opt(comment), '\n' | eof))))))`, where
+/// `comment` is `('*' | '$')` and the rest of the line.
 #[inline]
 pub(super) fn comment_space_newline(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
-    recognize(many0(verify(
-        recognize((
-            space,
-            opt(comment),
-            opt((
-                char('\n'),
-                // an empty continuation line (also the last line of the input)
-                opt((
-                    space,
-                    char('+'),
-                    space,
-                    opt(comment),
-                    alt((map(char('\n'), |_| ()), map(eof, |_| ()))),
-                )),
-            )),
-        )),
-        |s| !s.is_empty(),
-    )))
-    .parse_complete(i)
+    let b = i.fragment().as_bytes();
+    let skip_space = |mut k: usize| {
+        while b.get(k).is_some_and(|c| matches!(c, b' ' | b'\t' | b'\r')) {
+            k += 1;
+        }
+        k
+    };
+    // from a `*` or `$` to the line end (or the end of the input)
+    let skip_comment = |k: usize| match b.get(k) {
+        Some(b'*' | b'$') => b[k..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(b.len(), |n| k + n),
+        _ => k,
+    };
+    let mut k = 0;
+    loop {
+        k = skip_comment(skip_space(k));
+        if b.get(k) != Some(&b'\n') {
+            break;
+        }
+        k += 1;
+        // comment-only `+` lines, each with its line end (or the end of
+        // the input)
+        loop {
+            let j = skip_space(k);
+            if b.get(j) != Some(&b'+') {
+                break;
+            }
+            let j = skip_comment(skip_space(j + 1));
+            match b.get(j) {
+                Some(b'\n') => k = j + 1,
+                None => k = j,
+                Some(_) => break,
+            }
+        }
+    }
+    let (rest, taken) = i.take_split(k);
+    Ok((rest, taken))
 }
 
 #[inline]
@@ -538,17 +648,74 @@ impl<'a, T, P> MyParser<'a, T> for P where
 {
 }
 
-/// `= value`; the value may be on the next (continuation) line: `Lo=\n+ 3.4e-7`
+/// `=` and the value of `f` after it. The value can be on the next `+`
+/// line (see [`eq_sep`]).
 #[inline]
 pub(super) fn equal<'a, T, F: MyParser<'a, T>>(f: F) -> impl MyParser<'a, T> {
-    map((space, char('='), loss_sep, f), |(_, _, _, v)| v)
+    map((space, char('='), eq_sep, f), |(_, _, _, v)| v)
 }
 
-/// The value of a `key=value` parameter. A list of numbers (`TC=0,0`) is
-/// kept as one expression.
+/// The separator after the `=` of `key=value`: spaces, or, when only
+/// spaces and a `$` comment follow on the line, the line end and the `+`
+/// of the next `+` line (after blank lines and comment lines) with the
+/// spaces after it. HSPICE reads `r1 1 0 r=` / `+ 5k` as `r=5k` (golden
+/// `kw_value_next_line`).
+#[inline]
+fn eq_sep(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
+    let (rest, s) = space(i)?;
+    if matches!(rest.fragment().as_bytes().first(), Some(b'\n' | b'$'))
+        && let Ok(r) =
+            map((comment_space_newline, char('+'), space), |(_, _, s)| s).parse_complete(rest)
+    {
+        return Ok(r);
+    }
+    Ok((rest, s))
+}
+
+/// The functions whose arguments can hold quotes, when the call is the whole
+/// value: HSPICE runs `.param a=agauss(0,0,'2*p')` and `.param a=str('x')`, on
+/// `.param`, `.subckt` and `X` lines. It rejects quotes in any other group, and
+/// `2*agauss(0,0,'2')` and `agauss(0,0,'2')*2` (probes on P-2019.06).
+const QUOTED_ARG_FUNCTIONS: [&str; 6] = ["agauss", "gauss", "aunif", "unif", "limit", "str"];
+
+/// The length of the group in parentheses at the start of `s`, with its spaces,
+/// its `+` lines and the quotes of its arguments (none in a nested group).
+fn group_with_quotes(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    let mut depth = 0_usize;
+    let mut k = 0;
+    while k < b.len() {
+        match b[k] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(k + 1);
+                }
+            }
+            q @ (b'\'' | b'"') => {
+                let close = s[k + 1..].find([q as char, '\n'])?;
+                if depth > 1 || b[k + 1 + close] == b'\n' {
+                    return None;
+                }
+                k += 1 + close;
+            }
+            b'\n' => {
+                k += plus_line_after(&s[k..])?;
+                continue;
+            }
+            _ => {}
+        }
+        k += 1;
+    }
+    None
+}
+
+/// The value of a `key=value` parameter: see [`group_value`]. A list of numbers
+/// (`TC=0,0`) is kept as one expression.
 #[inline]
 fn assigned_value(start: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
-    let (mut i, mut v) = value(start)?;
+    let (mut i, mut v) = group_value(start)?;
     if matches!(v, ValueBuilder::Num(_)) {
         let mut list = false;
         while let Ok((j, _)) = (char(','), float_unit).parse_complete(i) {
@@ -562,9 +729,47 @@ fn assigned_value(start: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
     Ok((i, v))
 }
 
+/// A value after a `=`: see [`value`] and [`assigned_formula`], and a call of
+/// [`QUOTED_ARG_FUNCTIONS`].
+#[inline]
+pub(super) fn group_value(start: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
+    let (mut i, mut v) = match value(start) {
+        Ok(ok) => ok,
+        Err(e) if start.fragment().starts_with('(') => {
+            let Ok((i, f)) = assigned_formula(start) else {
+                return Err(e);
+            };
+            (i, ValueBuilder::Expr(f))
+        }
+        Err(e) => return Err(e),
+    };
+    // (HSPICE stops on `'max'(1u,2u)`)
+    if matches!(v, ValueBuilder::Expr(_))
+        && i.fragment().starts_with('(')
+        && !start.fragment().starts_with(['\'', '"'])
+    {
+        if let Ok((j, f)) = assigned_formula(start) {
+            i = j;
+            v = ValueBuilder::Expr(f);
+        }
+        let word = &start.fragment()[..i.location_offset() - start.location_offset()];
+        if i.fragment().starts_with('(')
+            && QUOTED_ARG_FUNCTIONS
+                .iter()
+                .any(|f| word.eq_ignore_ascii_case(f))
+            && let Some(len) = group_with_quotes(i.fragment())
+            && !i.fragment()[len..].starts_with(|c| is_formula(c) || c == '(')
+        {
+            i = i.take_from(len);
+            v = ValueBuilder::Expr(raw_span(start, i));
+        }
+    }
+    Ok((i, v))
+}
+
 #[inline]
 pub(super) fn key_value(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
-    let (i, (k, _, _, _)) = (name, space, char('='), loss_sep).parse_complete(i)?;
+    let (i, (k, _, _, _)) = (name, space, char('='), eq_sep).parse_complete(i)?;
     let (i, v) = assigned_value(i)?;
     Ok((i, KeyValueBuilder { k, v }))
 }
@@ -580,9 +785,11 @@ fn param_assignment(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
             i = i.take_from(len);
         }
     }
-    let (i, _) = (space, char('='), loss_sep).parse_complete(i)?;
+    let (i, _) = (space, char('='), eq_sep).parse_complete(i)?;
     let (mut rest, mut v) = assigned_value(i)?;
-    if let ValueBuilder::Expr(e) = v {
+    if let ValueBuilder::Expr(e) = v
+        && !i.fragment().starts_with(['\'', '"'])
+    {
         let word = span_text(i, e);
         if word.starts_with(|c: char| c.is_ascii_alphabetic())
             && word.chars().all(|c| c.is_alphanumeric() || c == '_')
@@ -602,6 +809,63 @@ fn param_assignment(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
     Ok((rest, KeyValueBuilder { k, v }))
 }
 
+/// One item of a `.param` statement.
+enum ParamItem {
+    /// A function definition: `f(a,b)='a*b'`.
+    Func(ParamFuncBuilder),
+    /// `name=value`
+    Value(KeyValueBuilder),
+}
+
+/// The body of a function without quotes: [`formula`], which reads a group
+/// that goes on on a `+` line, or else [`assigned_formula`], which reads a group
+/// with spaces.
+fn func_body(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
+    match formula(i) {
+        Ok((rest, body)) if !rest.fragment().starts_with('(') => Ok((rest, body)),
+        _ => assigned_formula(i),
+    }
+}
+
+/// One item of a `.param` statement: `name=value`, or a function
+/// definition `f(a,b)='a*b'`. In a function definition, spaces may stand
+/// around the arguments and around `=`, not between the name and `(`, the
+/// argument list can go on on a `+` line (HSPICE accepts `.param g(x,` /
+/// `+ y)='x+y'`: golden `func_args_plus`), and the body is the text of the
+/// expression, without its quotes.
+#[inline]
+fn param_item(i: LocatedSpan) -> IResult<LocatedSpan, ParamItem> {
+    fn func(i: LocatedSpan) -> IResult<LocatedSpan, ParamFuncBuilder> {
+        let (i, name) = name(i)?;
+        map(
+            (
+                char('('),
+                separated_list0(char(','), delimited(loss_sep, key, loss_sep)),
+                char(')'),
+                equal(alt((unquote, func_body))),
+            ),
+            |(_, args, _, body)| ParamFuncBuilder { name, args, body },
+        )
+        .parse_complete(i)
+    }
+    alt((
+        map(func, ParamItem::Func),
+        map(param_assignment, ParamItem::Value),
+    ))
+    .parse_complete(i)
+}
+
+/// `key_value` that also gives the key's text.
+#[inline]
+pub(super) fn key_value_str<'a>(
+    i: LocatedSpan<'a>,
+) -> IResult<LocatedSpan<'a>, (&'a str, KeyValueBuilder)> {
+    map((name_str, equal(assigned_value)), |((s, k), v)| {
+        (s, KeyValueBuilder { k, v })
+    })
+    .parse_complete(i)
+}
+
 #[inline]
 pub(super) fn token(input: LocatedSpan) -> IResult<LocatedSpan, TokenBuilder> {
     alt((
@@ -613,9 +877,15 @@ pub(super) fn token(input: LocatedSpan) -> IResult<LocatedSpan, TokenBuilder> {
     .parse_complete(input)
 }
 
+/// One `.option` item: `name`, `name=value`, or `name="string"`
+/// (`sim_dspf="<scope> <file>"`). A string is kept as an `Expr` span
+/// without the quotes.
 #[inline]
 pub(super) fn option(i: LocatedSpan) -> IResult<LocatedSpan, (Span, Option<ValueBuilder>)> {
     alt((
+        map((name, equal(dquote)), |(k, s)| {
+            (k, Some(ValueBuilder::Expr(s.into())))
+        }),
         map(key_value, |kv| (kv.k, Some(kv.v))),
         map(name, |k| (k, None)),
     ))
@@ -691,7 +961,7 @@ pub(super) fn ports_params(
         (
             many1(preceded(node_sep, name)),
             opt((
-                equal(value),
+                equal(assigned_value),
                 many0_dummyfirst(preceded(node_sep, key_value)),
             )),
             opt(trailing_delims),
@@ -823,8 +1093,13 @@ pub(super) fn data(i: LocatedSpan) -> IResult<LocatedSpan, DataBuilder> {
         )
         .parse_complete(i)
     }
-    let (i, name) = preceded(sep, key).parse_complete(i)?;
+    // (the name is on the `.data` line)
+    let (i, name) = preceded(|i| data_sep(i, false), key).parse_complete(i)?;
     let (i, (first_str, first)) = preceded(sep, name_str).parse_complete(i)?;
+    if first_str.starts_with('.') {
+        // a command, not a parameter
+        return Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Tag)));
+    }
     if first_str.eq_ignore_ascii_case("MER") || first_str.eq_ignore_ascii_case("LAM") {
         let (i, files) = data_files(i, sep)?;
         let values = if first_str.eq_ignore_ascii_case("MER") {
@@ -840,7 +1115,7 @@ pub(super) fn data(i: LocatedSpan) -> IResult<LocatedSpan, DataBuilder> {
     let mut dataform = false;
     loop {
         let Ok((j, ())) = sep(end) else { break };
-        if enddata(j).is_ok() || float_unit(j).is_ok() {
+        if j.fragment().starts_with('.') || float_unit(j).is_ok() {
             break;
         }
         let Ok((k, (param_str, param))) = name_str(j) else {
@@ -891,11 +1166,12 @@ pub(super) fn data(i: LocatedSpan) -> IResult<LocatedSpan, DataBuilder> {
 /// + [keyword3=val3][LOT distribution value]
 /// + [DEV distribution value]...)
 /// ```
+/// The parameters are optional: `.model rmod r` (golden `res_model`).
 #[inline]
 pub(super) fn model(i: LocatedSpan) -> IResult<LocatedSpan, ModelBuilder> {
     map(
         (
-            // `name`, not `key`: binned models are named like `nch.1`
+            // binned model names have dots: `nch.1`
             multiline_sep(name),
             multiline_sep(key_str),
             // the parameters may be in parentheses and separated by commas
@@ -912,16 +1188,32 @@ pub(super) fn model(i: LocatedSpan) -> IResult<LocatedSpan, ModelBuilder> {
     .parse_complete(i)
 }
 
+/// Skips a `.lib <section>` definition (`i` is after `.lib `): up to and
+/// including the `.endl` keyword of the first later line whose first token
+/// (after spaces) is `.endl`, in any letter case. A `.endl` in a comment
+/// or in a longer word (`.endlx`) does not end the section.
 #[inline]
 fn endlib(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new("(?i)\\.endl").unwrap());
-    match RE.find(i.fragment()) {
-        Some(m) => Ok((i.take_from(m.end()), ())),
-        None => Err(nom::Err::Error(nom::error::Error::new(
-            i,
-            ErrorKind::RegexpCapture,
-        ))),
+    let s = i.fragment();
+    let mut from = 0;
+    while let Some(n) = s[from..].find('\n') {
+        let line = from + n + 1;
+        let text = s[line..].trim_start_matches([' ', '\t']);
+        if let Some(rest) = text.strip_prefix('.')
+            && rest
+                .get(..4)
+                .is_some_and(|k| k.eq_ignore_ascii_case("endl"))
+            && !rest[4..].starts_with(is_key)
+        {
+            let end = s.len() - rest.len() + 4;
+            return Ok((i.take_from(end), ()));
+        }
+        from = line;
     }
+    Err(nom::Err::Error(nom::error::Error::new(
+        i,
+        ErrorKind::RegexpCapture,
+    )))
 }
 pub(super) fn lib(i: LocatedSpan) -> IResult<LocatedSpan, Option<(&str, String)>> {
     alt((
@@ -935,55 +1227,6 @@ pub(super) fn lib(i: LocatedSpan) -> IResult<LocatedSpan, Option<(&str, String)>
     ))
     .parse_complete(i)
 }
-/// A parsed statement. It is added to the [`LocalAST`] only if nothing is
-/// left over on its line(s).
-enum Item {
-    None,
-    Instance(InstanceBuilder),
-    Model(ModelBuilder),
-    Subckt(SubcktBuilder),
-    Data(DataBuilder),
-    Options(Vec<(Span, Option<ValueBuilder>)>),
-    Params(Vec<KeyValueBuilder>),
-    InitCondition(Vec<(Span, ValueBuilder, Option<Span>)>),
-    Nodeset(Vec<(Span, ValueBuilder, Option<Span>)>),
-    Unknown(UnknwonBuilder),
-}
-
-fn push_item(ast: &mut LocalAST, item: Item) {
-    match item {
-        Item::None => {}
-        Item::Instance(t) => ast.instance.push(t),
-        Item::Model(t) => ast.model.push(t),
-        Item::Subckt(t) => ast.subckt.push(t),
-        Item::Data(t) => ast.data.push(t),
-        Item::Options(t) => ast.option.extend(t),
-        Item::Params(t) => ast.param.extend(t),
-        Item::InitCondition(t) => ast.init_condition.extend(t),
-        Item::Nodeset(t) => ast.nodeset.extend(t),
-        Item::Unknown(t) => ast.unknwon.push(t),
-    }
-}
-
-struct Statement<'a> {
-    item: Item,
-    /// stop the current [`LocalAST`] here (`.inc`, `.lib`, `.ends`)
-    end: Option<EndReason<'a>>,
-    /// diagnostics that do not invalidate the statement
-    diags: Vec<ParseError>,
-}
-
-impl Statement<'_> {
-    #[inline]
-    fn item(item: Item) -> Self {
-        Self {
-            item,
-            end: None,
-            diags: Vec::new(),
-        }
-    }
-}
-
 /// HSPICE commands kept verbatim (in [`LocalAST::unknwon`]) without a warning,
 /// including the short forms `.mea`, `.prot` and `.unpr` used in vendor model
 /// kits. Other unknown commands are kept as well, with a warning.
@@ -1086,49 +1329,75 @@ const KNOWN_COMMANDS: &[&str] = &[
     "width",
 ];
 
-/// After a statement, only spaces and a comment may remain on its last line,
-/// and the next line must not continue it (`+`).
-pub(super) fn end_of_statement(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
-    let (i, _) = space(i)?;
-    let (i, _) = opt(comment).parse_complete(i)?;
-    if !(i.is_empty() || i.fragment().starts_with('\n')) {
-        return Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Eof)));
-    }
-    let (next, _) = comment_space_newline(i)?;
-    if next.fragment().starts_with('+') {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            next,
-            ErrorKind::Eof,
-        )));
-    }
-    Ok((i, ()))
+/// The `.subckt` body that a statement is in.
+#[derive(Debug, Clone, Copy)]
+pub struct Body<'a> {
+    /// The start of the `.subckt` statement (the `.` of `.subckt`).
+    pub(super) header: LocatedSpan<'a>,
+    /// The subckt name, as written.
+    pub(super) name: &'a str,
+    /// `subckt` or `macro`: the keyword of the header.
+    pub(super) keyword: &'static str,
+    /// The number of open `.subckt` bodies, this one included
+    /// (1 for a definition at file level).
+    depth: usize,
 }
 
-/// Skip to the end of the line (before the newline)
+/// The deepest `.subckt` nesting that is parsed: a definition at file
+/// level is level 1. A deeper `.subckt` is one `NestingTooDeep` error, and
+/// its definition is skipped. The parser keeps the open bodies in a list,
+/// not on the call stack, but the builders nest one level for each body,
+/// and the code that walks them recurses.
+///
+/// The parser counts the levels in each file. An `.include` inside a body
+/// puts the included file in that body (golden `include_in_subckt`), so a
+/// chain of includes can nest deeper: a walker that follows
+/// `Segment::Include` must count the levels across includes and stop at
+/// this limit, as `Files::build` does.
+pub const MAX_NESTING: usize = 256;
+
+/// A `.subckt` (or `.macro`) header whose body is being parsed.
+pub(super) struct Open<'a> {
+    pub(super) body: Body<'a>,
+    pub(super) name: Span,
+    pub(super) ports: Vec<Span>,
+    pub(super) params: Vec<KeyValueBuilder>,
+}
+
+/// What a statement does to the parse, besides what it adds to the
+/// `LocalAST`.
+pub(super) enum Step<'a> {
+    /// A `.subckt` (or `.macro`) header: the statements after it are its
+    /// body.
+    Open(Open<'a>),
+    /// `.ends` (or `.eom`): the body ends. `end` is the start of the line
+    /// after the `.ends` statement and its `+` lines.
+    Close { end: usize },
+    /// `.include`, `.inc` or `.lib <file> <section>`: the included
+    /// statements come here. The input is at the end of the include line.
+    Include {
+        file_name: &'a Path,
+        section: Option<String>,
+    },
+    /// An `.alter` line (at `pos`): the statements after it belong to an
+    /// `.alter` run. `stmt` keeps the text from this line to the end of the
+    /// file.
+    Alter {
+        pos: Option<Pos>,
+        stmt: UnknwonBuilder,
+    },
+    /// An `.end` line (at `pos`). HSPICE does not read the lines after the
+    /// `.end` of the top file (golden `after_end`).
+    End { pos: Option<Pos> },
+    /// The end of the input.
+    Eof,
+}
+
+/// The end of the line of `i` (before its newline)
 #[inline]
 fn line_end(i: LocatedSpan) -> LocatedSpan {
     let n = i.fragment().find('\n').unwrap_or(i.fragment().len());
     i.take_from(n)
-}
-
-/// Skip to the end of the statement at `i`: the rest of its line, and every
-/// continuation (`+`) line after it.
-pub(super) fn skip_statement(i: LocatedSpan) -> LocatedSpan {
-    let mut i = line_end(i);
-    loop {
-        match comment_space_newline(i) {
-            Ok((next, _)) if next.fragment().starts_with('+') => i = line_end(next),
-            _ => return i,
-        }
-    }
-}
-
-/// [`ParseErrorInner::Trailing`] where [`end_of_statement`] failed
-fn trailing(e: nom::Err<nom::error::Error<LocatedSpan>>) -> ParseError {
-    match e {
-        nom::Err::Error(e) | nom::Err::Failure(e) => ParseErrorInner::Trailing.record(e.input),
-        nom::Err::Incomplete(_) => unreachable!(),
-    }
 }
 
 /// The text of `span`, which was parsed from `base` (or from input after it)
@@ -1150,54 +1419,45 @@ fn raw_span(start: LocatedSpan, end: LocatedSpan) -> Span {
     }
 }
 
-/// ``` spice
-/// .subckt name [ports...] [k=v ...]
-/// ...
-/// .ends [name]
-/// ```
-fn subckt<'a>(
+/// Parses the header of a `.subckt` (or `.macro`) statement after its
+/// keyword. `header` is the start of the statement (the `.` of `.subckt`),
+/// `keyword` is `subckt` or `macro`, and `parent` is the body that the
+/// statement is in. Fails when the header fails, or when the definition is
+/// nested deeper than `MAX_NESTING` levels.
+#[inline]
+pub(super) fn subckt_header<'a>(
     i: LocatedSpan<'a>,
-    loaded: &IndexMap<FileId, Option<Pos>>,
-    manager: &Arc<ParseManager>,
-    work_dir: &Path,
-    depth: usize,
-) -> Result<(LocatedSpan<'a>, Statement<'a>), ParseError> {
-    let mut diags = Vec::new();
-    let (i, (_, name, ports_params)) = (node_sep, name, opt(ports_params)).parse_complete(i)?;
+    header: LocatedSpan<'a>,
+    keyword: &'static str,
+    parent: Option<Body<'a>>,
+) -> Result<(LocatedSpan<'a>, Open<'a>), ParseErrorInner> {
+    let (i, (_, (name_str, name), ports_params)) =
+        (node_sep, name_str, opt(ports_params)).parse_complete(i)?;
     let (ports, params) = ports_params.unwrap_or_default();
-    // left-over text on the header is reported, but the body is still parsed
-    let i = match end_of_statement(i) {
-        Ok((i, ())) => i,
-        Err(e) => {
-            diags.push(trailing(e));
-            skip_statement(i)
-        }
-    };
-    let (i, (ast, closed)) = ast(
-        manager.clone(),
-        loaded.clone(),
-        work_dir.to_path_buf(),
-        i,
-        true,
-        depth + 1,
-    )?;
-    if !closed {
-        diags.push(ParseErrorInner::UnterminatedSubckt(name).with(Some(Pos {
-            start: name.start,
-            line_num: name.line_num,
-        })));
+    // The header must use its whole logical line: text that is left over
+    // would otherwise change the ports or become part of the body.
+    let i = statement_end(i)?;
+    let depth = parent.map_or(1, |p| p.depth + 1);
+    if depth > MAX_NESTING {
+        return Err(ParseErrorInner::NestingTooDeep {
+            keyword,
+            subckt: name_str.to_owned(),
+            limit: MAX_NESTING,
+        });
     }
+    let body = Body {
+        header,
+        name: name_str,
+        keyword,
+        depth,
+    };
     Ok((
         i,
-        Statement {
-            item: Item::Subckt(SubcktBuilder {
-                name,
-                ports,
-                params,
-                ast,
-            }),
-            end: None,
-            diags,
+        Open {
+            body,
+            name,
+            ports,
+            params,
         },
     ))
 }
@@ -1206,8 +1466,8 @@ fn subckt<'a>(
 /// found in model files shared with Spectre. `spice` is ignored with a
 /// warning (the rest of its line too); a section in another language is
 /// reported and skipped up to the next `simulator lang=spice`, or to the end
-/// of the input.
-fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
+/// of the input. Returns the input after it, and the report.
+fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, ParseError)> {
     let (rest, (_, _, _, _, _, _, (lang, _))) = (
         tag_no_case("simulator"),
         space1,
@@ -1221,20 +1481,8 @@ fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
         .ok()?;
     let rest = line_end(rest);
     if lang.eq_ignore_ascii_case("spice") {
-        return Some((
-            rest,
-            Statement {
-                item: Item::None,
-                end: None,
-                diags: vec![
-                    ParseErrorInner::NonHspice(
-                        "`simulator lang=spice` is a Spectre directive, not HSPICE; it is ignored"
-                            .to_owned(),
-                    )
-                    .record(i),
-                ],
-            },
-        ));
+        let msg = "`simulator lang=spice` is a Spectre directive, not HSPICE; it is ignored";
+        return Some((rest, ParseErrorInner::NonHspice(msg.to_owned()).record(i)));
     }
     static BACK_TO_SPICE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?im)^[ \t]*simulator[ \t]+lang[ \t]*=[ \t]*spice\b").unwrap()
@@ -1248,25 +1496,16 @@ fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
         ),
         None => (rest.take_from(text.len()), "to the end of the file"),
     };
-    Some((
-        end,
-        Statement {
-            item: Item::None,
-            end: None,
-            diags: vec![
-                ParseErrorInner::Unsupported(format!(
-                    "`simulator lang={lang}` sections (not HSPICE) are not supported; skipped {until}"
-                ))
-                .record(i),
-            ],
-        },
-    ))
+    let msg =
+        format!("`simulator lang={lang}` sections (not HSPICE) are not supported; skipped {until}");
+    Some((end, ParseErrorInner::Unsupported(msg).record(i)))
 }
 
 /// `.prot freelib` (or `.protect freelib`) starts a block encrypted for HSPICE,
 /// which only HSPICE can read: it is skipped up to `.unprot`, with a warning.
-/// (A plain `.prot` block is not encrypted; it is parsed as usual.)
-fn encrypted_block(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
+/// (A plain `.prot` block is not encrypted; it is parsed as usual.) `i` is
+/// after the keyword. Returns the input after the block, and the report.
+fn encrypted_block(i: LocatedSpan) -> Option<(LocatedSpan, ParseError)> {
     let (rest, (_, (word, _))) = (space1, key_str).parse_complete(i).ok()?;
     if !word.eq_ignore_ascii_case("freelib") {
         return None;
@@ -1277,18 +1516,10 @@ fn encrypted_block(i: LocatedSpan) -> Option<(LocatedSpan, Statement)> {
     let text: &str = rest.fragment();
     // stop at the newline before `.unprot`, which is then parsed as usual
     let end = UNPROT.find(text).map_or(text.len(), |m| m.start() - 1);
+    let lines = text[..end].matches('\n').count();
     Some((
         rest.take_from(end),
-        Statement {
-            item: Item::None,
-            end: None,
-            diags: vec![
-                ParseErrorInner::Encrypted {
-                    lines: text[..end].matches('\n').count(),
-                }
-                .record(i),
-            ],
-        },
+        ParseErrorInner::Encrypted { lines }.record(i),
     ))
 }
 
@@ -1310,238 +1541,848 @@ pub(super) fn title_line(i: LocatedSpan) -> Option<(LocatedSpan, Span, bool)> {
             // (a title of plain words can read as a MOSFET whose L and W are
             // names of parameters: `mux 2 pra 1 com transmission gate`)
             let words = matches!(&inst.ctx, InstanceCtxBuilder::MOSFET(m)
-                if m.positional.iter().any(|v| matches!(v, ValueBuilder::Expr(_))));
+                if !m.extra_nodes.is_empty()
+                    || m.positional.iter().any(|(_, v)| matches!(v, ValueBuilder::Expr(_))));
             !words
-                && end_of_statement(end)
-                    .is_ok_and(|(end, ())| end.location_offset() >= rest.location_offset())
+                && statement_end(end)
+                    .is_ok_and(|next| next.location_offset() >= rest.location_offset())
         });
     Some((rest, raw_span(i, rest), element))
 }
 
-/// `.subckt` definitions nested deeper than this are not nested: the
-/// enclosing definition is closed there, with an error. (A cell library whose
-/// `.ends` lines are missing would otherwise nest each cell in the previous
-/// one, until the parser ran out of stack.)
-pub const MAX_SUBCKT_DEPTH: usize = 32;
-
-/// Whether the statement at `i` is `.subckt` or `.macro`
-fn starts_subckt(i: LocatedSpan) -> bool {
-    (char('.'), key_str, space1)
-        .parse_complete(i)
-        .is_ok_and(|(_, (_, (cmd, _), _))| {
-            cmd.eq_ignore_ascii_case("subckt") || cmd.eq_ignore_ascii_case("macro")
-        })
-}
-
-/// Parse one statement; the caller checks that nothing is left over.
-fn statement<'a>(
+/// Keeps the statement at `i` (after its keyword `cmd`) verbatim, with the
+/// tokens that can be read from it. A command that is not in
+/// [`KNOWN_COMMANDS`] also gives a warning. Returns the next statement.
+fn keep_verbatim<'a>(
     i: LocatedSpan<'a>,
-    loaded: &IndexMap<FileId, Option<Pos>>,
-    manager: &Arc<ParseManager>,
-    work_dir: &Path,
-    in_subckt: bool,
-    depth: usize,
-) -> Result<(LocatedSpan<'a>, Statement<'a>), ParseError> {
-    if i.fragment().starts_with('+') {
-        return Err(ParseErrorInner::OrphanContinuation.record(i));
+    cmd: Span,
+    known: bool,
+    ast: &mut LocalAST,
+) -> LocatedSpan<'a> {
+    let end = skip_statement(i);
+    let raw = raw_span(i, end);
+    let tokens = many0(multiline_sep(token))
+        .parse_complete(i)
+        .map(|(_, tokens)| tokens)
+        .unwrap_or_default();
+    if !known {
+        ast.errors.push(ParseErrorInner::Unknown(cmd).record(i));
     }
-    let Ok((i, _)) = char::<_, nom::error::Error<_>>('.').parse_complete(i) else {
-        if let Some(stmt) = simulator_lang(i) {
-            return Ok(stmt);
-        }
-        if let Some((keyword, pos)) = unsupported_controlled_form(i) {
-            return Err(ParseErrorInner::Unsupported(format!(
-                "Controlled source form `{keyword}` is not supported yet; the statement is skipped"
-            ))
-            .record(pos));
-        }
-        let (i, inst) = instance(i)?;
-        return Ok((i, Statement::item(Item::Instance(inst))));
-    };
-    let (i, (cmd_str, cmd)) = key_str(i)?;
-    let cmd_lower = cmd_str.to_ascii_lowercase();
-    if matches!(cmd_lower.as_str(), "prot" | "protect") {
-        if let Some(stmt) = encrypted_block(i) {
-            return Ok(stmt);
-        }
-    }
-    Ok(match cmd_lower.as_str() {
-        "lib" => {
-            let (i, (_, lib_info)) = (space1, lib).parse_complete(i)?;
-            (
-                i,
-                Statement {
-                    item: Item::None,
-                    end: lib_info.map(|(file_name, section)| EndReason::Include {
-                        file_name: Path::new(file_name),
-                        section: Some(section),
-                    }),
-                    diags: Vec::new(),
-                },
-            )
-        }
-        "inc" | "include" => {
-            let (i, (_, file_name)) = (space1, path_str).parse_complete(i)?;
-            (
-                i,
-                Statement {
-                    item: Item::None,
-                    end: Some(EndReason::Include {
-                        file_name: Path::new(file_name),
-                        section: None,
-                    }),
-                    diags: Vec::new(),
-                },
-            )
-        }
-        "model" => {
-            let (i, t) = model(i)?;
-            (i, Statement::item(Item::Model(t)))
-        }
-        "subckt" | "macro" => subckt(i, loaded, manager, work_dir, depth)?,
-        "data" => {
-            let (i, t) = data(i)?;
-            (i, Statement::item(Item::Data(t)))
-        }
-        "option" | "options" => {
-            let (i, t) = many0(multiline_sep(option)).parse_complete(i)?;
-            (i, Statement::item(Item::Options(t)))
-        }
-        "param" | "parameter" | "parameters" => {
-            let (i, t) = many0(multiline_sep(param_assignment)).parse_complete(i)?;
-            (i, Statement::item(Item::Params(t)))
-        }
-        "ic" => {
-            let (i, t) = init_condition(i)?;
-            (i, Statement::item(Item::InitCondition(t.collect())))
-        }
-        "nodeset" => {
-            let (i, t) = nodeset(i)?;
-            (i, Statement::item(Item::Nodeset(t.collect())))
-        }
-        "ends" | "eom" => {
-            // the rest of the line (subckt name, comment) is ignored
-            let rest = line_end(i);
-            if in_subckt {
-                (
-                    rest,
-                    Statement {
-                        item: Item::None,
-                        end: Some(EndReason::Ends),
-                        diags: Vec::new(),
-                    },
-                )
-            } else {
-                // used to end the file here, silently dropping the rest of it
-                (
-                    rest,
-                    Statement {
-                        item: Item::None,
-                        end: None,
-                        diags: vec![ParseErrorInner::StrayEnds.record(i)],
-                    },
-                )
-            }
-        }
-        // the rest of the line is a comment
-        "end" => (line_end(i), Statement::item(Item::None)),
-        // HSPICE: the netlist ends at the first `.alter`; what follows it
-        // describes other runs of the same circuit (other corners or
-        // parameters). It is kept verbatim, not parsed into this netlist.
-        "alter" if !in_subckt => {
-            let end = i.take_from(i.fragment().len());
-            let raw = raw_span(i, end);
-            (
-                end,
-                Statement {
-                    item: Item::Unknown(UnknwonBuilder {
-                        cmd,
-                        tokens: Vec::new(),
-                        raw,
-                    }),
-                    end: Some(EndReason::End),
-                    diags: Vec::new(),
-                },
-            )
-        }
-        _ => {
-            // keep the statement verbatim; tokens are best-effort
-            let end = skip_statement(i);
-            let raw = raw_span(i, end);
-            let tokens = many0(multiline_sep(token))
-                .parse_complete(i)
-                .map(|(_, tokens)| tokens)
-                .unwrap_or_default();
-            let diags = if KNOWN_COMMANDS.contains(&cmd_lower.as_str()) {
-                Vec::new()
-            } else {
-                vec![ParseErrorInner::Unknown(cmd).record(i)]
-            };
-            (
-                end,
-                Statement {
-                    item: Item::Unknown(UnknwonBuilder { cmd, tokens, raw }),
-                    end: None,
-                    diags,
-                },
-            )
-        }
-    })
+    ast.unknwon.push(UnknwonBuilder { cmd, tokens, raw });
+    skip_blank(end)
 }
 
+/// Parses statements into `ast` up to a statement that opens or closes a
+/// body, includes a file, or is `.alter`, or up to the end of input. It
+/// returns that step and the input after its statement.
+///
+/// `body` is the `.subckt` body that `ast` is in, or `None` at file level.
+/// Only a body ends at `.ends`: at file level a `.ends` is an error.
+///
+/// It never fails: a statement that does not parse, or that parses only a
+/// part of its logical line, becomes one error in `LocalAST::errors` (at the
+/// start of that statement) and parsing resumes at the next logical line.
+/// A failed block statement (`.subckt`, `.data`, `.lib <section>`) is
+/// skipped up to and including its closing command, when it has one before
+/// the `.end` of a top file (see `Blocks::skip`); else only its first
+/// logical line is skipped, and its body is read here. A `.subckt` nested
+/// too deep is skipped up to its `.ends`, or, when it has none, to the
+/// `.end` of a top file or the end of input (see `Blocks::skip_nested`).
+/// `blocks` holds the blocks of the file that `i` is in.
 #[inline]
 pub(super) fn local_ast<'a>(
     mut i: LocatedSpan<'a>,
-    loaded: &IndexMap<FileId, Option<Pos>>,
-    manager: &Arc<ParseManager>,
-    work_dir: &Path,
-    in_subckt: bool,
-    depth: usize,
-) -> IResult<LocatedSpan<'a>, (LocalAST, EndReason<'a>)> {
-    let mut ast = LocalAST::default();
+    body: Option<Body<'a>>,
+    blocks: &Blocks<'a>,
+    ast: &mut LocalAST,
+) -> (LocatedSpan<'a>, Step<'a>) {
+    i = skip_blank(i);
     loop {
-        let before = i;
-        (i, _) = comment_space_newline(i)?;
         if i.is_empty() {
-            return Ok((i, (ast, EndReason::End)));
+            return (i, Step::Eof);
         }
-        if depth >= MAX_SUBCKT_DEPTH && starts_subckt(i) {
-            // close the enclosing `.subckt` here; its parent parses this one
-            ast.errors
-                .push(ParseErrorInner::TooDeep(MAX_SUBCKT_DEPTH).record(i));
-            return Ok((before, (ast, EndReason::Ends)));
-        }
-        let start = i;
-        match statement(i, loaded, manager, work_dir, in_subckt, depth) {
-            Ok((rest, stmt)) => {
-                ast.errors.extend(stmt.diags);
-                match end_of_statement(rest) {
-                    Ok((rest, ())) => {
-                        i = rest;
-                        push_item(&mut ast, stmt.item);
-                    }
-                    Err(e) => {
-                        // Report the left-over text and skip the statement, instead
-                        // of parsing the left-over as a new statement.
-                        ast.errors.push(trailing(e));
-                        i = skip_statement(rest);
-                    }
-                }
-                if let Some(end) = stmt.end {
-                    return Ok((i, (ast, end)));
-                }
+        match statement(i, body, blocks.skip_prot, ast) {
+            Ok((_i, None)) => {
+                // `statement_end` already skipped the blank region after it
+                debug_assert_eq!(skip_blank(_i).location_offset(), _i.location_offset());
+                check_quoted_lines(i, _i, ast);
+                i = _i;
             }
-            Err(mut e) => {
-                // Skip this statement (with its continuation lines) and go on:
-                // one bad statement used to drop the whole file.
-                i = skip_statement(start);
-                // a parser can fail after looking past the end of the statement
-                if e.pos.is_none_or(|pos| pos.start > i.location_offset()) {
-                    e.pos = Pos::new(start);
-                }
+            Ok((_i, Some(step))) => {
+                check_quoted_lines(i, _i, ast);
+                return (_i, step);
+            }
+            Err(e) => {
+                let too_deep = matches!(e, ParseErrorInner::NestingTooDeep { .. });
+                ast.errors.push(e.record(i));
+                i = skip_blank(match Block::at(i) {
+                    Some(Block::Subckt) if too_deep => blocks.skip_nested(i),
+                    Some(block) => blocks.skip(i, block, body),
+                    None => skip_statement(i),
+                });
+            }
+        }
+    }
+}
+
+/// Records an error for the statement at `start`, which the parser read up to
+/// `next`, if it has a line inside quotes that is not a `+` line. The statement
+/// stays in `ast`: the query layer gives its own error for it (`quote_check`).
+fn check_quoted_lines(start: LocatedSpan<'_>, next: LocatedSpan<'_>, ast: &mut LocalAST) {
+    // (most statements are one line, so this costs them nothing)
+    if next.location_line() <= start.location_line() + 1 {
+        return;
+    }
+    let len = skip_statement(start).location_offset() - start.location_offset();
+    if line_in_quotes(&start.fragment()[..len]) {
+        ast.errors.push(ParseErrorInner::LineInQuotes.record(start));
+    }
+}
+
+/// True when the text `s` of a statement has a line inside quotes that is not
+/// a `+` line. Outside quotes, comment lines and blank lines are passed over
+/// (golden `plus_after_cmtline`, `plus_after_blank`).
+fn line_in_quotes(s: &str) -> bool {
+    let mut quote = None;
+    for (k, line) in s.lines().enumerate() {
+        let line = line.trim_start();
+        if k > 0 && !line.starts_with('+') {
+            if quote.is_some() {
+                return true;
+            }
+            continue;
+        }
+        for c in line.bytes() {
+            match c {
+                b'\'' | b'"' if quote.is_none() => quote = Some(c),
+                b'$' if quote.is_none() => break,
+                c if quote == Some(c) => quote = None,
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// Parses one statement into `ast`.
+/// Returns `Some(step)` when the statement ends this `LocalAST`.
+/// `body` is the `.subckt` body that `ast` is part of.
+/// `skip_prot` is `ParseOptions::skip_prot`.
+///
+/// A statement must use its whole logical line (continuation lines
+/// included), apart from spaces and comments. A statement that stops before
+/// that fails, so a partial record never goes into `ast`.
+/// On error, `ast` is unchanged.
+///
+/// On success the input is at the start of the next statement, after the
+/// spaces, comments and empty lines (an include statement leaves the input
+/// at the end of its line, which is the position of the include).
+#[inline]
+fn statement<'a>(
+    mut i: LocatedSpan<'a>,
+    body: Option<Body<'a>>,
+    skip_prot: bool,
+    ast: &mut LocalAST,
+) -> Result<(LocatedSpan<'a>, Option<Step<'a>>), ParseErrorInner> {
+    let start = i;
+    if i.fragment().starts_with('+') {
+        // a continuation line without a statement before it
+        return Err(ParseErrorInner::OrphanContinuation);
+    }
+    match char('.').parse_complete(i) {
+        Err(nom::Err::Error(_)) => {
+            if let Some((rest, e)) = simulator_lang(i) {
                 ast.errors.push(e);
+                return Ok((skip_blank(rest), None));
+            }
+            if let Some((keyword, pos)) = unsupported_controlled_form(i) {
+                ast.errors.push(
+                    ParseErrorInner::Unsupported(format!(
+                        "Controlled source form `{keyword}` is not supported yet; the statement \
+                         is skipped"
+                    ))
+                    .record(pos),
+                );
+                return Ok((skip_blank(skip_statement(i)), None));
+            }
+            let inst;
+            (i, inst) = instance(i)?;
+            i = statement_end(i)?;
+            ast.instance.push(inst);
+        }
+        Err(e) => return Err(e.into()),
+        Ok((_i, _)) => {
+            i = _i;
+            let cmd;
+            let cmd_str;
+            (i, (cmd_str, cmd)) = key_str(i)?;
+            let cmd_lower = cmd_str.to_lowercase();
+            match cmd_lower.as_str() {
+                "lib" => {
+                    let lib_info;
+                    (i, (_, lib_info)) = (space1, lib).parse_complete(i)?;
+                    let next = statement_end(i)?;
+                    if let Some((file_name_str, section_str)) = lib_info {
+                        return Ok((
+                            i,
+                            Some(Step::Include {
+                                file_name: Path::new(file_name_str),
+                                section: Some(section_str),
+                            }),
+                        ));
+                    }
+                    i = next;
+                }
+                "inc" | "include" => {
+                    let file_name;
+                    (i, (_, file_name)) = (space1, path_str).parse_complete(i)?;
+                    statement_end(i)?;
+                    return Ok((
+                        i,
+                        Some(Step::Include {
+                            file_name: Path::new(file_name),
+                            section: None,
+                        }),
+                    ));
+                }
+                "model" => {
+                    let _model;
+                    (i, _model) = model(i)?;
+                    i = statement_end(i)?;
+                    let name = span_text(start, _model.name);
+                    if name.starts_with(|c: char| c.is_ascii_digit()) {
+                        // golden `mos_digit_model`
+                        return Err(ParseErrorInner::DigitFirstModel {
+                            element: "a `.model`",
+                            name: name.to_owned(),
+                            or_number: false,
+                            after_value: false,
+                        });
+                    }
+                    ast.model.push(_model);
+                }
+                // `.macro`/`.eom` are `.subckt`/`.ends` (golden `macro_eom`)
+                kw @ ("subckt" | "macro") => {
+                    let keyword = if kw == "macro" { "macro" } else { "subckt" };
+                    // `subckt_header` checks the end of the header line, and
+                    // the `.ends` arm below checks the end of the `.ends`
+                    // line.
+                    let (i, open) = subckt_header(i, start, keyword, body)?;
+                    return Ok((i, Some(Step::Open(open))));
+                }
+                "data" => {
+                    let _data;
+                    (i, _data) = data(i)?;
+                    i = statement_end(i)?;
+                    ast.data.push(_data);
+                }
+                "option" | "options" => {
+                    let options;
+                    (i, options) = many0(multiline_sep(option)).parse_complete(i)?;
+                    i = statement_end(i)?;
+                    ast.option.extend(options);
+                }
+                "param" | "parameter" | "parameters" => {
+                    let items;
+                    (i, items) = many0(multiline_sep(param_item)).parse_complete(i)?;
+                    i = statement_end(i)?;
+                    for item in items {
+                        match item {
+                            ParamItem::Func(f) => ast.param_func.push(f),
+                            ParamItem::Value(kv) => ast.param.push(kv),
+                        }
+                    }
+                }
+                "global" => {
+                    let names;
+                    // (HSPICE also takes commas: `.global vdd,vss`, probes)
+                    (i, names) = many1(preceded(node_sep, name)).parse_complete(i)?;
+                    i = statement_end(i)?;
+                    ast.global.extend(names);
+                }
+                "prot" | "protect" if !skip_prot => {
+                    i = match encrypted_block(i) {
+                        Some((rest, e)) => {
+                            ast.errors.push(e);
+                            skip_blank(rest)
+                        }
+                        None => keep_verbatim(i, cmd, true, ast),
+                    };
+                }
+                "prot" | "protect" => {
+                    // The region ends at the `.unprot` line. Its text,
+                    // including the rest of the `.prot` line, is not parsed.
+                    let first = start.location_line();
+                    match unprot(i) {
+                        Some((next, last)) => {
+                            ast.protected.push((first, last));
+                            i = next;
+                        }
+                        None => {
+                            // The region takes the rest of the input.
+                            let end = i.take_from(i.len());
+                            let mut last = end.location_line();
+                            if i.fragment().ends_with('\n') && last > first {
+                                last -= 1;
+                            }
+                            ast.protected.push((first, last));
+                            ast.errors
+                                .push(ParseErrorInner::MissingUnprot.record(start));
+                            i = end;
+                        }
+                    }
+                }
+                "alter" => {
+                    if body.is_some() {
+                        return Err(ParseErrorInner::AlterInSubckt);
+                    }
+                    // The rest of the line is the title of the run.
+                    let next = skip_blank(skip_statement(i));
+                    let stmt = UnknwonBuilder {
+                        cmd,
+                        tokens: Vec::new(),
+                        raw: raw_span(i, i.take_from(i.len())),
+                    };
+                    return Ok((
+                        next,
+                        Some(Step::Alter {
+                            pos: Pos::new(start),
+                            stmt,
+                        }),
+                    ));
+                }
+                // Analysis and output commands: kept as raw tokens, not
+                // reported as errors. When their text does not read as
+                // tokens (`.meas … when v(a)=0.5`, `.hdl "x.va"`), the
+                // command is kept without tokens.
+                kw @ ("tran" | "op" | "dc" | "ac" | "temp" | "print" | "probe" | "meas"
+                | "measure" | "hdl" | "save" | "tf" | "noise" | "sens" | "four") => {
+                    // A `{` or `}`, also inside quotes, fails the statement:
+                    // HSPICE rejects it (golden `brace_temp`,
+                    // `brace_quoted_temp`, `brace_meas`), and it must not
+                    // lose its value with no error. HSPICE only ignores a
+                    // `.print` or `.probe` output with braces, with a
+                    // warning (golden `brace_print`, `brace_probe`,
+                    // `brace_probe_quoted`): that line is kept, and the
+                    // lowering gives the warning.
+                    if !matches!(kw, "print" | "probe") && has_braces(start) {
+                        return Err(ParseErrorInner::Nom(ErrorKind::Char));
+                    }
+                    let end = skip_statement(i);
+                    // HSPICE rejects a group in a `.temp` line (probes
+                    // `.temp (50)`, `.temp (25+25)`, `.temp 25 (50)`: "syntax
+                    // error at or before "("").
+                    let len = end.location_offset() - i.location_offset();
+                    if kw == "temp" && group_outside_quotes(&i.fragment()[..len]) {
+                        return Err(ParseErrorInner::Nom(ErrorKind::Char));
+                    }
+                    let raw = raw_span(i, end);
+                    let tokens = match many0(multiline_sep(token)).parse_complete(i) {
+                        Ok((rest, tokens)) if statement_end(rest).is_ok() => tokens,
+                        _ => Vec::new(),
+                    };
+                    i = skip_blank(end);
+                    ast.unknwon.push(UnknwonBuilder { cmd, tokens, raw });
+                }
+                "ic" => {
+                    let _init_condition;
+                    (i, _init_condition) = init_condition(i)?;
+                    i = statement_end(i)?;
+                    ast.init_condition.extend(_init_condition);
+                }
+                "nodeset" => {
+                    let _nodeset;
+                    (i, _nodeset) = nodeset(i)?;
+                    i = statement_end(i)?;
+                    ast.nodeset.extend(_nodeset);
+                }
+                kw @ ("ends" | "eom") => {
+                    if body.is_none() {
+                        // A `.ends` with no open `.subckt` (HSPICE rejects
+                        // it) fails, so it does not end the file.
+                        let keyword = if kw == "eom" { "eom" } else { "ends" };
+                        return Err(ParseErrorInner::StrayEnds { keyword });
+                    }
+                    // (the name may be in parentheses, as in `.subckt (via) a b`,
+                    // and a comma is a delimiter there too: `.ends,c1`, probes)
+                    (i, _) = opt((node_sep, name)).parse_complete(i)?;
+                    (i, _) = opt(many1(one_of("),"))).parse_complete(i)?;
+                    // the end of the statement, with its `+` lines
+                    let end = skip_statement(i).location_offset();
+                    i = match statement_end(i) {
+                        Ok(next) => next,
+                        Err(e) => {
+                            // Keep the `.ends` and record the error here: if
+                            // the `.ends` failed, the body would take the
+                            // rest of the parent.
+                            ast.errors.push(e.record(start));
+                            skip_blank(skip_statement(i))
+                        }
+                    };
+                    return Ok((i, Some(Step::Close { end })));
+                }
+                "end" => {
+                    // HSPICE ends the deck at a `.end` line also when other
+                    // text follows the keyword, and it reads none of that
+                    // text (golden `end_quoted_arg`, `end_kv_arg`).
+                    // `BlockLines::scan` stops at every `.end` line too.
+                    let next = skip_blank(skip_statement(i));
+                    return Ok((
+                        next,
+                        Some(Step::End {
+                            pos: Pos::new(start),
+                        }),
+                    ));
+                }
+                // keep the statement verbatim; tokens are best-effort
+                cmd_name => {
+                    i = keep_verbatim(i, cmd, KNOWN_COMMANDS.contains(&cmd_name), ast);
+                }
             }
         }
+    }
+    Ok((i, None))
+}
+
+/// Checks that only spaces and comments follow `i` up to the next logical
+/// line, so the statement that stopped at `i` used all of its text. Returns
+/// the input after those spaces, comments and empty lines: the start of the
+/// next statement. Text on the same line or on a `+` continuation line is
+/// `TrailingText`.
+pub(super) fn statement_end(i: LocatedSpan<'_>) -> Result<LocatedSpan<'_>, ParseErrorInner> {
+    let next = skip_blank(i);
+    let at_end = next.is_empty() || {
+        let skipped = &i.fragment()[..next.location_offset() - i.location_offset()];
+        // `next` must be on a new line, and that line must not continue
+        // this statement.
+        let new_line = skipped.contains('\n') || i.get_column() == 1;
+        new_line && !next.fragment().starts_with('+')
+    };
+    if at_end {
+        Ok(next)
+    } else {
+        Err(ParseErrorInner::TrailingText)
+    }
+}
+
+/// The end of a protected region whose `.prot` line is at `i` (after the
+/// `.prot` keyword): the first later line that starts, after spaces, with
+/// `.unprot` or `.unprotect` (in any letter case). Returns the input after
+/// that logical line, and the number of that line. `None` when no line
+/// ends the region. The lines in the region are not parsed, so their text
+/// can be anything.
+fn unprot(i: LocatedSpan<'_>) -> Option<(LocatedSpan<'_>, u32)> {
+    let s = i.fragment();
+    let mut from = 0;
+    while let Some(n) = s[from..].find('\n') {
+        let line = from + n + 1;
+        let rest = &s[line..];
+        let text = rest.trim_start_matches([' ', '\t']);
+        if let Some(cmd) = text.strip_prefix('.') {
+            let end = cmd.find(|c: char| !is_key(c)).unwrap_or(cmd.len());
+            let cmd = &cmd[..end];
+            if cmd.eq_ignore_ascii_case("unprot") || cmd.eq_ignore_ascii_case("unprotect") {
+                let at = i.take_from(line + rest.len() - text.len());
+                let last = at.location_line();
+                return Some((skip_blank(skip_statement(at)), last));
+            }
+        }
+        from = line;
+    }
+    None
+}
+
+/// True when the statement at `i` has a `{` or a `}` outside its `$`
+/// comments and its `*` comment lines, also inside quotes (as the
+/// lowering's check of a failed statement).
+fn has_braces(i: LocatedSpan<'_>) -> bool {
+    let len = skip_statement(i).location_offset() - i.location_offset();
+    i.fragment()[..len].lines().any(|line| {
+        let code = line.trim_start();
+        !code.starts_with('*') && code[..code.find('$').unwrap_or(code.len())].contains(['{', '}'])
+    })
+}
+
+/// True when the text `s` of a statement has a `(` outside its quotes and its
+/// `$` comment.
+fn group_outside_quotes(s: &str) -> bool {
+    s[..s.find('$').unwrap_or(s.len())]
+        .split(['\'', '"'])
+        .step_by(2)
+        .any(|outside| outside.contains('('))
+}
+
+/// Skips spaces, comments and empty lines (never fails).
+#[inline]
+pub(super) fn skip_blank(i: LocatedSpan<'_>) -> LocatedSpan<'_> {
+    comment_space_newline(i).map_or(i, |(i, _)| i)
+}
+
+/// The dot-command keyword at the start of `i` (`.SUBCKT x` → `SUBCKT`).
+#[inline]
+fn dot_cmd(i: LocatedSpan<'_>) -> Option<&str> {
+    (char('.'), key_str)
+        .parse_complete(i)
+        .ok()
+        .map(|(_, (_, (cmd, _)))| cmd)
+}
+
+/// Skips the rest of the logical line at `i`: the rest of the current line
+/// and every `+` continuation line after it. Empty lines and comment lines
+/// between continuation lines are skipped too, as `multiline_sep` does.
+/// Returns the input at the start of the next line.
+pub(super) fn skip_statement(i: LocatedSpan<'_>) -> LocatedSpan<'_> {
+    let bytes = i.fragment().as_bytes();
+    let next_line = |from: usize| {
+        bytes[from..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map(|p| from + p + 1)
+    };
+    let mut line_end = next_line(0);
+    // `line_end` is the start of the line after the current logical line.
+    while let Some(end) = line_end {
+        let mut j = end;
+        loop {
+            while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r') {
+                j += 1;
+            }
+            match bytes.get(j) {
+                // continuation line: it belongs to this statement
+                Some(b'+') => {
+                    line_end = next_line(j);
+                    break;
+                }
+                // empty or comment line: look further
+                Some(b'\n') => j += 1,
+                Some(b'*' | b'$') => match next_line(j) {
+                    Some(k) => j = k,
+                    None => return i.take_from(end),
+                },
+                _ => return i.take_from(end),
+            }
+        }
+    }
+    i.take_from(bytes.len())
+}
+
+/// A block statement: a first line, a body, and a closing command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Block {
+    /// `.subckt` … `.ends`, or `.macro` … `.eom` (the keywords mix)
+    Subckt,
+    /// `.data` … `.enddata`
+    Data,
+    /// `.lib <section>` … `.endl`
+    Lib,
+}
+
+impl Block {
+    /// The block statement that starts at `i`, if any.
+    fn at(i: LocatedSpan<'_>) -> Option<Self> {
+        let cmd = dot_cmd(i)?;
+        if cmd.eq_ignore_ascii_case("subckt") || cmd.eq_ignore_ascii_case("macro") {
+            Some(Self::Subckt)
+        } else if cmd.eq_ignore_ascii_case("data") {
+            Some(Self::Data)
+        } else if cmd.eq_ignore_ascii_case("lib") && lib_section(i) {
+            Some(Self::Lib)
+        } else {
+            None
+        }
+    }
+
+    /// True when `cmd` (a dot-command keyword) closes the block.
+    fn closes(self, cmd: &str) -> bool {
+        match self {
+            Self::Subckt => cmd.eq_ignore_ascii_case("ends") || cmd.eq_ignore_ascii_case("eom"),
+            Self::Data => cmd.eq_ignore_ascii_case("enddata"),
+            Self::Lib => cmd.eq_ignore_ascii_case("endl"),
+        }
+    }
+}
+
+/// The input after a statement at `i` (with the dot-command keyword `cmd`)
+/// whose text the main parse does not read: a `.prot` region (to its
+/// `.unprot` line, or to the end of input) when `skip_prot`, else a
+/// `.prot freelib` block, or a `.lib <section>` definition that parses (to its
+/// `.endl` line). `None` for other statements. So the pass of
+/// `BlockLines::scan` reads the file as the main parse does: a `.end`,
+/// `.subckt` or `.ends` line in such text is not a statement.
+fn unparsed<'a>(i: LocatedSpan<'a>, cmd: &str, skip_prot: bool) -> Option<LocatedSpan<'a>> {
+    if cmd.eq_ignore_ascii_case("prot") || cmd.eq_ignore_ascii_case("protect") {
+        let (after, _) = (char('.'), key).parse_complete(i).ok()?;
+        if !skip_prot {
+            return encrypted_block(after).map(|(rest, _)| rest);
+        }
+        return Some(unprot(after).map_or_else(|| i.take_from(i.len()), |(next, _)| next));
+    }
+    if cmd.eq_ignore_ascii_case("lib")
+        && let Ok((rest, (_, _, _, None))) = (char('.'), key, space1, lib).parse_complete(i)
+    {
+        return statement_end(rest).ok();
+    }
+    None
+}
+
+/// True when `i` is a `.lib <section>` definition (one word after `.lib`),
+/// not a `.lib <file> <section>` include.
+fn lib_section(i: LocatedSpan<'_>) -> bool {
+    (char('.'), key, space1, path_str)
+        .parse_complete(i)
+        .is_ok_and(|(i, _)| statement_end(i).is_ok())
+}
+
+/// The opening and closing lines of the blocks of one file, for the skip of
+/// failed block statements. The lines of one kind of block are found in one
+/// pass over the file, on the first skip that needs them.
+/// Then each skip is a look-up, so the skips of a file take linear time
+/// together, however many blocks fail.
+///
+/// In a top file, the pass stops at the first `.end` statement: HSPICE
+/// reads no line after it (golden `after_end`, `after_end_second_deck`),
+/// so no skip passes it. In other files, HSPICE ignores `.end` (golden
+/// `end_in_include`), and so does the pass. Like the main parse, the pass
+/// does not read the text of a `.prot` region or of a `.lib <section>`
+/// definition that parses (see `unparsed`): a `.end`, `.subckt` or `.ends`
+/// line there is not a statement.
+pub struct Blocks<'a> {
+    /// The whole file.
+    file: LocatedSpan<'a>,
+    /// The file is a top file: the blocks end at its `.end`.
+    top: bool,
+    /// `ParseOptions::skip_prot`
+    skip_prot: bool,
+    /// One entry for each `Block`, in the order of its variants.
+    lines: [OnceCell<BlockLines<'a>>; 3],
+}
+
+/// The opening and closing lines of one kind of block, in file order.
+struct BlockLines<'a> {
+    lines: Vec<BlockLine<'a>>,
+    /// `min_level[k]` is the lowest `level` in `lines[k..]`.
+    min_level: Vec<isize>,
+    /// The `.end` statement where the pass stopped (top files only).
+    end: Option<LocatedSpan<'a>>,
+}
+
+struct BlockLine<'a> {
+    /// The offset of the line's `.` in the file.
+    start: usize,
+    /// The input after the line's logical line.
+    after: LocatedSpan<'a>,
+    /// The number of blocks open after this line, counted from the start of
+    /// the file (below 0 after more closing lines than opening lines).
+    level: isize,
+    /// For an opening line: its closing line (an index in `lines`), matched
+    /// by nesting.
+    close: Option<usize>,
+    /// The name after `.subckt` or `.ends` (`None` for other blocks).
+    name: Option<&'a str>,
+}
+
+impl<'a> Blocks<'a> {
+    /// The blocks of `file`, which is not a top file.
+    pub fn new(file: LocatedSpan<'a>) -> Self {
+        Self {
+            file,
+            top: false,
+            skip_prot: false,
+            lines: Default::default(),
+        }
+    }
+
+    /// The blocks of the top file `file`, up to its `.end`.
+    pub fn new_top(file: LocatedSpan<'a>) -> Self {
+        Self {
+            top: true,
+            ..Self::new(file)
+        }
+    }
+
+    /// The blocks with `ParseOptions::skip_prot` set to `skip_prot`.
+    pub fn skip_prot(self, skip_prot: bool) -> Self {
+        Self { skip_prot, ..self }
+    }
+
+    /// Skips a block statement whose start at `i` failed: its first logical
+    /// line and its body up to and including the logical line of its
+    /// closing command. So the body does not become part of the parent, and
+    /// its closing command does not end the parent. A block of the same kind
+    /// in the body nests. Without a closing command, only the first logical
+    /// line is skipped.
+    ///
+    /// `body` is the body that `i` is in. For `.subckt`, the closing `.ends`
+    /// must leave one `.ends` for each open body before the end of the file,
+    /// or else it belongs to one of them. A named `.ends` decides by its name
+    /// first: it is the block's when it names the failed `.subckt`, and the
+    /// parent's when it names the parent. For `.data` and `.lib` in a body,
+    /// no `.subckt` or `.ends` line may lie between the first line and the
+    /// closing line, so the skip does not pass the body's `.ends`.
+    ///
+    /// Known limit: the name check looks only at the failed `.subckt` and
+    /// at the body that it is in. A `.ends` that names a body further out
+    /// falls back to the count rule. These rules are for ill-formed decks
+    /// only: a correct `.ends` ends its body by position, not by name, and
+    /// no golden case shows what HSPICE does with a wrong `.ends <name>`.
+    fn skip(&self, i: LocatedSpan<'a>, block: Block, body: Option<Body<'a>>) -> LocatedSpan<'a> {
+        let close = match block {
+            Block::Subckt => self.lines(block).close(i, body),
+            Block::Data | Block::Lib => self.lines(block).close(i, None).filter(|close| {
+                body.is_none()
+                    || !self
+                        .lines(Block::Subckt)
+                        .any_between(i.location_offset(), close.start)
+            }),
+        };
+        close.map_or_else(|| skip_statement(i), |close| close.after)
+    }
+
+    /// Skips a `.subckt` at `i` that is nested too deep: its first logical
+    /// line and its body up to and including its `.ends`, matched by
+    /// nesting. Without a `.ends`, every line after it is in its body (the
+    /// bodies around it have no `.ends` either), so the skip goes to the
+    /// `.end` of a top file, else to the end of input. Unlike `skip`, it
+    /// does not recurse: the lines are found by the one pass of `lines`.
+    ///
+    /// The result is always after `i`, so the parse moves on. The pass
+    /// stops at the first `.end` line, as the main parse does, so that
+    /// `.end` comes after `i`. If it does not (the pass and the main parse
+    /// read the file in other ways), the skip goes to the end of input: a
+    /// jump back would read the same lines again and again.
+    fn skip_nested(&self, i: LocatedSpan<'a>) -> LocatedSpan<'a> {
+        let lines = self.lines(Block::Subckt);
+        let at = i.location_offset();
+        lines
+            .lines
+            .binary_search_by_key(&at, |line| line.start)
+            .ok()
+            .and_then(|e| lines.lines[e].close)
+            .map(|m| lines.lines[m].after)
+            .or(lines.end)
+            .filter(|next| next.location_offset() > at)
+            .unwrap_or_else(|| i.take_from(i.len()))
+    }
+
+    /// The lines of one kind of block, found on the first call.
+    fn lines(&self, block: Block) -> &BlockLines<'a> {
+        self.lines[block as usize]
+            .get_or_init(|| BlockLines::scan(self.file, block, self.top, self.skip_prot))
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The number of `BlockLines::scan` passes on this thread.
+    pub(super) static BLOCK_SCANS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+impl<'a> BlockLines<'a> {
+    /// The lines of `block` in `file`, up to its first `.end` statement
+    /// when `top`.
+    fn scan(file: LocatedSpan<'a>, block: Block, top: bool, skip_prot: bool) -> Self {
+        #[cfg(test)]
+        BLOCK_SCANS.with(|n| n.set(n.get() + 1));
+        let mut lines: Vec<BlockLine<'a>> = Vec::new();
+        // the opening lines that are not closed yet
+        let mut open = Vec::new();
+        let mut level = 0;
+        let mut end = None;
+        let mut j = skip_blank(file);
+        while !j.is_empty() {
+            let cmd = dot_cmd(j);
+            if let Some(next) = cmd.and_then(|c| unparsed(j, c, skip_prot)) {
+                j = skip_blank(next);
+                continue;
+            }
+            // every `.end` line ends a top file, as in the main parse
+            if top && cmd.is_some_and(|c| c.eq_ignore_ascii_case("end")) {
+                end = Some(j);
+                break;
+            }
+            let opens = Block::at(j) == Some(block);
+            let closes = !opens && cmd.is_some_and(|c| block.closes(c));
+            let start = j;
+            j = skip_statement(j);
+            if opens || closes {
+                if opens {
+                    level += 1;
+                    open.push(lines.len());
+                } else {
+                    level -= 1;
+                    if let Some(k) = open.pop() {
+                        lines[k].close = Some(lines.len());
+                    }
+                }
+                let name = if block == Block::Subckt {
+                    (char('.'), key, space1, name_str)
+                        .parse_complete(start)
+                        .ok()
+                        .map(|(_, (_, _, _, (name, _)))| name)
+                } else {
+                    None
+                };
+                lines.push(BlockLine {
+                    start: start.location_offset(),
+                    after: j,
+                    level,
+                    close: None,
+                    name,
+                });
+            }
+            j = skip_blank(j);
+        }
+        let mut min_level = vec![0; lines.len()];
+        let mut low = isize::MAX;
+        for (k, line) in lines.iter().enumerate().rev() {
+            low = low.min(line.level);
+            min_level[k] = low;
+        }
+        Self {
+            lines,
+            min_level,
+            end,
+        }
+    }
+
+    /// True when a line starts after offset `from` and before offset `to`.
+    fn any_between(&self, from: usize, to: usize) -> bool {
+        let k = self.lines.partition_point(|line| line.start <= from);
+        self.lines.get(k).is_some_and(|line| line.start < to)
+    }
+
+    /// The closing line of the block at `i`, or `None` when the block has
+    /// no closing line of its own. `body` is the `.subckt` body that `i` is
+    /// in, for `.subckt` blocks only.
+    fn close(&self, i: LocatedSpan<'a>, body: Option<Body<'a>>) -> Option<&BlockLine<'a>> {
+        let e = self
+            .lines
+            .binary_search_by_key(&i.location_offset(), |line| line.start)
+            .ok()?;
+        let m = self.lines[e].close?;
+        let close = &self.lines[m];
+        let Some(body) = body else {
+            return Some(close);
+        };
+        let names = |name: Option<&str>| {
+            close
+                .name
+                .zip(name)
+                .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+        };
+        if names(self.lines[e].name) {
+            return Some(close);
+        }
+        if names(Some(body.name)) {
+            return None;
+        }
+        // The level after `close` is the level before the failed line. The
+        // open bodies close when the level goes `depth` lower.
+        let target = close.level - body.depth as isize;
+        self.min_level
+            .get(m + 1)
+            .is_some_and(|&low| low <= target)
+            .then_some(close)
     }
 }
 
@@ -1809,3 +2650,576 @@ pub(super) fn local_ast<'a>(
 //         println!("{:?}", lib(span("'some' tt")));
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::{Blocks, float_unit, local_ast, option, value};
+    use crate::{
+        Files, Parsed,
+        ast::{Value, ValueBuilder},
+        builder::Builder as _,
+        parser::{ParseOptions, TitleLine, parse_top_multi_with},
+        span::{FileId, span},
+    };
+    use std::path::PathBuf;
+
+    fn close(a: f64, b: f64) -> bool {
+        a == b || (a - b).abs() <= 1e-12 * a.abs().max(b.abs())
+    }
+
+    #[test]
+    fn skip_nested_moves_forward() {
+        use nom::Input as _;
+        // The skip of a `.subckt` with no `.ends` goes to the `.end` of the
+        // top file, or to the end of input. It never goes back: a `.end`
+        // before the `.subckt` (which the main parse did not stop at) is
+        // passed over, so the parse cannot read the same lines again.
+        let text = "* t\n.end\n.subckt s a\nR1 a b 1\n";
+        let file = span(text, 0);
+        let at = |line: &str| file.take_from(text.find(line).unwrap());
+        let blocks = Blocks::new_top(file);
+        let next = blocks.skip_nested(at(".subckt"));
+        assert_eq!(next.location_offset(), text.len());
+        // The `.end` after it is the stop.
+        let text = "* t\n.subckt s a\nR1 a b 1\n.end\nR2 a b 2\n";
+        let file = span(text, 0);
+        let blocks = Blocks::new_top(file);
+        let next = blocks.skip_nested(file.take_from(text.find(".subckt").unwrap()));
+        assert_eq!(next.location_offset(), text.find(".end").unwrap());
+        // In an included file, `.end` is no stop.
+        let blocks = Blocks::new(file);
+        let next = blocks.skip_nested(file.take_from(text.find(".subckt").unwrap()));
+        assert_eq!(next.location_offset(), text.len());
+    }
+
+    #[test]
+    fn comment_space_newline_matches_combinators() {
+        // The byte scan gives the result of the nom parser it replaces.
+        use super::{comment_space_newline, space};
+        use crate::span::LocatedSpan;
+        use nom::{
+            IResult, Parser as _,
+            branch::alt,
+            bytes::complete::{tag, take_till},
+            character::char,
+            combinator::{eof, opt, recognize, verify},
+            multi::many0,
+        };
+        fn comment(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
+            recognize((alt((tag("*"), tag("$"))), take_till(|c| c == '\n'))).parse_complete(i)
+        }
+        fn reference(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
+            recognize(many0(verify(
+                recognize((
+                    space,
+                    opt(comment),
+                    opt((
+                        char('\n'),
+                        many0((
+                            space,
+                            char('+'),
+                            space,
+                            opt(comment),
+                            alt((recognize(char('\n')), eof)),
+                        )),
+                    )),
+                )),
+                |s| !s.is_empty(),
+            )))
+            .parse_complete(i)
+        }
+        let mut inputs: Vec<String> = [
+            "",
+            " ",
+            "x",
+            " $c",
+            " $c\n",
+            " $c\nR1",
+            "\n+ m=2",
+            " $X=1\n+ $Y=2\n+ $Z=3\nR2 a b 1",
+            " $X=1\n+ $Y=2\n  + * c\r\n+\n+ $d",
+            "\n\n* c\n  \t\r\n$ d\n+ $e\n+ x",
+            " *c\n+",
+            "\r\n+\t$\n+ \n",
+            // a comment-only `+` line at the end of the input
+            " $c\n+ $d",
+            "\n+",
+            " $c\n+ $d\n+ * e",
+            " $c\n+ $d\n+ x",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        // every string of these pieces, up to 5 long
+        let pieces = [" ", "\t", "\r", "\n", "+", "*c", "$d", "x", "m=2"];
+        let mut level = vec![String::new()];
+        for _ in 0..5 {
+            level = level
+                .iter()
+                .flat_map(|s| pieces.iter().map(move |p| format!("{s}{p}")))
+                .collect();
+            inputs.extend(level.iter().cloned());
+        }
+        for text in &inputs {
+            let i = span(text, 0);
+            let (rest, got) = comment_space_newline(i).unwrap();
+            let (want_rest, want) = reference(i).unwrap();
+            assert_eq!(
+                (got.fragment(), rest.location_line()),
+                (want.fragment(), want_rest.location_line()),
+                "{text:?}"
+            );
+            assert_eq!(
+                rest.location_offset(),
+                want_rest.location_offset(),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn units_via_expr() {
+        // `float_unit` and `value` use `netlist_expr::scan_number`.
+        let cases: &[(&str, f64)] = &[
+            ("1m", 1e-3),
+            ("1M", 1e-3),
+            ("10pF", 1e-11),
+            ("1meg", 1e6),
+            ("1x", 1e6),
+            ("1mi", 25.4e-6),
+            ("1e-3k", 1e-3),
+            ("1min", 60.0),
+            ("20db", 10.0),
+            ("1z", 1e-21),
+            ("1V", 1.0),
+        ];
+        for &(s, want) in cases {
+            let (rest, got) = float_unit(span(s, 0)).unwrap_or_else(|e| panic!("{s}: {e}"));
+            assert!(rest.is_empty(), "{s}: left {:?}", rest.fragment());
+            assert!(close(got, want), "{s}: got {got:e}, want {want:e}");
+            match value(span(s, 0)) {
+                Ok((rest, ValueBuilder::Num(got))) if rest.is_empty() => {
+                    assert!(close(got, want), "{s}: value got {got:e}, want {want:e}")
+                }
+                other => panic!("{s}: value gave {other:?}"),
+            }
+        }
+        // Not numbers: names and expressions.
+        assert!(float_unit(span("inf", 0)).is_err());
+        assert!(float_unit(span("nan", 0)).is_err());
+        assert!(matches!(
+            value(span("1n*2", 0)),
+            Ok((_, ValueBuilder::Expr(_)))
+        ));
+    }
+
+    #[test]
+    fn unquoted_call_in_value() {
+        // HSPICE accepts function calls without quotes (golden `stat_nominal`).
+        let text =
+            ".param pa=agauss(1k,0.1k,3) pg=gauss(2k,0.1,3)\n+ px=2*max(a,(b+1))-1 py=3*(1+2)\n";
+        let i = span(text, 0);
+        let blocks = Blocks::new(i);
+        let mut ast = Default::default();
+        local_ast(i, None, &blocks, &mut ast);
+        assert!(ast.errors.is_empty(), "{:?}", ast.errors);
+        let params: Vec<(String, String)> = ast
+            .param
+            .iter()
+            .map(|kv| match kv.build(text).v {
+                Value::Expr(e) => (kv.k.build(text).to_string(), e.to_string()),
+                Value::Num(f) => panic!("{f}"),
+            })
+            .collect();
+        let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(
+            params,
+            [
+                s("pa", "agauss(1k,0.1k,3)"),
+                s("pg", "gauss(2k,0.1,3)"),
+                s("px", "2*max(a,(b+1))-1"),
+                s("py", "3*(1+2)"),
+            ]
+        );
+        // A group with a space, a quote or no `)` on its line is not part
+        // of the value: the value ends before its `(`.
+        for (src, want) in [("sin(0 1)", "sin"), ("f('a')", "f"), ("g(1\n)", "g")] {
+            match value(span(src, 0)) {
+                Ok((_, ValueBuilder::Expr(e))) => assert_eq!(&src[&e], want, "{src:?}"),
+                other => panic!("{src:?}: {other:?}"),
+            }
+        }
+        // A group can start a value (HSPICE reads `r1 1 0 (3k)`).
+        match value(span("(1)", 0)) {
+            Ok((_, ValueBuilder::Expr(e))) => assert_eq!(&"(1)"[&e], "(1)"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn param_function_args_on_plus_lines() {
+        // The argument list of a `.param` function can go on on a `+`
+        // line (golden `func_args_plus`), after a blank line (golden
+        // `paren_blank_args`) and after a `*` comment line or a `$` comment
+        // (golden `func_args_cmtline`); spaces may stand around each
+        // argument, and none are needed (`f(a,b)`).
+        let text = ".param g(x,\n+ y)='x+y'\n.param g2(x,\n\n+ y)='x*y'\n\
+                    .param g3(x,\n* c\n+ y)='x-y'\n.param h(x, $ c\n+ y)='x*y*1k'\n\
+                    .param f( a , b )='a*b' f2(a,b)='a+b'\n";
+        let i = span(text, 0);
+        let blocks = Blocks::new(i);
+        let mut ast = Default::default();
+        local_ast(i, None, &blocks, &mut ast);
+        assert!(ast.errors.is_empty(), "{:?}", ast.errors);
+        let funcs: Vec<(String, Vec<String>, String)> = ast
+            .param_func
+            .iter()
+            .map(|f| {
+                (
+                    text[&f.name].to_string(),
+                    f.args.iter().map(|a| text[a].to_string()).collect(),
+                    text[&f.body].to_string(),
+                )
+            })
+            .collect();
+        let f = |name: &str, args: &[&str], body: &str| {
+            (
+                name.to_string(),
+                args.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                body.to_string(),
+            )
+        };
+        assert_eq!(
+            funcs,
+            [
+                f("g", &["x", "y"], "x+y"),
+                f("g2", &["x", "y"], "x*y"),
+                f("g3", &["x", "y"], "x-y"),
+                f("h", &["x", "y"], "x*y*1k"),
+                f("f", &["a", "b"], "a*b"),
+                f("f2", &["a", "b"], "a+b"),
+            ]
+        );
+        // a line that is not a `+` line ends the statement
+        let text = ".param g(x,\ny)='x+y'\n";
+        let i = span(text, 0);
+        let blocks = Blocks::new(i);
+        let mut ast = Default::default();
+        local_ast(i, None, &blocks, &mut ast);
+        assert!(ast.param_func.is_empty());
+        assert!(!ast.errors.is_empty());
+    }
+
+    #[test]
+    fn values_on_plus_lines() {
+        // A group in parentheses of an unquoted value goes on on a `+`
+        // line, also after a blank line, a `$` comment and a comment line
+        // (golden `paren_plus_call`, `paren_blank_call`; HSPICE rejects
+        // the comment line, `paren_cmtline_call`, which the query crate
+        // reports). The text keeps the line breaks.
+        for (src, want) in [
+            ("max(1k,\n+ 3k) x", "max(1k,\n+ 3k)"),
+            ("max(1k,\n\n+ 3k) x", "max(1k,\n\n+ 3k)"),
+            ("max(1k, $ c\n+ 3k)", "max(1k, $ c\n+ 3k)"),
+            ("max(1k,\n* c\n+ 3k)", "max(1k,\n* c\n+ 3k)"),
+            ("2*(a+\n+ (b\n+ +1))-1", "2*(a+\n+ (b\n+ +1))-1"),
+            // the statement ends first: the value ends before the `(`
+            ("g(1\n)", "g"),
+            ("g(1\nr2 1 0 1k)", "g"),
+            ("g(1, 2)", "g"),
+            ("g(1,\n+ 2 3)", "g"),
+        ] {
+            match value(span(src, 0)) {
+                Ok((_, ValueBuilder::Expr(e))) => assert_eq!(&src[&e], want, "{src:?}"),
+                other => panic!("{src:?}: {other:?}"),
+            }
+        }
+        // The value of `key=` can be on the next `+` line (golden
+        // `kw_value_next_line`), also after a `$` comment, blank lines and
+        // comment lines.
+        let text = ".param a=\n+ 5k b= $ c\n* c\n\n+ 'a*2' c=\n+\n+ 3\n";
+        let i = span(text, 0);
+        let blocks = Blocks::new(i);
+        let mut ast = Default::default();
+        local_ast(i, None, &blocks, &mut ast);
+        assert!(ast.errors.is_empty(), "{:?}", ast.errors);
+        let params: Vec<(String, String)> = ast
+            .param
+            .iter()
+            .map(|kv| {
+                let v = match kv.build(text).v {
+                    Value::Expr(e) => e.to_string(),
+                    Value::Num(f) => f.to_string(),
+                };
+                (kv.k.build(text).to_string(), v)
+            })
+            .collect();
+        let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(params, [s("a", "5000"), s("b", "a*2"), s("c", "3")]);
+        // a `=` with no value on its statement is still an error
+        for text in [
+            ".param a=\n",
+            ".param a=\nr1 1 0 1k\n",
+            ".param a= $ c\n* c\n",
+        ] {
+            let i = span(text, 0);
+            let blocks = Blocks::new(i);
+            let mut ast = Default::default();
+            local_ast(i, None, &blocks, &mut ast);
+            assert!(!ast.errors.is_empty(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn float_unit_fast_path_matches_scan_number() {
+        // Plain numbers take a fast path; the result must be the one of
+        // `scan_number` (value and length), also where a letter follows.
+        for s in [
+            "0",
+            "3",
+            "42",
+            "0.071",
+            ".5",
+            "1.",
+            "1.e5",
+            "8.1e-08",
+            "1.2E+15",
+            "-2",
+            "+.5",
+            "-1.5e-3",
+            "123456789012345678901234567890",
+            "1e999999",
+            "1e-999999",
+            "1.5.3",
+            "2u*w",
+            "1e-3k",
+            "1e",
+            "3e+",
+            "1meg",
+            "10pF",
+            "-20db",
+            "5)",
+            "7,",
+            "1e5 x",
+        ] {
+            // (a number too large for `f64` is kept as an expression)
+            let want = netlist_expr::scan_number(s)
+                .filter(|(f, _)| f.is_finite())
+                .map(|(f, n)| (f.to_bits(), n));
+            let got = float_unit(span(s, 0))
+                .ok()
+                .map(|(rest, f)| (f.to_bits(), s.len() - rest.len()));
+            assert_eq!(got, want, "{s:?}");
+        }
+        for s in ["inf", "-inf", "nan", "infinity", "+nan", "e5", ".", "-", ""] {
+            assert!(float_unit(span(s, 0)).is_err(), "{s:?}");
+        }
+    }
+
+    /// Parses `text` as file-level statements. Returns the built options and
+    /// the number of recorded errors.
+    fn options(text: &str) -> (Vec<(String, Option<String>)>, usize) {
+        let i = span(text, 0);
+        let blocks = Blocks::new(i);
+        let mut ast = Default::default();
+        local_ast(i, None, &blocks, &mut ast);
+        let opts = ast
+            .option
+            .iter()
+            .map(|(k, v)| {
+                let v = v.map(|v| match v.build(text) {
+                    Value::Num(f) => format!("num:{f}"),
+                    Value::Expr(e) => format!("expr:{e}"),
+                });
+                (k.build(text).to_string(), v)
+            })
+            .collect();
+        (opts, ast.errors.len())
+    }
+
+    #[test]
+    fn option_quoted_string() {
+        let text = r#"sim_dspf="inv inv.dspf""#;
+        let (rest, (k, v)) = option(span(text, 0)).unwrap();
+        assert!(rest.is_empty(), "left {:?}", rest.fragment());
+        assert_eq!(&text[&k], "sim_dspf");
+        match v {
+            Some(ValueBuilder::Expr(e)) => assert_eq!(&text[&e], "inv inv.dspf"),
+            other => panic!("{other:?}"),
+        }
+
+        let (opts, errors) = options(
+            ".option sim_dspf=\"inv inv.dspf\"\n.OPTION post=2 sim_dspf = \"a.dspf\" probe\n+ x='1'\n",
+        );
+        assert_eq!(errors, 0);
+        let s = |s: &str| s.to_string();
+        assert_eq!(
+            opts,
+            [
+                (s("sim_dspf"), Some(s("expr:inv inv.dspf"))),
+                (s("post"), Some(s("num:2"))),
+                (s("sim_dspf"), Some(s("expr:a.dspf"))),
+                (s("probe"), None),
+                (s("x"), Some(s("expr:1"))),
+            ]
+        );
+    }
+
+    #[test]
+    fn model_without_params() {
+        // HSPICE accepts a model card with only a name and a type (golden
+        // `res_model`: `.model rmod r`).
+        let text = ".model rmod r\n.MODEL dmod D\n.model nch nmos $ c\n.model n2 nmos level=1\n.model n3 nmos ()\n.model n4 nmos (level=1\n+ vth0=0.4)\n";
+        let i = span(text, 0);
+        let blocks = Blocks::new(i);
+        let mut ast = Default::default();
+        local_ast(i, None, &blocks, &mut ast);
+        assert!(ast.errors.is_empty(), "{:?}", ast.errors);
+        let models: Vec<(String, String, usize)> = ast
+            .model
+            .iter()
+            .map(|m| {
+                let m = m.build(text);
+                (
+                    m.name.to_string(),
+                    format!("{:?}", m.model_type),
+                    m.params.len(),
+                )
+            })
+            .collect();
+        let m = |n: &str, t: &str, p: usize| (n.to_string(), t.to_string(), p);
+        assert_eq!(
+            models,
+            [
+                m("rmod", "R", 0),
+                m("dmod", "D", 0),
+                m("nch", "NMOS", 0),
+                m("n2", "NMOS", 1),
+                m("n3", "NMOS", 0),
+                m("n4", "NMOS", 2),
+            ]
+        );
+        // Text after the type that is not a parameter list is still an error.
+        let text = ".model rmod r junk\n";
+        let i = span(text, 0);
+        let mut ast = Default::default();
+        local_ast(i, None, &Blocks::new(i), &mut ast);
+        assert_eq!(ast.errors.len(), 1);
+        assert!(ast.model.is_empty());
+    }
+
+    #[tokio::test]
+    async fn golden_res_model_parses() {
+        // The golden `res_model` deck (HSPICE accepts it) parses with no
+        // error: the model card, and R1/R2 with model `rmod` and their
+        // values.
+        use crate::{ParseOptions, TitleLine, instance::InstanceCtx, parser::parse_top_multi_with};
+        let opts = ParseOptions {
+            title_line: TitleLine::Auto,
+            ..Default::default()
+        };
+        let path = PathBuf::from("golden/cases/res_model/deck.sp");
+        let (parsed, files) =
+            parse_top_multi_with([FileId::Include { path }].into_iter(), &opts).await;
+        let (ast, has_err) = files.build(parsed);
+        assert!(!has_err);
+        assert_eq!(ast.model.len(), 1);
+        assert_eq!(ast.model[0].name, "rmod");
+        assert!(ast.model[0].params.is_empty());
+        let rs: Vec<(String, Option<String>, f64)> = ast
+            .instance
+            .iter()
+            .filter_map(|x| match &x.ctx {
+                InstanceCtx::Resistor(r) => Some((
+                    x.name.to_string(),
+                    r.model.as_ref().map(|m| m.to_string()),
+                    match r.value {
+                        Some(Value::Num(f)) => f,
+                        ref other => panic!("{other:?}"),
+                    },
+                )),
+                _ => None,
+            })
+            .collect();
+        let r = |n: &str, f: f64| (n.to_string(), Some("rmod".to_string()), f);
+        assert_eq!(rs, [r("R1", 2e3), r("R2", 3e3)]);
+    }
+
+    /// A temp path that no other call in any test of this process uses.
+    fn unique_temp_path(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        std::env::temp_dir().join(format!("netlist_db_utils_{tag}_{pid}_{n}.sp"))
+    }
+
+    /// Parses `text` as a top file. Returns the built AST as text and the
+    /// number of recorded errors.
+    async fn parse_display(tag: &str, text: &str) -> (String, bool) {
+        let path = unique_temp_path(tag);
+        std::fs::write(&path, text).unwrap();
+        let opts = ParseOptions {
+            title_line: TitleLine::No,
+            lib_override: Vec::new(),
+            skip_prot: true,
+        };
+        let (parsed, files): (Parsed, Files) =
+            parse_top_multi_with([FileId::Include { path: path.clone() }].into_iter(), &opts).await;
+        _ = std::fs::remove_file(&path);
+        let (ast, has_err) = files.build(parsed);
+        (ast.to_string(), has_err)
+    }
+
+    #[tokio::test]
+    async fn messy_whitespace_equivalent() {
+        let clean = "\
+* clean deck
+.option post=2
+.param w0=1u
+.subckt inv a y vdd vss wn=1u
+M1 y a vss vss nch W=wn L=0.1u
+M2 y a vdd vdd pch W='2*wn' L=0.1u
+R1 a y 1k tc1=1e-3
+.ends inv
+X1 in out vdd 0 inv wn=2u
+C1 out 0 10f
+";
+        // CRLF line ends, tabs, mixed-case keywords, comments and empty
+        // lines between `+` lines, and no newline at the end.
+        let messy = "* messy deck\r\n\
+.OPTION\tpost=2\r\n\
+.Param w0=1u \t\r\n\
+.SUBCKT inv a y\r\n\
+* a comment between + lines\r\n\
++ vdd vss\r\n\
++\twn=1u\r\n\
+M1\ty a vss vss nch\r\n\
+* comment\r\n\
++ W=wn\r\n\
+\r\n\
++ L=0.1u\r\n\
+\tM2 y a vdd vdd pch W='2*wn' L=0.1u \t\r\n\
+R1 a y 1k\r\n\
+$ dollar comment\r\n\
++ tc1=1e-3\r\n\
+.Ends inv\r\n\
+X1\tin out vdd 0 inv\twn=2u\r\n\
+C1 out 0 10f";
+        let (want, err_clean) = parse_display("messy_clean", clean).await;
+        let (got, err_messy) = parse_display("messy_messy", messy).await;
+        assert!(!err_clean, "clean deck has errors");
+        assert!(!err_messy, "messy deck has errors");
+        assert!(!got.contains('\r'), "CR in a name or value: {got:?}");
+        assert!(!got.contains('\t'), "tab in a name or value: {got:?}");
+        assert_eq!(got, want);
+        // The deck parsed, it is not two empty ASTs.
+        for part in [
+            "M1 y a vss vss nch",
+            "R1 a y",
+            "X1 in out vdd 0 inv",
+            "C1 out 0",
+        ] {
+            assert!(want.contains(part), "{part} missing in {want}");
+        }
+    }
+}

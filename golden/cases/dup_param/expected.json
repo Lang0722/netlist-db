@@ -1,0 +1,30 @@
+{
+ "case": "dup_param",
+ "resistors": [
+  {
+   "path": "rd",
+   "value": 7.0
+  },
+  {
+   "path": "ra",
+   "value": 2.0
+  },
+  {
+   "path": "rc",
+   "value": 3.0
+  },
+  {
+   "path": "xd.rb",
+   "value": 6.0
+  }
+ ],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 1
+ },
+ "extra": {
+  "dup_param_winner": "last"
+ }
+}

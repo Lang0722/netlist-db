@@ -1,0 +1,68 @@
+{
+ "case": "dollar_quote_comment",
+ "resistors": [
+  {
+   "path": "r1",
+   "value": 2000.0
+  },
+  {
+   "path": "r2",
+   "value": 4000.0
+  },
+  {
+   "path": "r3",
+   "value": 6000.0
+  },
+  {
+   "path": "r4",
+   "value": 8000.0
+  },
+  {
+   "path": "r5",
+   "value": 2000.0
+  },
+  {
+   "path": "r6",
+   "value": 3000.0
+  },
+  {
+   "path": "r8",
+   "value": 2000.0
+  },
+  {
+   "path": "r9",
+   "value": 4000.0
+  },
+  {
+   "path": "r10",
+   "value": 3000.0
+  },
+  {
+   "path": "r11",
+   "value": 2000.0
+  },
+  {
+   "path": "x1.rc",
+   "value": 4000.0
+  },
+  {
+   "path": "x2.rc",
+   "value": 6000.0
+  },
+  {
+   "path": "x3.rs",
+   "value": 7000.0
+  },
+  {
+   "path": "x3.rt",
+   "value": 14000.0
+  }
+ ],
+ "totals": {
+  "resistors": 14,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 3
+ },
+ "extra": {}
+}

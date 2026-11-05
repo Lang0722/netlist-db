@@ -1,0 +1,23 @@
+{
+ "case": "mos_positional_all",
+ "resistors": [],
+ "totals": {
+  "resistors": 0,
+  "capacitors": 0,
+  "mosfets": 4,
+  "subckt_instances": 0
+ },
+ "extra": {
+  "positional_order": [
+   "l",
+   "w",
+   "ad",
+   "as",
+   "pd",
+   "ps",
+   "nrd",
+   "nrs"
+  ],
+  "source": ".option list element summary: l/w drawn, cdsat/cssat = ad/as (js=1) or pd/ps (jsw=1), rd/rs eff = nrd/nrs (rsh=1); M1/M3 positional equal M2/M4 keyword"
+ }
+}

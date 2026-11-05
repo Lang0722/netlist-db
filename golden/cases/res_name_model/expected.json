@@ -1,0 +1,13 @@
+{
+ "case": "res_name_model",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:4) Element in r1 has three nodes defined,  element must have two nodes"
+ }
+}

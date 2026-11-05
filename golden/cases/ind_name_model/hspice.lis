@@ -1,0 +1,196 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 17:57:43 2026
+ scientific notation:
+ a=10**-18  f=10**-15  p=10**-12  n=10**-9  u=10**-6
+ m=10**-3   k=10**3    x=10**6    g=10**9 
+
+
+ circuit parameter definitions
+  parameter          =  value 
+
+     0:lval                                                    =   2.0000n      
+
+
+
+
+ constants  - tnom         kt           vt           gapsi        ni
+            298.15000    4.1163e-21    25.69184m     1.11562    1.2565e+16 
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * ind_name_model: a parameter name in the l value place, then a model name
+
+ ****** mag model parameters tnom=  25.000 temp=  25.000 ******
+ *********************************
+ ***  model name:   0:lmod    ****
+ *********************************
+
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+    level=   3.00             scale=   1.00              tnom=  25.00  deg k  
+  
+ ******  
+ * ind_name_model: a parameter name in the l value place, then a model name
+
+ ****** circuit element summary tnom=  25.000 temp=  25.000 ******
+
+
+ **** resistors
+
+  
+  
+                                                   
+ element name        0:r12      0:r13      0:r16   
+ node1               0:12       0:13       0:16    
+ node2               0:0        0:0        0:0     
+ model                                             
+ res eff             1.0000k    1.0000k    1.0000k 
+ tc1                 0.         0.         0.      
+ tc2                 0.         0.         0.      
+ scale               1.0000     1.0000     1.0000  
+ m                   1.0000     1.0000     1.0000  
+ ac                  1.0000k    1.0000k    1.0000k 
+ temp               25.0000    25.0000    25.0000  
+ l                   0.         0.         0.      
+ w                   0.         0.         0.      
+ cap                 0.         0.         0.      
+ noise            1.000e+00  1.000e+00  1.000e+00  
+
+
+ **** inductors
+  
+  
+                                                   
+ element name        0:l2       0:l3       0:l6    
+ node1               0:1        0:1        0:1     
+ node2               0:12       0:13       0:16    
+ model               0:lmod     0:lmod     0:lmod  
+ ind eff             2.0000n    2.0000n    1.0000n 
+ res eff             0.         0.         0.      
+ tc1                 0.         4.0000m    0.      
+ tc2                 0.         0.         0.      
+ nt                  1.0000     1.0000     1.0000  
+ ic                  0.         0.         0.      
+ m                   1.0000     1.0000     1.0000  
+
+
+ **** independent sources
+
+     name         node1        node2      dc volt    ac mag    ac phase    type
+  v1  1                 0                    1.0000     0.         0.      dc   
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ ******  
+ * ind_name_model: a parameter name in the l value place, then a model name
+
+ ****** temperature-adjusted values tnom=  25.000 temp= 125.000 ******
+
+ constants  - temp             kt               vt               gapsi            ni
+            398.1500         5.497e-21         34.3089m          1.0861         6.960e+18      
+
+ *** resistors
+    name        eff val        eff val(ac)
+
+
+ *** inductors
+    name        eff val
+
+     0:l3                  2.8000n  
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * ind_name_model: a parameter name in the l value place, then a model name
+
+ ****** operating point information tnom=  25.000 temp= 125.000 ******
+ ****** operating point status is all       simulation time is     0.     
+    node    =voltage      node    =voltage      node    =voltage
+
+ +0:1       =   1.0000  0:12      =   1.0000  0:13      =   1.0000 
+ +0:16      =   1.0000 
+
+
+ **** voltage sources
+
+ subckt             
+ element  0:v1      
+  volts      1.0000 
+  current   -3.0000m
+  power      3.0000m
+
+     total voltage source power dissipation=    3.0000m       watts
+
+
+
+ **** resistors
+
+ subckt                                   
+ element  0:r12      0:r13      0:r16     
+  r value    1.0000k    1.0000k    1.0000k
+  v drop     1.0000     1.0000     1.0000 
+  current    1.0000m    1.0000m    1.0000m
+  power      1.0000m    1.0000m    1.0000m
+
+
+ **** inductors
+
+ subckt                                   
+ element  0:l2       0:l3       0:l6      
+  l value    2.0000n    2.8000n    1.0000n
+  v drop     0.         0.         0.     
+  current    0.         0.         0.     
+  power      0.         0.         0.     
+
+
+          ***** job concluded
+ ******  
+ * ind_name_model: a parameter name in the l value place, then a model name
+
+ ****** job statistics summary tnom=  25.000 temp= 125.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       5 # elements   =       7
+  # resistors   =       3 # capacitors =       0 # inductors   =       3
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  readin             0.01
+  errchk             0.00
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         97.53 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       30.55 seconds
+           job started at     17:57:43 11/01/2026
+           job ended   at     17:58:14 11/01/2026
+           job total runtime        30.55 seconds
+
+

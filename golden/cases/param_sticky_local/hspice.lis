@@ -1,0 +1,126 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 15:57:35 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * param_sticky_local: one definition that uses a .param name, with an earlier instance that finds the name only at the top level (parhier=local)
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x0.                             w                  1.00 
+        2 x1.                             cp                 1.00 
+        3 x2.                             wq                 1.00 
+        4 x3.                             cq                 1.00 
+        5 x4.                             ws                 1.00 
+        6 x5.                             cs                 1.00 
+        7 x0.xl.                          leafp              1.00 
+        8 x1.xl.                          leafp              1.00 
+        9 x2.xl.                          leafq              1.00 
+       10 x3.xl.                          leafq              1.00 
+       11 x4.xl.                          leafs              1.00 
+       12 x5.xl.                          leafs              1.00 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * param_sticky_local: one definition that uses a .param name, with an earlier instance that finds the name only at the top level (parhier=local)
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+     node    =voltage       node    =voltage       node    =voltage
+
+ + 0:10      =   1.0000   0:11      =   1.0000   0:12      =   1.0000 
+ + 0:13      =   1.0000   0:14      =   1.0000   0:15      =   1.0000 
+
+
+ **** voltage sources
+
+ subckt                                                              
+ element   0:v10       0:v11       0:v12       0:v13       0:v14     
+  volts       1.0000      1.0000      1.0000      1.0000      1.0000 
+  current  -500.0000u  -333.3333u  -500.0000u  -333.3333u  -500.0000u
+  power     500.0000u   333.3333u   500.0000u   333.3333u   500.0000u
+
+ subckt              
+ element   0:v15     
+  volts       1.0000 
+  current  -333.3333u
+  power     333.3333u
+
+     total voltage source power dissipation=    2.5000m       watts
+
+
+
+ **** resistors
+
+ subckt    x0.xl       x1.xl       x2.xl       x3.xl       x4.xl     
+ element   7:rp        8:rp        9:rq       10:rq       11:rs      
+  r value     2.0000k     3.0000k     2.0000k     3.0000k     2.0000k
+  v drop      1.0000      1.0000      1.0000      1.0000      1.0000 
+  current   500.0000u   333.3333u   500.0000u   333.3333u   500.0000u
+  power     500.0000u   333.3333u   500.0000u   333.3333u   500.0000u
+
+ subckt    x5.xl     
+ element  12:rs      
+  r value     3.0000k
+  v drop      1.0000 
+  current   333.3333u
+  power     333.3333u
+
+
+          ***** job concluded
+ ******  
+ * param_sticky_local: one definition that uses a .param name, with an earlier instance that finds the name only at the top level (parhier=local)
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       7 # elements   =      12
+  # resistors   =       6 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       6
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  readin             0.01
+  errchk             0.00
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         96.46 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       30.40 seconds
+           job started at     15:57:35 11/01/2026
+           job ended   at     15:58:05 11/01/2026
+           job total runtime        30.40 seconds
+
+

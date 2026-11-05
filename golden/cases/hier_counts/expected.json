@@ -1,0 +1,229 @@
+{
+ "case": "hier_counts",
+ "resistors": [
+  {
+   "path": "rt1",
+   "value": 31.0
+  },
+  {
+   "path": "rt2",
+   "value": 32.0
+  },
+  {
+   "path": "rt3",
+   "value": 33.0
+  },
+  {
+   "path": "x1.rmk_blk",
+   "value": 3000.0
+  },
+  {
+   "path": "x1.rs1",
+   "value": 21.0
+  },
+  {
+   "path": "x1.rs2",
+   "value": 22.0
+  },
+  {
+   "path": "x1.rs3",
+   "value": 23.0
+  },
+  {
+   "path": "x2.rmk_blk",
+   "value": 3000.0
+  },
+  {
+   "path": "x2.rs1",
+   "value": 21.0
+  },
+  {
+   "path": "x2.rs2",
+   "value": 22.0
+  },
+  {
+   "path": "x2.rs3",
+   "value": 23.0
+  },
+  {
+   "path": "x3.rmk_mid",
+   "value": 2000.0
+  },
+  {
+   "path": "x3.rs1",
+   "value": 11.0
+  },
+  {
+   "path": "x3.rs2",
+   "value": 12.0
+  },
+  {
+   "path": "x3.rs3",
+   "value": 13.0
+  },
+  {
+   "path": "x1.xm1.rmk_mid",
+   "value": 2000.0
+  },
+  {
+   "path": "x1.xm1.rs1",
+   "value": 11.0
+  },
+  {
+   "path": "x1.xm1.rs2",
+   "value": 12.0
+  },
+  {
+   "path": "x1.xm1.rs3",
+   "value": 13.0
+  },
+  {
+   "path": "x1.xm2.rmk_mid",
+   "value": 1000.0,
+   "m": 2.0
+  },
+  {
+   "path": "x1.xm2.rs1",
+   "value": 5.5,
+   "m": 2.0
+  },
+  {
+   "path": "x1.xm2.rs2",
+   "value": 6.0,
+   "m": 2.0
+  },
+  {
+   "path": "x1.xm2.rs3",
+   "value": 6.5,
+   "m": 2.0
+  },
+  {
+   "path": "x1.xl0.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x2.xm1.rmk_mid",
+   "value": 2000.0
+  },
+  {
+   "path": "x2.xm1.rs1",
+   "value": 11.0
+  },
+  {
+   "path": "x2.xm1.rs2",
+   "value": 12.0
+  },
+  {
+   "path": "x2.xm1.rs3",
+   "value": 13.0
+  },
+  {
+   "path": "x2.xm2.rmk_mid",
+   "value": 1000.0,
+   "m": 2.0
+  },
+  {
+   "path": "x2.xm2.rs1",
+   "value": 5.5,
+   "m": 2.0
+  },
+  {
+   "path": "x2.xm2.rs2",
+   "value": 6.0,
+   "m": 2.0
+  },
+  {
+   "path": "x2.xm2.rs3",
+   "value": 6.5,
+   "m": 2.0
+  },
+  {
+   "path": "x2.xl0.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x3.xl1.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x3.xl2.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x3.xl3.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x1.xm1.xl1.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x1.xm1.xl2.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x1.xm1.xl3.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x1.xm2.xl1.rmk_leaf",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x1.xm2.xl2.rmk_leaf",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x1.xm2.xl3.rmk_leaf",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x2.xm1.xl1.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x2.xm1.xl2.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x2.xm1.xl3.rmk_leaf",
+   "value": 1000.0
+  },
+  {
+   "path": "x2.xm2.xl1.rmk_leaf",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x2.xm2.xl2.rmk_leaf",
+   "value": 500.0,
+   "m": 2.0
+  },
+  {
+   "path": "x2.xm2.xl3.rmk_leaf",
+   "value": 500.0,
+   "m": 2.0
+  }
+ ],
+ "totals": {
+  "resistors": 48,
+  "capacitors": 5,
+  "mosfets": 17,
+  "subckt_instances": 24
+ },
+ "extra": {
+  "marker_counts": {
+   "blk": 2,
+   "mid": 5,
+   "leaf": 17,
+   "unused": 0
+  },
+  "m_instances": {
+   "x1.xm2": 2.0,
+   "x2.xm2": 2.0
+  }
+ }
+}

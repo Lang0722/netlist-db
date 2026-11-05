@@ -1,0 +1,13 @@
+{
+ "case": "hier_port_fewer",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:7) Number of nodes mismatch between instance \"xc\" and subcircuit \"cell\". Subcircuit definition has    3 node(s) whereas subckt instance has    2 node(s). Please specify same number of nodes."
+ }
+}

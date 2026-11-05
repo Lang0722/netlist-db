@@ -1,0 +1,131 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: deck.sp                                                           
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i deck.sp -o hspice
+  Start time: Sun Nov  1 16:15:04 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * func_sticky_ovr_local: which instances make a top-level function stick (parhier=local)
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x0.                             w4                 1.00 
+        2 x1.                             cf4                1.00 
+        3 x2.                             w5                 1.00 
+        4 x3.                             cf5                1.00 
+        5 x4.                             cf6                1.00 
+        6 x5.                             w6                 1.00 
+        7 x6.                             cf6                1.00 
+        8 x0.xl.                          leafd              1.00 
+        9 x1.xl.                          leafd              1.00 
+       10 x2.xm.                          mo                 1.00 
+       11 x3.xm.                          mo                 1.00 
+       12 x4.xl.                          leafb              1.00 
+       13 x5.xl.                          leafb              1.00 
+       14 x6.xl.                          leafb              1.00 
+       15 x2.xm.xl.                       leafo              1.00 
+       16 x3.xm.xl.                       leafo              1.00 
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000    
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * func_sticky_ovr_local: which instances make a top-level function stick (parhier=local)
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is     0.     
+     node    =voltage       node    =voltage       node    =voltage
+
+ + 0:10      =   1.0000   0:11      =   1.0000   0:12      =   1.0000 
+ + 0:13      =   1.0000   0:14      =   1.0000   0:15      =   1.0000 
+ + 0:16      =   1.0000 
+
+
+ **** voltage sources
+
+ subckt                                                              
+ element   0:v10       0:v11       0:v12       0:v13       0:v14     
+  volts       1.0000      1.0000      1.0000      1.0000      1.0000 
+  current  -200.0000u  -333.3333u  -500.0000u  -500.0000u  -333.3333u
+  power     200.0000u   333.3333u   500.0000u   500.0000u   333.3333u
+
+ subckt                          
+ element   0:v15       0:v16     
+  volts       1.0000      1.0000 
+  current  -500.0000u  -500.0000u
+  power     500.0000u   500.0000u
+
+     total voltage source power dissipation=    2.8667m       watts
+
+
+
+ **** resistors
+
+ subckt    x0.xl       x1.xl       x4.xl       x5.xl       x6.xl     
+ element   8:rd        9:rd       12:rb       13:rb       14:rb      
+  r value     5.0000k     3.0000k     3.0000k     2.0000k     2.0000k
+  v drop      1.0000      1.0000      1.0000      1.0000      1.0000 
+  current   200.0000u   333.3333u   333.3333u   500.0000u   500.0000u
+  power     200.0000u   333.3333u   333.3333u   500.0000u   500.0000u
+
+ subckt    x2.xm.xl    x3.xm.xl  
+ element  15:ro       16:ro      
+  r value     2.0000k     2.0000k
+  v drop      1.0000      1.0000 
+  current   500.0000u   500.0000u
+  power     500.0000u   500.0000u
+
+
+          ***** job concluded
+ ******  
+ * func_sticky_ovr_local: which instances make a top-level function stick (parhier=local)
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       8 # elements   =      14
+  # resistors   =       7 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       7
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  readin             0.01
+  errchk             0.00
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         98.75 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time       30.17 seconds
+           job started at     16:15:04 11/01/2026
+           job ended   at     16:15:34 11/01/2026
+           job total runtime        30.17 seconds
+
+

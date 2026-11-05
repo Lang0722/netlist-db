@@ -1,0 +1,13 @@
+{
+ "case": "node_dotted_two_splits_b",
+ "resistors": [],
+ "totals": {
+  "resistors": 4,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 2
+ },
+ "extra": {
+  "merged_listing": "listing shows 0 resistors, statistics count 4"
+ }
+}

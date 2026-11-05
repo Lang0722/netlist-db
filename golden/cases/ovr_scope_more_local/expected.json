@@ -1,0 +1,21 @@
+{
+ "case": "ovr_scope_more_local",
+ "resistors": [
+  {
+   "path": "x1.r1",
+   "value": 6.0
+  },
+  {
+   "path": "x2.r2",
+   "value": 500.0,
+   "m": 2.0
+  }
+ ],
+ "totals": {
+  "resistors": 2,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 2
+ },
+ "extra": {}
+}

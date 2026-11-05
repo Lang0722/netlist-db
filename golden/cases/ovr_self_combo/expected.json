@@ -1,0 +1,44 @@
+{
+ "case": "ovr_self_combo",
+ "resistors": [
+  {
+   "path": "x1.r1",
+   "value": 24.0
+  },
+  {
+   "path": "x1.r2",
+   "value": 8.0
+  },
+  {
+   "path": "x3.r3",
+   "value": 12.0
+  },
+  {
+   "path": "x4.r4",
+   "value": 24.0
+  },
+  {
+   "path": "x2.xc.r1",
+   "value": 1.0
+  },
+  {
+   "path": "x2.xc.r2",
+   "value": 6.0
+  },
+  {
+   "path": "x5.xm.r6",
+   "value": 7000.0
+  },
+  {
+   "path": "x5.xm.xl.r5",
+   "value": 7000.0
+  }
+ ],
+ "totals": {
+  "resistors": 8,
+  "capacitors": 0,
+  "mosfets": 0,
+  "subckt_instances": 8
+ },
+ "extra": {}
+}

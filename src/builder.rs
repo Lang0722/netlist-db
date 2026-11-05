@@ -40,7 +40,7 @@ impl<'s, T: Builder<'s>> Builder<'s> for Box<T> {
     type Out = Box<T::Out>;
     #[inline]
     fn build(&self, file: &'s str) -> Self::Out {
-        Box::new(self.as_ref().build(file))
+        Box::new((**self).build(file))
     }
 }
 

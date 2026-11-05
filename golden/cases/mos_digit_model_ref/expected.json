@@ -1,0 +1,14 @@
+{
+ "case": "mos_digit_model_ref",
+ "resistors": [],
+ "totals": {
+  "resistors": null,
+  "capacitors": null,
+  "mosfets": null,
+  "subckt_instances": null
+ },
+ "extra": {
+  "rejected": "**error** (deck.sp:8) syntax error at or before \"w\" \"1u\" \"l\" \"=\" \"1u\"",
+  "digit_first_model_name_on_m_line": "rejected (syntax error at the next token)"
+ }
+}
