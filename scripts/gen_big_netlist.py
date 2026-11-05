@@ -14,7 +14,7 @@ Writes into OUTDIR:
 
 Nearly every MOSFET names a family of the library (nch_svt, pch_lvt, ...)
 whose model is the bin `name.N` that holds its L and W (LMIN <= L < LMAX,
-WMIN <= W < WMAX; W per finger for the families with WNFLAG=1). A few use
+WMIN <= W/NF < WMAX; the models' WNFLAG changes nothing in HSPICE). A few use
 other models: exact-named ones from analog.inc, the local bins of an RF
 macro model, a model local to a subckt. A few have no bin, on purpose.
 
@@ -87,8 +87,7 @@ BINS = {f: bin_table(f) for f in FAMILIES}
 def choose(family, l, w, nf=1):
     """The bin of `family` for L=l, W=w (nm, exact) and nf fingers, or an
     error key"""
-    wnflag = FAMILIES[family][3]
-    weff = Fraction(w) / nf if wnflag else Fraction(w)
+    weff = Fraction(w) / nf
     for name, l0, l1, w0, w1 in BINS[family]:
         if l0 <= l < l1 and w0 <= weff < w1:
             return name
@@ -101,12 +100,13 @@ RF_L = [60, 120, 240, 1000]
 RF_W = [400, 2000, 10000]
 
 
-def choose_rf(l, w, dl_rf):
+def choose_rf(l, w, dl_rf, nf):
     dxl = Fraction(dl_rf, 2)
+    weff = Fraction(w) / nf
     n = 1
     for i in range(len(RF_L) - 1):
         for j in range(len(RF_W) - 1):
-            if RF_L[i] - dxl <= l < RF_L[i + 1] - dxl and RF_W[j] <= w < RF_W[j + 1]:
+            if RF_L[i] - dxl <= l < RF_L[i + 1] - dxl and RF_W[j] <= weff < RF_W[j + 1]:
                 return f"nch_rf.{n}"
             n += 1
     return f"error\tnch_rf\tL={l}n\tW={w}n"
@@ -562,9 +562,10 @@ class Chip:
         )
         footer(o, "LVLSHIFT")
         u = Counter()
-        for fam, l, w in (("nch_svt", 30, 200), ("pch_svt", 30, 300), ("nch_18", 150, 1000), ("nch_18", 150, 1000),
-                          ("pch_18", 300, 500), ("pch_18", 300, 500), ("nch_18", 150, 4000), ("pch_18", 150, 8000)):
-            u[choose(fam, l, w)] += 1
+        for fam, l, w, nf in (("nch_svt", 30, 200, 1), ("pch_svt", 30, 300, 1), ("nch_18", 150, 1000, 1),
+                              ("nch_18", 150, 1000, 1), ("pch_18", 300, 500, 1), ("pch_18", 300, 500, 1),
+                              ("nch_18", 150, 4000, 4), ("pch_18", 150, 8000, 8)):
+            u[choose(fam, l, w, nf)] += 1
         self.defs["LVLSHIFT"] = Cell("LVLSHIFT", ["a", "y", "VDD", "VDDIO", "VSS"], u)
         header(o, "io", "ESD_CLAMP")
         o.add(
@@ -575,7 +576,7 @@ class Chip:
         )
         footer(o, "ESD_CLAMP")
         u = Counter()
-        u[choose("nch_18", 300, 60000)] += 1
+        u[choose("nch_18", 300, 60000, 30)] += 1
         u["nch_na"] += 1
         self.defs["ESD_CLAMP"] = Cell("ESD_CLAMP", ["pad", "VDDIO", "VSS"], u)
         header(o, "io", "IO_PAD")
@@ -589,8 +590,8 @@ class Chip:
         o.add("XG1 d18 oe18 p_g VDD VSS NOR2_X4_SVT")
         footer(o, "IO_PAD")
         u = self.defs["LVLSHIFT"].usage + self.defs["LVLSHIFT"].usage + self.defs["ESD_CLAMP"].usage
-        u[choose("nch_18", 150, 40000)] += 1
-        u[choose("pch_18", 150, 80000)] += 1
+        u[choose("nch_18", 150, 40000, 20)] += 1
+        u[choose("pch_18", 150, 80000, 40)] += 1
         u += self.cells["NAND2_X4_SVT"].usage + self.cells["NOR2_X4_SVT"].usage
         self.defs["IO_PAD"] = Cell("IO_PAD", ["core", "pad", "oe", "VDD", "VDDIO", "VSS"], u)
         # a decap no bin holds (W above every WMAX), on purpose
@@ -773,13 +774,14 @@ class Chip:
                 a = pool[rng.randrange(max(0, len(pool) - 200), len(pool))]
                 y = f"{prefix}_dly_{i}"
                 o.add(f"XDLY{i} {a} {y} VDD VSS CKDLY {p}".rstrip())
+                # (with parhier=global, the top-level ld=2u wins over all)
                 ld, nfd = (150 if self.args.parhier == "local" else 2000), 1
                 for kv in p.split():
                     k, v = kv.split("=")
-                    if k == "ld":
-                        ld = {"500n": 500, "1u": 1000, "'2*250n'": 500}[v]
-                    else:
+                    if k != "ld":
                         nfd = int(v)
+                    elif self.args.parhier == "local":
+                        ld = {"500n": 500, "1u": 1000, "'2*250n'": 500}[v]
                 usage += self.ckdly_usage(ld, nfd)
                 pool.append(y)
                 continue
@@ -1081,11 +1083,11 @@ def gen_analog():
         u["nch_svt"] += 1
         u[choose("pch_svt", 60, 3000, 4)] += 1
         u["nch_lp"] += 1
-    rf = [(100, 4000, 4, None), (100, 1000, 1, None), (300, 600, 2, None), (118, 3000, 2, 4), (119, 3000, 2, 4)]
+    rf = [(100, 8000, 4, None), (100, 1000, 1, None), (300, 1200, 2, None), (118, 6000, 2, 4), (119, 6000, 2, 4)]
     for i, (l, w, nf, dl) in enumerate(rf):
         extra = f" dl_rf={dl}n" if dl else ""
         o.add(f"XLNA{i} lo{i} rf{i} VSS VSS nch_rf lr={l}n wr={sci(w, 'u')} nr={nf}{extra}")
-        u[choose_rf(l, w, dl or 2)] += 1
+        u[choose_rf(l, w, dl or 2, nf)] += 1
     o.add("XCP0 up dn vctl VDD VSS CHGPUMP", ".ends PLL_TOP", "", ".subckt CHGPUMP up dn out VDD VSS")
     for i in range(6):
         o.add(f"MN{i} out up n{i} VSS nch_lp l=500n w=2u")

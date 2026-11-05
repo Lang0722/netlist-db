@@ -16,19 +16,20 @@ usage: torture.py [--big] [--ngspice] [--reference] [--keep DIR]
 Cases:
  chain      24 levels, each passing w='w*1.05' l='l+1n' to the next: L, W at
             each depth by formula, L reaching bin edges through accumulated
-            sums; a parameter whose top-level .param wins under
-            parhier=global and whose subckt default wins under local
+            sums; under parhier=global the top-level .param and the first
+            value passed win all the way down
  tree       a binary tree passing p='2*p' and p='2*p+1': each leaf's p is its
             path read in binary; W='(1+p mod 7)*100n'; every context distinct
  lattice    three instances per level, passing a='a', a='a', a='a+1' and an
-            unused id: counts are binomial sums (581 M MOSFETs with --big)
+            unused id: counts are binomial sums (581 M MOSFETs with --big);
+            under parhier=global the first value passed wins
  matrix     a name defined (top .param, .subckt default, .param inside) or
             passed at each of 3 levels, in every combination, read at the
             bottom: the value by the rule of each parhier
- bins       overlapping, gapped and open-ended bins, a model and bins of the
-            same name, case, dotted names (n.ch.1), non-numeric suffixes
-            (nch.mc), WNFLAG in some bins, edges through float noise,
-            .option scale, local bins hiding global ones
+ bins       overlapping and gapped bins, a model and bins of the same name,
+            case, dotted names (n.ch.1), non-numeric suffixes (nm.mc), fingers,
+            edges through float noise, .option scale, local bins that hold L
+            and W before global ones
  errors     a name defined in some contexts only, parameters defined by
             each other, division by zero, an unknown function
  library    no top-level instance: each subckt with its defaults; a nested
@@ -183,7 +184,8 @@ FB = Family("fb", "nmos", ["1e-10", "15e-9", "20e-9", "25e-9", "30e-9", "100e-9"
 def chain(mode, depth=24, l0="30e-9", lk0="10", step="1"):
     """Each level passes w='w*1.05' l='l+{step}n' to the next, from w=0.3u,
     l=l0; M1's L is lk*{step} nm: lk is the level's default (local) or the
-    top .param (global)"""
+    top .param (global). With parhier=global, the top-level `w=5u` and the
+    outermost `l` win at every level."""
     lines = [f"* chain of {depth} levels", f".option parhier={mode}", ".param w=5u lk=99"]
     lines += NB.models() + FB.models()
     for k in range(depth):
@@ -201,8 +203,8 @@ def chain(mode, depth=24, l0="30e-9", lk0="10", step="1"):
         exp = {}
         for j in range(levels):
             path = ".".join(["X0"] * j + ["M"]) if j else "M"
-            w = w0 * F(21, 20) ** j
-            l = l0 + j * F(step) * F("1e-9")
+            w = w0 * F(21, 20) ** j if mode == "local" else F("5e-6")
+            l = l0 + j * F(step) * F("1e-9") if mode == "local" else l0
             exp[path + "0"] = (l, w, 1, NB.bin(l, w))
             lk = 99 if mode == "global" else F(lk0) + (k_top - j)
             l1 = lk * F(step) * F("1e-9")
@@ -211,9 +213,8 @@ def chain(mode, depth=24, l0="30e-9", lk0="10", step="1"):
 
     top = {("X0." + p if p.startswith(("X", "M")) else p): v
            for p, v in expect(depth, F("0.3e-6"), F(l0), depth - 1).items()}
-    # an instance of c10 with its defaults: nothing is passed to it, so with
-    # parhier=global the top-level .param w=5u is used over its default 1u
-    sub = expect(11, F("5e-6") if mode == "global" else F("1e-6"), F("1e-6"), 10)
+    # an instance of c10 with its defaults
+    sub = expect(11, F("1e-6"), F("1e-6"), 10)
     return "\n".join(lines) + "\n", top, {"c10": sub}
 
 
@@ -261,20 +262,22 @@ def lattice(depth, mode="local"):
     return "\n".join(lines) + "\n"
 
 
-def lattice_expected(depth, listing_too):
+def lattice_expected(depth, listing_too, mode="local"):
+    """With parhier=global, the first `a=0` wins at every level"""
     w = lambda a: (1 + a) * F("50e-9")  # noqa: E731
+    step = 1 if mode == "local" else 0
     exp = {}
     if listing_too:
         def walk(path, j, a):
             exp[path + ".M0"] = (F(1, 10**6), w(a), 1, NL.bin(F(1, 10**6), w(a)))
             if j < depth:
                 for d in range(3):
-                    walk(f"{path}.X{d}", j + 1, a + (d == 2))
+                    walk(f"{path}.X{d}", j + 1, a + step * (d == 2))
         walk("X0", 0, 0)
     c = collections.Counter()
     for j in range(depth + 1):
         for i in range(j + 1):
-            c[NL.bin(F(1, 10**6), w(i))] += math.comb(j, i) * 2 ** (j - i)
+            c[NL.bin(F(1, 10**6), w(i * step))] += math.comb(j, i) * 2 ** (j - i)
     return exp, c
 
 
@@ -305,34 +308,17 @@ def matrix(mode, top_defined):
                     lines.append(f".ends m{c}_{k}")
                 lines.append(f"X{c} d g 0 m{c}_1" + (f" v={vals[1][2]}" if o1[2] else ""))
 
-                def definition(k):
-                    d, b, _ = lv[k]
-                    return vals[k][1] if b else (vals[k][0] if d else None)
+                def binding(k):
+                    """What level k binds v to: passed, else .param, else
+                    the default"""
+                    d, b, p = lv[k]
+                    return vals[k][2] if p else vals[k][1] if b else vals[k][0] if d else None
 
-                v = None
-                if mode == "local":
-                    for k in (3, 2, 1):
-                        if lv[k][2]:
-                            v = vals[k][2]
-                            break
-                        if definition(k) is not None:
-                            v = definition(k)
-                            break
-                    else:
-                        v = 1 if top_defined else None
-                else:
-                    for k in (3, 2, 1):
-                        if lv[k][2]:
-                            v = vals[k][2]
-                            break
-                    else:
-                        if top_defined:
-                            v = 1
-                        else:
-                            for k in (1, 2, 3):
-                                if definition(k) is not None:
-                                    v = definition(k)
-                                    break
+                # the closest to the bottom with local, to the top with global
+                top = [1] if top_defined else []
+                bound = [binding(k) for k in (1, 2, 3) if binding(k) is not None]
+                order = top + bound if mode == "global" else bound[::-1] + top
+                v = order[0] if order else None
                 path = f"X{c}.X0.X0.M0"
                 exp[path] = (None, None, None, "error") if v is None else (F(1, 10**6), v * F(1, 10**6), 1, "nv")
                 c += 1
@@ -340,26 +326,35 @@ def matrix(mode, top_defined):
     return "\n".join(lines) + "\n", exp
 
 
+def limits(line):
+    """A `.model` line with the limits it does not set, wide (a bin needs its
+    four limits)"""
+    wide = (("lmin", "1e-10"), ("lmax", "1"), ("wmin", "1e-10"), ("wmax", "1"))
+    return line + "".join(f" {k}={v}" for k, v in wide if f"{k}=" not in line.lower())
+
+
 def bins_case():
     um = F(1, 10**6)
-    lines = ["* bins", ".model ov.1 nmos lmin=1e-7 lmax=1e-6 wmin=1e-7 wmax=1e-5",
-             ".model ov.2 nmos lmin=5e-7 lmax=2e-6 wmin=1e-7 wmax=1e-5",
-             ".model gp.1 nmos lmin=1e-7 lmax=2e-7", ".model gp.2 nmos lmin=3e-7 lmax=4e-7",
-             ".model op.1 nmos lmax=1e-7", ".model op.2 nmos lmin=1e-7",
-             ".model ex nmos level=54", ".model ex.1 nmos lmin=0 lmax=1",
-             ".model CS.1 NMOS LMIN=1E-7 LMAX=1E-6", ".model cs.2 nmos lmin=1e-6 lmax=1e-5",
-             ".model n.ch.1 nmos lmin=0 lmax=1", ".model n.ch.2 nmos lmin=1 lmax=2",
-             ".model nm.1 nmos lmin=1e-7 lmax=1e-6", ".model nm.mc nmos level=54",
-             ".model nm.1a nmos level=54",
-             ".model mx.1 nmos wnflag=1 lmin=0 lmax=1 wmin=0 wmax=1e-6",
-             ".model mx.2 nmos lmin=0 lmax=1 wmin=1e-6 wmax=1e-3",
-             ".model ed.1 nmos lmin=0 lmax=3e-7", ".model ed.2 nmos lmin=3e-7 lmax=1",
-             ".model loc.1 nmos lmin=0 lmax=1e-6", ".model loc.2 nmos lmin=1e-6 lmax=1",
-             ".subckt hide d g s",
-             ".model loc.1 nmos lmin=0 lmax=5e-7",
-             "M0 d g s s loc l=0.3u w=1u",
-             "M1 d g s s loc l=0.8u w=1u",
-             ".ends hide"]
+    lines = ["* bins"] + [limits(line) for line in (
+        ".model ov.1 nmos lmin=1e-7 lmax=1e-6 wmin=1e-7 wmax=1e-5",
+        ".model ov.2 nmos lmin=5e-7 lmax=2e-6 wmin=1e-7 wmax=1e-5",
+        ".model gp.1 nmos lmin=1e-7 lmax=2e-7", ".model gp.2 nmos lmin=3e-7 lmax=4e-7",
+        ".model op.1 nmos lmax=1e-7", ".model op.2 nmos lmin=1e-7",
+        ".model ex.1 nmos lmin=1e-10 lmax=1",
+        ".model CS.1 NMOS LMIN=1E-7 LMAX=1E-6", ".model cs.2 nmos lmin=1e-6 lmax=1e-5",
+        ".model n.ch.1 nmos lmin=1e-10 lmax=1", ".model n.ch.2 nmos lmin=1 lmax=2",
+        ".model nm.1 nmos lmin=1e-7 lmax=1e-6", ".model nm.mc nmos level=54",
+        ".model nm.1a nmos level=54",
+        ".model mx.1 nmos wnflag=1 lmin=1e-10 lmax=1 wmin=1e-10 wmax=1e-6",
+        ".model mx.2 nmos lmin=1e-10 lmax=1 wmin=1e-6 wmax=1e-3",
+        ".model ed.1 nmos lmin=1e-10 lmax=3e-7", ".model ed.2 nmos lmin=3e-7 lmax=1",
+        ".model loc.1 nmos lmin=1e-10 lmax=1e-6", ".model loc.2 nmos lmin=1e-6 lmax=1",
+    )] + [".model ex nmos level=54",
+          ".subckt hide d g s",
+          limits(".model loc.1 nmos lmin=1e-10 lmax=5e-7"),
+          "M0 d g s s loc l=0.3u w=1u",
+          "M1 d g s s loc l=0.8u w=1u",
+          ".ends hide"]
     devices = [
         ("M1", "ov l=0.7u w=1u", (F("0.7e-6"), um, 1, "ov.1")),       # in both: the first
         ("M2", "ov l=1.5u w=1u", (F("1.5e-6"), um, 1, "ov.2")),
@@ -369,28 +364,28 @@ def bins_case():
         ("M6", "ex l=1u w=1u", (um, um, 1, "ex")),                    # the model of that name
         ("M7", "cs l=0.5u w=1u", (F("0.5e-6"), um, 1, "CS.1")),       # case
         ("M8", "CS l=2u w=1u", (2 * um, um, 1, "cs.2")),
-        ("M9", "n.ch l=0.5 w=1u", (F("0.5"), um, 1, "n.ch.1")),       # dotted base name
-        ("M10", "n l=0.5 w=1u", (None, None, None, "error")),         # n.ch.1 is no bin of n
-        ("M11", "nm l=0.5u w=1u", (F("0.5e-6"), um, 1, "nm.1")),      # nm.mc, nm.1a: no bins
-        ("M12", "nm l=5u w=1u", (None, None, None, "error")),
-        ("M13", "mx w=4u l=1u nf=8", (um, 4 * um, 8, "mx.1")),        # WNFLAG in one bin
+        ("M9", "n.ch l=0.5 w=1u", (None, None, None, "error")),       # n.ch.1 is a bin of
+        ("M10", "n l=0.5 w=1u", (None, None, None, "error")),         # nothing
+        ("M11", "nm l=0.5u w=1u", (F("0.5e-6"), um, 1, "nm.1")),
+        ("M12", "nm l=5u w=1u", (5 * um, um, 1, "nm.mc")),            # nm.mc is a bin of nm
+        ("M13", "mx w=4u l=1u nf=8", (um, 4 * um, 8, "mx.1")),        # the width per finger
         ("M14", "mx w=4u l=1u", (um, 4 * um, 1, "mx.2")),
         ("M15", "ed l='0.1u*3' w=1u", (F("0.3e-6"), um, 1, "ed.2")),  # edges, float noise
         ("M16", "ed l='1u-0.7u' w=1u", (F("0.3e-6"), um, 1, "ed.2")),
         ("M17", "ed l='0.9u/3' w=1u", (F("0.3e-6"), um, 1, "ed.2")),
         ("M18", "ed l=299.999n w=1u", (F("299.999e-9"), um, 1, "ed.1")),
-        ("M19", "loc l=0.8u w=1u", (F("0.8e-6"), um, 1, "loc.1")),    # the global bins
+        ("M19", "loc l=0.8u w=1u", (F("0.8e-6"), um, 1, "loc.1")),
     ]
     for name, rest, _ in devices:
         lines.append(f"{name} d g 0 0 {rest}")
     lines += ["X1 d g 0 hide", ".end"]
     exp = {name: e for name, _, e in devices}
-    # local bins hide the global ones: L=0.8u is in no local bin
+    # the local bin, then, for L=0.8u that it does not hold, the global one
     exp["X1.M0"] = (F("0.3e-6"), um, 1, "loc.1")
-    exp["X1.M1"] = (None, None, None, "error")
+    exp["X1.M1"] = (F("0.8e-6"), um, 1, "loc.1")
     # .option scale
-    scale = ["* scale", ".option scale=1e-6", ".model sc.1 nmos lmin=0 lmax=1e-6",
-             ".model sc.2 nmos lmin=1e-6 lmax=1", "M1 d g 0 0 sc l=0.5 w=2", "M2 d g 0 0 sc l=2 w=2", ".end"]
+    scale = ["* scale", ".option scale=1e-6", limits(".model sc.1 nmos lmin=1e-10 lmax=1e-6"),
+             limits(".model sc.2 nmos lmin=1e-6 lmax=1"), "M1 d g 0 0 sc l=0.5 w=2", "M2 d g 0 0 sc l=2 w=2", ".end"]
     sexp = {"M1": (F("0.5e-6"), 2 * um, 1, "sc.1"), "M2": (2 * um, 2 * um, 1, "sc.2")}
     return "\n".join(lines) + "\n", exp, "\n".join(scale) + "\n", sexp
 
@@ -525,12 +520,13 @@ def main():
     for depth in (4, 8):
         for mode in ("local", "global"):
             d = write(f"lattice{depth}_{mode}.sp", lattice(depth, mode))
-            exp, c = lattice_expected(depth, True)
+            exp, c = lattice_expected(depth, True, mode)
             check_listing(f"lattice {depth} {mode} listing", listing(d), exp)
             check_counts(f"lattice {depth} {mode} --summary", counts(d), c)
             if ref and mode == "local":
                 other("reference", d, exp, f"lattice {depth}: reference")
         if ngs and depth == 4:
+            exp, _ = lattice_expected(depth, True)
             other("ngspice", d.replace("_global", "_local"), exp, "lattice 4: ngspice")
     if big:
         for depth in (20,):

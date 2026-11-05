@@ -10,15 +10,23 @@ Every deck has:
   parameters (literals, or expressions of globals and of its own earlier
   defaults), .param statements inside, MOSFETs whose L, W and NF are
   expressions, and instances of lower subckts that pass values (expressions
-  of the parameters visible where the instance line is)
+  of the names visible at the instance line, which the new instance's own
+  names can hide, and which can lead back to the value)
 - global binned models with numeric limits (nch, pch), global binned models
   whose limits read a global parameter (gch: `lb`, which subckts shadow),
-  per-finger binning (fch, WNFLAG=1, not in ngspice decks: ngspice ignores
-  WNFLAG), and models local to a subckt whose limits read its parameters
+  a family (fch) whose models set WNFLAG (HSPICE ignores it), and models local
+  to a subckt whose limits read its parameters
+- a model family (dch) and a subckt (dcell) that some subckts define again:
+  an instance finds the nearest definition on its instance path
 - MOSFETs at the top level, and instances of the top subckts
 
---ngspice: only what ngspice reads as HSPICE does (no WNFLAG, no pow, every
-name defined at the top, so that ngspice resolves each name)
+So that the first MOSFET that HSPICE makes for a name is at the level that
+defines the name (see the known gap in src/models.rs), a MOSFET of `gch` comes
+at the top level, and one of a local model in the subckt that defines it.
+
+--ngspice: only what ngspice reads as HSPICE does (`.option wnflag=1` and no
+other WNFLAG, no pow, no dch, every name defined at the top, so that ngspice
+resolves each name)
 """
 import random
 import re
@@ -104,8 +112,11 @@ class Gen:
         L = self.lines
         L.append(f"* random parameter deck (parhier={self.parhier})")
         L.append(f".option parhier={self.parhier}")
-        if not self.ngspice and rng.random() < 0.3:
+        # (ngspice compares the total width by default; HSPICE W/NF)
+        if self.ngspice:
             L.append(".option wnflag=1")
+        elif rng.random() < 0.3:
+            L.append(f".option wnflag={rng.choice([0, 1])}")
         # global parameters: all of them in ngspice decks; else some
         if self.ngspice:
             globs = list(POOL)
@@ -130,9 +141,11 @@ class Gen:
         # limits read the global `lb`: evaluated at the top level
         L.append(".model gch.1 nmos level=54 version=4.7 lmin=1e-10 lmax='lb' wmin=1e-10 wmax=1")
         L.append(".model gch.2 nmos level=54 version=4.7 lmin='lb' lmax=1 wmin=1e-10 wmax=1")
+        self.dynamic = 1
         if not self.ngspice:
             L.append(".model fch.1 nmos level=54 version=4.7 lmin=1e-10 lmax=1 wmin=1e-10 wmax=5e-7 wnflag=1")
             L.append(".model fch.2 nmos level=54 version=4.7 lmin=1e-10 lmax=1 wmin=5e-7 wmax=1 wnflag=1")
+            self.dynamic_definitions()
         # subckts by level
         levels = rng.randint(3, 5)
         self.subckts = []  # (name, level, defaults)
@@ -145,15 +158,26 @@ class Gen:
             self.instance(f"X{i}", rng.choice(top), self.globs)
         for i in range(rng.randint(1, 3)):
             self.mosfet(f"M{i}", self.globs, None)
+        L.append("Mg d g s s gch l=1u w=1u")
         L.append("V1 d 0 1")
         L.append("V2 g 0 1")
         L.append("V3 s 0 0")
         L.append(".end")
         return "\n".join(L) + "\n"
 
+    def dynamic_definitions(self):
+        """A bin of `dch` and a subckt `dcell` of this level, that the
+        instances below see before those of the levels above"""
+        L = self.lines
+        L.append(f".model dch.{self.dynamic} nmos level=54 version=4.7 lmin=1e-10 lmax=1 wmin=1e-10 wmax=1")
+        L.append(".subckt dcell d g s")
+        L.append(f"Md d g s s dch l={self.dynamic * 10 + 100}n w=1u")
+        L.append(".ends dcell")
+        self.dynamic += 1
+
     def mosfet(self, name, names, local_model):
         rng = self.rng
-        fams = ["nch", "pch", "gch"] + ([] if self.ngspice else ["fch"])
+        fams = ["nch", "pch", "gch"] + ([] if self.ngspice else ["fch", "dch"])
         model = local_model if local_model and rng.random() < 0.5 else rng.choice(fams)
         l = self.length(names, "l")
         w = self.length(names, "w")
@@ -172,16 +196,17 @@ class Gen:
         rng = self.rng
         sname, _, defaults, inside = sub
         passed = [n for n in defaults if rng.random() < 0.5]
-        # ngspice computes a passed value with the child's own parameters
-        # hiding those of the instance's level (HSPICE: at the instance's
-        # level): its decks pass no expression of a name the child defines
+        # a value passed is computed in the new instance, where the child's
+        # own names can hide those of the line's level, and can lead back to
+        # the value (HSPICE then computes it above the new instance; ngspice
+        # does not: its decks pass no expression of a name the child defines)
         here = names
         if self.ngspice:
             names = [n for n in names if n not in defaults and n not in inside]
         vals = []
         for n in passed:
             if rng.random() < 0.5 and n in here:
-                # the same name, read where the instance is
+                # the same name: read above the new instance
                 vals.append(f"{n}={n}" if rng.random() < 0.5 else f"{n}='{n}*{num(rng, 0.6, 1.6)}'")
             else:
                 vals.append(f"{n}={self.value(n, names, own=False)}")
@@ -230,6 +255,9 @@ class Gen:
             e = self.dimless(d)
             L.append(f".model {local_model}.1 nmos level=54 version=4.7 lmin=1e-10 lmax='({e})*50n' wmin=1e-10 wmax=1")
             L.append(f".model {local_model}.2 nmos level=54 version=4.7 lmin='({e})*50n' lmax=1 wmin=1e-10 wmax=1")
+            L.append(f"Ml d g s s {local_model} l=100n w=1u")
+        if not self.ngspice and lev >= 1 and rng.random() < 0.3:
+            self.dynamic_definitions()
         nested = None
         if lev >= 1 and rng.random() < 0.25:
             nested = self.nested(f"n{name}", visible, local_model)
@@ -242,6 +270,8 @@ class Gen:
         if lower:
             for i in range(rng.randint(1, 3)):
                 self.instance(f"X{i}", rng.choice(lower), visible)
+        if not self.ngspice and rng.random() < 0.3:
+            L.append("Xd d g s dcell")
         L.append(f".ends {name}")
         self.subckts.append((name, lev, defaults, params))
 

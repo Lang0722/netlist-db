@@ -7,22 +7,32 @@ usage: pref.py DECK.sp [--subckt NAME] [--parhier local|global]
 
 Output (TSV, like `model_select`): path, L, W, NF, model or `error: ...`
 
-Rules (HSPICE):
-- A level (the top, or a subckt instance) defines parameters: the .subckt
+Rules (HSPICE, as measured with scripts/hspice_kit):
+- A level (the top, or a subckt instance) binds parameters: the .subckt
   line's defaults, then its .param statements (a later definition of a name
-  replaces an earlier one), and receives the values passed on its instance
-  line, computed at the level of that line.
-- A name is resolved from the level that reads it, upwards: with
-  parhier=local, the closest level that passes or defines it (a passed value
-  before a definition at the same level); with parhier=global, the closest
-  passed value, else the definition closest to the top. A definition is
-  evaluated at the level that holds it.
-- A model is the one of the transistor's name (the innermost level that has
-  a model of that name or bins name.N); a bin holds L and W (W/NF with
-  WNFLAG=1) if LMIN <= L < LMAX and WMIN <= W < WMAX, a value within 1e-9
-  (relative) of a limit counting as equal; the first bin that holds them is
-  chosen. The limits are evaluated where the model is defined: the top
-  level, or the subckt instance.
+  replaces an earlier one), then the values passed on its instance line.
+- A name is resolved among the levels that bind it, on the instance path:
+  with parhier=local, the closest to the reader; with parhier=global, the
+  closest to the top, also over a value passed below it. The text that wins
+  is evaluated at the level that holds it: the text of a value passed in the
+  new instance. The values passed are computed first, in the order of the
+  line. A text that reads its own name reads that name at the level above. A
+  value passed whose text leads back to it through other names is evaluated,
+  as a whole, at the level above. Any other loop is an error.
+- Functions (.param f(x)=...): the same order chooses the definition; the
+  names and the calls in its body are resolved at the level that holds it.
+- A model: at each level on the instance path, from the transistor's own up,
+  the model of the transistor's name, else the first bin base.suffix that
+  holds L and W (W/NF, unless WNFLAG=0 on the instance line or, without one,
+  .option wnflag=0); a bin holds them if LMIN <= L < LMAX and WMIN <= W < WMAX,
+  a value at most 2e-15 (relative) below a limit counting as on it. The limits
+  are evaluated at the level that defines the model. A bin needs its four
+  limits. A name with a dot is not named on an instance line; a name with two
+  dots is of no use.
+- Subckts are looked up along the instance path too.
+
+Not followed (as in netlist-db): the first MOSFET HSPICE makes that uses a
+name evaluates the limits in its own instance (see src/models.rs).
 """
 import math
 import os
@@ -81,8 +91,10 @@ def kv(tok):
 # expressions
 # --------------------------------------------------------------------------
 
-SCALE = [("meg", 1e6), ("mil", 25.4e-6), ("t", 1e12), ("g", 1e9), ("k", 1e3),
-         ("m", 1e-3), ("u", 1e-6), ("n", 1e-9), ("p", 1e-12), ("f", 1e-15), ("a", 1e-18)]
+# (by the letters that start the suffix: the first that matches)
+SCALE = [("min", 60.0), ("me", 1e6), ("mi", 25.4e-6), ("hr", 3600.0), ("day", 86400.0), ("yr", 31536000.0),
+         ("t", 1e12), ("g", 1e9), ("x", 1e6), ("k", 1e3), ("m", 1e-3), ("u", 1e-6), ("n", 1e-9), ("p", 1e-12),
+         ("f", 1e-15), ("a", 1e-18), ("z", 1e-21), ("y", 1e-24)]
 
 TOKEN = re.compile(r"\s*(?:(\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)([a-zA-Z]*)"
                    r"|([a-zA-Z_][\w]*)|(\*\*|==|!=|>=|<=|&&|\|\||[-+*/^()?:,<>!]))")
@@ -91,6 +103,11 @@ TOKEN = re.compile(r"\s*(?:(\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)([
 def number(digits, suffix):
     v = float(digits)
     s = suffix.lower()
+    # (an exponent makes the suffix void)
+    if "e" in digits.lower():
+        return v
+    if s.startswith("db"):
+        return 10.0 ** (v / 20)
     for name, f in SCALE:
         if s.startswith(name):
             return v * f
@@ -173,11 +190,19 @@ class Expr:
         return self.power()
 
     def power(self):
+        # (to the left: 2**3**2 is 64)
         base = self.atom()
-        if self.peek() in (("op", "**"), ("op", "^")):
+        while self.peek() in (("op", "**"), ("op", "^")):
             self.take()
-            return ("**", base, self.unary())
+            base = ("**", base, self.exponent())
         return base
+
+    def exponent(self):
+        """A sign right after a power takes the next operand only"""
+        if self.peek() in (("op", "-"), ("op", "+"), ("op", "!")):
+            op = self.take()[1]
+            return ("u" + op, self.exponent())
+        return self.atom()
 
     def atom(self):
         t = self.take()
@@ -202,46 +227,53 @@ class Expr:
         raise ValueError(f"unexpected {t}")
 
 
+def power(x, y):
+    """A zero base: 0; a negative base: the integer part of the exponent"""
+    if x == 0:
+        return 0.0
+    return x ** math.trunc(y) if x < 0 else x ** y
+
+
 FUNCS = {
-    "sqrt": math.sqrt, "abs": abs, "exp": math.exp, "log": math.log, "ln": math.log,
-    "log10": math.log10, "floor": math.floor, "ceil": math.ceil,
+    "sqrt": lambda x: math.copysign(math.sqrt(abs(x)), x), "abs": abs, "exp": math.exp,
+    "log": lambda x: math.copysign(1, x) * math.log(abs(x)), "ln": lambda x: math.copysign(1, x) * math.log(abs(x)),
+    "log10": lambda x: math.copysign(1, x) * math.log10(abs(x)), "floor": math.floor, "ceil": math.ceil,
     "max": max, "min": min,
     # HSPICE: x to the integer part of y
     "pow": lambda x, y: x ** math.trunc(y),
 }
 
 
-# functions defined with `.param f(a, b)='...'` (at the top level): name ->
-# (arguments, body)
-USER_FUNCS = {}
-
-
-def evaluate(tree, lookup):
+def evaluate(tree, level, local=None):
+    """`level`: the level that reads; `local`: the arguments of the function
+    being evaluated"""
     op = tree[0]
     if op == "num":
         return tree[1]
     if op == "var":
-        return lookup(tree[1])
+        if local and tree[1] in local:
+            return local[tree[1]]
+        return level.get(tree[1])
     if op == "call":
-        args = [evaluate(a, lookup) for a in tree[2]]
-        if tree[1] in USER_FUNCS:
-            names, body = USER_FUNCS[tree[1]]
-            local = dict(zip(names, args))
-            return evaluate(tree_of(body), lambda n: local[n] if n in local else lookup(n))
+        args = [evaluate(a, level, local) for a in tree[2]]
+        found = level.func(tree[1])
+        if found is not None:
+            holder, (names, body) = found
+            return evaluate(tree_of(body), holder, dict(zip(names, args)))
         return float(FUNCS[tree[1]](*args))
     if op == "?":
-        return evaluate(tree[2] if evaluate(tree[1], lookup) != 0 else tree[3], lookup)
+        return evaluate(tree[2] if evaluate(tree[1], level, local) != 0 else tree[3], level, local)
     if op == "u-":
-        return -evaluate(tree[1], lookup)
+        return -evaluate(tree[1], level, local)
     if op == "u+":
-        return evaluate(tree[1], lookup)
+        return evaluate(tree[1], level, local)
     if op == "u!":
-        return float(evaluate(tree[1], lookup) == 0)
-    a = evaluate(tree[1], lookup)
-    b = evaluate(tree[2], lookup)
+        return float(evaluate(tree[1], level, local) == 0)
+    a = evaluate(tree[1], level, local)
+    b = evaluate(tree[2], level, local)
     return {
         "+": lambda: a + b, "-": lambda: a - b, "*": lambda: a * b, "/": lambda: a / b,
-        "**": lambda: a ** b, "<": lambda: float(a < b), ">": lambda: float(a > b),
+        "**": lambda: power(a, b), "<": lambda: float(a < b), ">": lambda: float(a > b),
         "<=": lambda: float(a <= b), ">=": lambda: float(a >= b), "==": lambda: float(a == b),
         "!=": lambda: float(a != b), "&&": lambda: float(a != 0 and b != 0),
         "||": lambda: float(a != 0 or b != 0),
@@ -278,21 +310,23 @@ class Def:
         self.name = name
         self.defaults = []  # (name, text) of the .subckt line
         self.params = []  # (name, text) of .param statements
+        self.funcs = {}  # name -> (arguments, body) of .param f(a, b)='...'
         self.models = []
         self.elements = []  # ('M', name, model, {k: text}) or ('X', name, sub, [(k, text)])
         self.subckts = {}
         self._index = None
 
     def index(self):
-        """The models by name (the last of a name), and the bins `base.N`
-        of each base name, in netlist order"""
+        """The models without a dot by name (the last of a name), and the
+        bins `base.suffix` of each base name, in netlist order"""
         if self._index is None:
             exact, by_base = {}, {}
             for m in self.models:
-                exact[m.name] = m
-                b = re.fullmatch(r"(.+)\.\d+", m.name)
-                if b:
-                    by_base.setdefault(b.group(1), []).append(m)
+                base, dot, suffix = m.name.partition(".")
+                if not dot:
+                    exact[m.name] = m
+                elif base and suffix and "." not in suffix:
+                    by_base.setdefault(base, []).append(m)
             self._index = (exact, by_base)
         return self._index
 
@@ -363,7 +397,7 @@ def read(path):
                 k, v = kv(t)
                 f = re.fullmatch(r"(\w+)\((.*)\)", k)
                 if f:
-                    USER_FUNCS[f.group(1)] = ([a.strip() for a in f.group(2).split(",")], v)
+                    cur.funcs[f.group(1)] = ([a.strip() for a in f.group(2).split(",")], v)
                 else:
                     cur.params.append((k, v))
         elif head == ".subckt":
@@ -383,7 +417,11 @@ def read(path):
         elif head[0] == "m":
             params = dict(kv(t) for t in toks[1:] if "=" in t)
             words = [t for t in toks[1:] if "=" not in t]
-            cur.elements.append(("M", toks[0], words[4].lower(), params))
+            # the numbers after the model name: L, then W (a keyword wins)
+            model = max(i for i, t in enumerate(words) if not re.match(r"[-+.\d]", t))
+            for key, value in zip(("l", "w"), words[model + 1:]):
+                params.setdefault(key, value)
+            cur.elements.append(("M", toks[0], words[model].lower(), params))
         elif head[0] == "x":
             words = [t for t in toks[1:] if "=" not in t]
             passed = [kv(t) for t in toks[1:] if "=" in t]
@@ -406,9 +444,16 @@ class Level:
             self.defs[k] = v
         for k, v in d.params:
             self.defs[k] = v
-        self.passed = passed  # name -> value or exception
+        self.funcs = d.funcs
+        self.passed = dict(passed)  # name -> text
         self.cache = {}
-        self.active = set()
+        self.active = []
+        # the values passed, in the order of the line
+        for name in self.passed:
+            try:
+                self.get(name)
+            except Exception:  # noqa: BLE001 - an error matters when it is read
+                pass
 
     def chain(self):
         lv = self
@@ -416,32 +461,34 @@ class Level:
             yield lv
             lv = lv.parent
 
+    def choose(self, levels):
+        """Among `levels`, from this level up, the one that parhier takes"""
+        if not levels:
+            return None
+        return levels[0] if self.parhier == "local" else levels[-1]
+
+    def find(self, name):
+        return self.choose([lv for lv in self.chain() if name in lv.passed or name in lv.defs])
+
     def get(self, name):
-        if self.parhier == "local":
-            for lv in self.chain():
-                if name in lv.passed:
-                    return lv.value_passed(name)
-                if name in lv.defs:
-                    return lv.value_here(name)
-        else:
-            for lv in self.chain():
-                if name in lv.passed:
-                    return lv.value_passed(name)
-            highest = None
-            for lv in self.chain():
-                if name in lv.defs:
-                    highest = lv
-            if highest is not None:
-                return highest.value_here(name)
+        lv = self.find(name)
+        if lv is not None:
+            try:
+                return lv.value_here(name)
+            except Recursive as e:
+                # a text that reads its own name: the name at the level above
+                above = self.parent.find(name) if self.parent else None
+                if e.args[0] == name and self.active[-1:] == [name] and above is not None:
+                    return above.value_here(name)
+                raise
         if name == "pi":
             return math.pi
         raise KeyError(f"undefined parameter {name}")
 
-    def value_passed(self, name):
-        v = self.passed[name]
-        if isinstance(v, Exception):
-            raise v
-        return v
+    def func(self, name):
+        """(the level that holds the function, the function), or None"""
+        lv = self.choose([lv for lv in self.chain() if name in lv.funcs])
+        return None if lv is None else (lv, lv.funcs[name])
 
     def value_here(self, name):
         if name in self.cache:
@@ -451,19 +498,31 @@ class Level:
             return v
         if name in self.active:
             raise Recursive(name)
-        self.active.add(name)
+        self.active.append(name)
+        looped = None
         try:
-            v = self.eval(self.defs[name])
+            v = self.eval(self.passed[name] if name in self.passed else self.defs[name])
+        except Recursive as e:
+            looped = e
         except Exception as e:  # noqa: BLE001 - the error is the value
             v = e
-        self.active.discard(name)
+        self.active.pop()
+        if looped is not None:
+            # a value passed whose text leads back to it: as a whole, above
+            if looped.args[0] != name or name not in self.passed or self.parent is None:
+                raise looped  # (not kept: read later, this name may have a value)
+            try:
+                v = self.parent.eval(self.passed[name])
+            except Exception:  # noqa: BLE001 - the error is the value
+                v = Recursive(name)
+                raise v
         self.cache[name] = v
         if isinstance(v, Exception):
             raise v
         return v
 
     def eval(self, text):
-        v = evaluate(tree(text), self.get)
+        v = evaluate(tree(text), self)
         if not math.isfinite(v):
             raise ValueError(f"not finite: {text}")
         return v
@@ -478,8 +537,8 @@ def within(x, lo, hi):
         # limit, or strictly inside
         eq = lambda a, b: b is not None and abs(a - b) < 1e-9  # noqa: E731
         return eq(x, lo) or eq(x, hi) or ((lo is None or lo < x) and (hi is None or x < hi))
-    tol = lambda v: abs(v) * 1e-9  # noqa: E731
-    return (lo is None or x >= lo - tol(lo)) and (hi is None or x < hi - tol(hi))
+    tol = lambda v: abs(v) * 2e-15  # noqa: E731
+    return x >= lo - tol(lo) and x < hi - tol(hi)
 
 
 LIMITS = {}
@@ -489,42 +548,36 @@ OPTIONS = {}
 
 
 def choose(mname, l, w, nf, scopes, inst_wnflag=None):
-    """`scopes`: (definition, level) from the transistor's own outwards"""
-    key = mname.lower()
+    """`scopes`: (definition, level) on the instance path, the transistor's
+    own first"""
+    name = mname.lower()
+    seen = 0
+    # the instance's WNFLAG, else .option wnflag, else the width per finger
+    flag = float(OPTIONS.get("wnflag", "1")) != 0 if inst_wnflag is None else inst_wnflag != 0
+    weff = w / nf if flag and nf > 0 else w
     for d, lv in scopes:
         exact, by_base = d.index()
-        if key in exact:
-            return exact[key].name
-        bins = by_base.get(key, [])
-        if not bins:
-            continue
+        if name in exact:
+            return exact[name].name
+        bins = by_base.get(name, [])
+        if any(k not in m.params for m in bins for k in ("lmin", "lmax", "wmin", "wmax")):
+            return f"error: a bin of {name} without its four limits"
         # ngspice tries the models last defined first
         for m in (reversed(bins) if NGSPICE_RULE else bins):
             # (the level is kept with its limits: its id stays its own)
             key = (id(m), id(lv))
             if key not in LIMITS:
-                lim = {}
-                for k in ("lmin", "lmax", "wmin", "wmax", "wnflag"):
-                    lim[k] = lv.eval(m.params[k]) if k in m.params else None
+                lim = {k: lv.eval(m.params[k]) for k in ("lmin", "lmax", "wmin", "wmax")}
                 LIMITS[key] = (lv, lim)
             lim = LIMITS[key][1]
-            # the instance's WNFLAG, else the model's, else .option wnflag
-            if inst_wnflag is not None:
-                flag = inst_wnflag != 0
-            elif lim["wnflag"] is not None:
-                flag = lim["wnflag"] != 0
-            else:
-                flag = float(OPTIONS.get("wnflag", "0")) != 0
-            weff = w / nf if flag and nf > 0 else w
             if within(l, lim["lmin"], lim["lmax"]) and within(weff, lim["wmin"], lim["wmax"]):
                 return m.name
-        return f"error: no bin of {key}"
-    return f"error: no model {key}"
+        seen += len(bins)
+    return f"error: no bin of {name}" if seen else f"error: no model {name}"
 
 
 def walk(d, lv, scopes, path, out):
-    """`scopes`: (definition, level) of the definitions around `d`, `d`'s
-    own first"""
+    """`scopes`: (definition, level) on the instance path, `d`'s own first"""
     for el in d.elements:
         if el[0] == "M":
             _, name, mname, params = el
@@ -540,23 +593,12 @@ def walk(d, lv, scopes, path, out):
                 out.append((".".join(p), None, None, None, f"error: {e}"))
         else:
             _, name, sub, passed = el
-            # the definition: in the innermost scope that has it
-            sd = None
-            depth = None
-            for i, (dd, _) in enumerate(scopes):
-                if sub in dd.subckts:
-                    sd, depth = dd.subckts[sub], i
-                    break
+            # the definition: the nearest on the instance path
+            sd = next((dd.subckts[sub] for dd, _ in scopes if sub in dd.subckts), None)
             if sd is None:
                 continue
-            values = {}
-            for k, v in passed:
-                try:
-                    values[k] = lv.eval(v)
-                except Exception as e:  # noqa: BLE001
-                    values[k] = e
-            child = Level(lv, sd, values, lv.parhier)
-            walk(sd, child, [(sd, child)] + scopes[depth:], path + [name], out)
+            child = Level(lv, sd, passed, lv.parhier)
+            walk(sd, child, [(sd, child)] + scopes, path + [name], out)
 
 
 def main():
