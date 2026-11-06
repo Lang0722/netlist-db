@@ -107,7 +107,7 @@ impl ParseManager {
                 done_tx: StdMutex::new(Some(tx)),
                 file_storage: Mutex::new(FileStorage::default()),
                 lib_text: Mutex::new(HashMap::new()),
-                open_files: Semaphore::new(super::MAX_OPEN_FILES),
+                open_files: Semaphore::new(super::include::MAX_OPEN_FILES),
                 lib_override,
                 lib_override_matched,
                 skip_prot: opts.skip_prot,
