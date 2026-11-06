@@ -5496,3 +5496,23 @@ fn short_row_of_a_measure_table() {
     let (_, b) = cols.next().unwrap();
     assert_eq!(b.collect::<Vec<_>>(), [Some(2.0), None]);
 }
+
+/// A file that two lines read keeps its statements for the second read, and so
+/// does a file that it reads.
+#[tokio::test]
+async fn file_read_twice_keeps_its_statements() {
+    let (_dir, parsed, files) = parse_text(&[
+        (
+            "top.sp",
+            "R1 a b 1\n.inc 'twice.sp'\n.inc 'once.sp'\n.inc 'twice.sp'\n",
+        ),
+        ("twice.sp", "R2 a b 1\n.inc 'leaf.sp'\n"),
+        ("leaf.sp", "R3 a b 1\n"),
+        ("once.sp", "R4 a b 1\n"),
+    ])
+    .await;
+    let (ast, has_err) = files.build(parsed);
+    let names: Vec<&str> = ast.instance.iter().map(|i| &*i.name).collect();
+    assert!(!has_err);
+    assert_eq!(names, ["R1", "R2", "R3", "R4", "R2", "R3"]);
+}

@@ -48,7 +48,7 @@ pub use err::{ParseError, ParseErrorInner};
 use indexmap::IndexMap;
 pub use parser::{LibOverride, ParseOptions, TitleLine};
 pub use span::{FileId, ParsedId, Pos, Span};
-use std::collections::HashMap;
+use std::{collections::HashMap, mem};
 
 #[derive(Debug)]
 pub struct Parsed {
@@ -365,12 +365,18 @@ impl<'a, 's> Target<'a, 's> {
 /// reports to.
 struct BuildCtx<'s, 'p> {
     files: &'s Files,
-    parsed_inner: &'p [(FileId, ASTBuilder)],
     reporter: Reporter,
     /// The files being built (by `ParsedId`), the top file first, each
     /// with the include line in it that is followed: an include of one of
     /// them is an include cycle.
     reading: Vec<(usize, Option<Pos>)>,
+    /// The name of each parsed file
+    file_ids: &'p [FileId],
+    /// The parse of each file. A walk takes a file's parse out, to follow it, and
+    /// puts it back when the file can come again.
+    builders: Vec<ASTBuilder>,
+    /// How many lines read each file (with one for each time it is a top file)
+    reads: Vec<u32>,
     /// How much text the walk can still take in: see
     /// [`parser::expanded_text_limit`]. `None`: past the limit, and reported.
     room: Option<usize>,
@@ -390,13 +396,17 @@ impl ast::ASTBuilder {
     ///
     /// The child ASTs are built in place in `ast.subckt`, so that a level of
     /// recursion uses little stack.
-    fn build<'s>(
-        &self,
+    ///
+    /// `once`: this parse is not read again, so its statements can move out. The
+    /// memory of a big netlist then stays near the size of one tree, not two.
+    fn build<'s, 'p>(
+        &mut self,
         to: &mut Target<'_, 's>,
-        cx: &mut BuildCtx<'s, '_>,
-        file_id: &FileId,
+        cx: &mut BuildCtx<'s, 'p>,
+        file_id: &'p FileId,
         parsed_id: ParsedId,
         depth: usize,
+        once: bool,
     ) {
         let file: &'s str = &cx.files.inner[parsed_id.0];
         // HSPICE: the netlist of a file ends at its first `.alter` line. What
@@ -405,7 +415,7 @@ impl ast::ASTBuilder {
         // verbatim in one `unknwon` entry, and the later `.alter` lines are
         // only counted.
         let mut after_alter = false;
-        for seg in &self.segments {
+        for seg in &mut self.segments {
             if after_alter && !matches!(seg, ast::Segment::Alter { .. }) {
                 continue;
             }
@@ -414,7 +424,7 @@ impl ast::ASTBuilder {
                 ast::Segment::Local(_) | ast::Segment::Include { .. } if to.deep > 0 => {}
                 ast::Segment::Local(local_ast) => {
                     let depth = depth + to.open.len();
-                    for s in &local_ast.subckt {
+                    for s in &mut local_ast.subckt {
                         if depth >= parser::MAX_NESTING {
                             let err = err::ParseErrorInner::NestingTooDeep {
                                 keyword: err::def_keyword(file, s.name.start),
@@ -436,14 +446,16 @@ impl ast::ASTBuilder {
                             file_id,
                         );
                         let mut body = Target::new(child);
-                        s.ast.build(&mut body, cx, file_id, parsed_id, depth + 1);
+                        s.ast
+                            .build(&mut body, cx, file_id, parsed_id, depth + 1, once);
                         let end = Some(Pos {
                             start: s.name.start,
                             line_num: s.name.line_num,
                         });
                         body.close_all(end, &mut cx.reporter, file, file_id);
                     }
-                    build_statements(local_ast, to.current(), &mut cx.reporter, file, file_id);
+                    let reporter = &mut cx.reporter;
+                    build_statements(local_ast, to.current(), reporter, file, file_id, once);
                 }
                 ast::Segment::Cond { line, pos } => {
                     to.line(line, *pos, depth, &mut cx.reporter, file, file_id);
@@ -481,15 +493,20 @@ impl ast::ASTBuilder {
                             let chain = cx
                                 .reading
                                 .iter()
-                                .map(|&(r, at)| (cx.parsed_inner[r].0.clone(), at))
+                                .map(|&(r, at)| (cx.file_ids[r].clone(), at))
                                 .collect();
                             let e = err::ParseErrorInner::CircularDefinition(chain, k).with(*pos);
                             cx.reporter.report(&e, file_id, file);
                             continue;
                         }
                         cx.reading.push((id.0, None));
-                        let (file_id, _ast) = &cx.parsed_inner[id.0];
-                        _ast.build(to, cx, file_id, *id, depth);
+                        let file_ids = cx.file_ids;
+                        let once = once && cx.reads[id.0] == 1;
+                        let mut parse = mem::take(&mut cx.builders[id.0]);
+                        parse.build(to, cx, &file_ids[id.0], *id, depth, once);
+                        if !once {
+                            cx.builders[id.0] = parse;
+                        }
                         cx.reading.pop();
                     }
                     Some(Err(e)) => cx.reporter.report(e, file_id, file),
@@ -556,51 +573,93 @@ fn new_subckt<'s, 'a>(
 /// in the frame of the recursive `ASTBuilder::build`.
 #[inline(never)]
 fn build_statements<'s>(
-    local_ast: &ast::LocalAST,
+    local_ast: &mut ast::LocalAST,
     ast: &mut AST<'s>,
     reporter: &mut Reporter,
     file: &'s str,
     file_id: &FileId,
+    once: bool,
 ) {
     use builder::Builder as _;
     if ast.title.is_none() {
         ast.title = local_ast.title.build(file);
     }
-    ast.instance
-        .extend(local_ast.instance.iter().map(|b| b.build(file)));
-    ast.model
-        .extend(local_ast.model.iter().map(|b| b.build(file)));
-    ast.param
-        .extend(local_ast.param.iter().map(|b| b.build(file)));
-    ast.param_func
-        .extend(local_ast.param_func.iter().map(|b| b.build(file)));
-    ast.global
-        .extend(local_ast.global.iter().map(|b| b.build(file)));
+    add_statements(&mut ast.instance, &mut local_ast.instance, file, once);
+    add_statements(&mut ast.model, &mut local_ast.model, file, once);
+    add_statements(&mut ast.param, &mut local_ast.param, file, once);
+    add_statements(&mut ast.param_func, &mut local_ast.param_func, file, once);
+    add_statements(&mut ast.global, &mut local_ast.global, file, once);
     ast.protected.extend(local_ast.protected.iter().copied());
-    ast.option
-        .extend(local_ast.option.iter().map(|b| b.build(file)));
-    ast.general
-        .extend(local_ast.general.iter().map(|b| b.build(file)));
-    ast.data
-        .extend(local_ast.data.iter().map(|b| b.build(file)));
-    ast.init_condition
-        .extend(local_ast.init_condition.iter().map(|b| b.build(file)));
-    ast.nodeset
-        .extend(local_ast.nodeset.iter().map(|b| b.build(file)));
-    ast.unknwon
-        .extend(local_ast.unknwon.iter().map(|b| b.build(file)));
+    add_statements(&mut ast.option, &mut local_ast.option, file, once);
+    add_statements(&mut ast.general, &mut local_ast.general, file, once);
+    add_statements(&mut ast.data, &mut local_ast.data, file, once);
+    add_statements(
+        &mut ast.init_condition,
+        &mut local_ast.init_condition,
+        file,
+        once,
+    );
+    add_statements(&mut ast.nodeset, &mut local_ast.nodeset, file, once);
+    add_statements(&mut ast.unknwon, &mut local_ast.unknwon, file, once);
     for e in &local_ast.errors {
         reporter.report(e, file_id, file);
+    }
+}
+
+/// Adds the statements `from` to `to`. With `once`, each one moves out of `from`:
+/// its memory is free when it is built. The first list of a level takes the
+/// memory of `from` (a `Vec` that is collected from its own values reuses it).
+fn add_statements<'s, B: builder::Builder<'s>>(
+    to: &mut Vec<B::Out>,
+    from: &mut Vec<B>,
+    file: &'s str,
+    once: bool,
+) {
+    if !once {
+        to.extend(from.iter().map(|b| b.build(file)));
+    } else if to.is_empty() {
+        *to = mem::take(from).into_iter().map(|b| b.build(file)).collect();
+    } else {
+        to.extend(mem::take(from).into_iter().map(|b| b.build(file)));
+    }
+}
+
+/// Adds to `reads` the lines of `parse` that read a file
+fn count_reads(parse: &ASTBuilder, reads: &mut [u32]) {
+    for seg in &parse.segments {
+        match seg {
+            ast::Segment::Local(local_ast) => {
+                for s in &local_ast.subckt {
+                    count_reads(&s.ast, reads);
+                }
+            }
+            ast::Segment::Include { res, .. } => {
+                if let Some(Ok(id)) = res.get() {
+                    reads[id.0] += 1;
+                }
+            }
+            ast::Segment::Cond { .. } | ast::Segment::Alter { .. } => {}
+        }
     }
 }
 
 impl Files {
     #[inline]
     pub fn build(&self, parsed: Parsed) -> (AST<'_>, bool) {
+        let (file_ids, builders): (Vec<_>, Vec<_>) = parsed.inner.into_iter().unzip();
+        let mut reads = vec![0; builders.len()];
+        for top_id in &parsed.top_ids {
+            reads[top_id.0] += 1;
+        }
+        for parse in &builders {
+            count_reads(parse, &mut reads);
+        }
         let mut ast = AST::default();
         let mut cx = BuildCtx {
             files: self,
-            parsed_inner: &parsed.inner,
+            file_ids: &file_ids,
+            builders,
+            reads,
             reporter: Reporter::default(),
             reading: Vec::new(),
             room: Some(parser::expanded_text_limit(
@@ -610,18 +669,23 @@ impl Files {
         let mut to = Target::new(&mut ast);
         let mut last = None;
         for top_id in parsed.top_ids {
-            let (file_id, _ast) = &parsed.inner[top_id.0];
+            let once = cx.reads[top_id.0] == 1;
+            let mut parse = mem::take(&mut cx.builders[top_id.0]);
             cx.reading.push((top_id.0, None));
-            _ast.build(&mut to, &mut cx, file_id, top_id, 0);
+            parse.build(&mut to, &mut cx, &file_ids[top_id.0], top_id, 0, once);
             cx.reading.pop();
-            last = Some((top_id, file_id));
+            last = Some((top_id, parse.after_end));
+            if !once {
+                cx.builders[top_id.0] = parse;
+            }
         }
-        if let Some((top_id, file_id)) = last {
-            let line = parsed.inner[top_id.0].1.after_end.map(|end| Pos {
+        if let Some((top_id, after_end)) = last {
+            let line = after_end.map(|end| Pos {
                 start: 0,
                 line_num: end.line,
             });
-            to.close_all(line, &mut cx.reporter, &self.inner[top_id.0], file_id);
+            let (file, file_id) = (&self.inner[top_id.0], &file_ids[top_id.0]);
+            to.close_all(line, &mut cx.reporter, file, file_id);
         }
         (ast, cx.reporter.finish())
     }
