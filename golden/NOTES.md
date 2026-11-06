@@ -580,6 +580,16 @@ rules of this section. `src/eval.rs` (model selector) does.
 The machine was a VM with 6.4 GB. HSPICE cannot flatten 1M MOSFETs or more under the cap,
 so the larger decks were checked against the closed-form counts of their generators.
 
+### Round 47: the forms and limits of the parser repairs (`forms47.py`, P-2019.06-SP1-1)
+
+- A `\` line after a `$` in a name (`ds_name`, `ds_value`): the line goes on, and `ds_word`, `ds_num`: a `$` that starts a comment hides the `\`. netlist-db agrees on all four.
+- Short forms of `.unprot`: HSPICE ends a plain `.prot` region at `.unpr` (`pl_unpr`), and its own warning names `.unpr` (`fl_noend`: ".prot and .unpr not matched"). netlist-db ends a `.prot freelib` block at each short form, and a block with no end is an error. The text of these test blocks is not encrypted, so HSPICE stops at it ("Error in encrypted blocks"). netlist-db skips the block.
+- Bytes that are not UTF-8, outside comments: this HSPICE on Windows reads each such byte as white space. `.subckt \xe9 d g` defines the subckt `d` (`b_subckt` stops: "duplicated subckt definition 'd'"), and `.param p\xe9=1u p\xe8=2u` sets `p` twice (`b_param`: L=W=2u). This looks like an accident of the character tables, and it can differ on other systems. So netlist-db does not copy it. Each byte value stays one private character in the name, so the names stay apart, and the warning `non_utf8` says that the file has such bytes.
+- Long expressions: `e_sum_1000` and `e_pow_1000` agree. With 30000 terms HSPICE writes an empty listing and no message (`e_sum_30000`, `e_pow_30000`). netlist-db gives the value.
+- Functions that fan out: HSPICE gives the value at 26 levels, 2^26 calls (`fn_fan_26`: L=67.1089m). netlist-db keeps the result of each call during one evaluation, so it agrees at each depth measured. Calls that each give new values stop after 2^22 different calls, with an error. This limit is ours.
+- Chains of includes: HSPICE reads 1000 files (`i_chain_1000`). netlist-db follows 1100, and the next include is an error, because its walks recurse. On a stack of 2 MB the release build reads `i_chain_1000`.
+- Diamonds of includes: `i_dia_10` and `i_dia_16` agree. HSPICE did not end `i_dia_20` in 140 s. netlist-db stops at 1 GB of expanded text plus 16 times the size of the files, with an error. This limit is ours. The deck of 40 levels takes 6 s and 2.6 GB before the stop.
+
 ## Known differences
 
 HSPICE rejects each deck below, and the loader gives no Error for it
