@@ -1,4 +1,4 @@
-use super::super::utils::{Blocks, local_ast};
+use super::super::{blocks::Blocks, statement::local_ast};
 use super::instance;
 use crate::{
     ast::{KeyValue, Value},
@@ -295,7 +295,10 @@ fn comment_only_plus_lines() {
 fn no_continuation_agrees_with_parser() {
     // `no_continuation` is a quick test. When it is true, no token and
     // no `key=value` parameter follows, and the statement ends there.
-    use super::super::utils::{key_value_str, multiline_sep, statement_end};
+    use super::super::{
+        statement::statement_end,
+        tokens::{key_value_str, multiline_sep},
+    };
     use super::{no_continuation, rcl_item};
     use nom::Parser as _;
     for (rest, want) in [
@@ -1061,7 +1064,7 @@ fn digit_first_model() {
     let text = ".model 5vnmos nmos level=1\n.model n5v nmos level=1\n";
     let i = span(text, 0);
     let mut ast = crate::ast::LocalAST::default();
-    super::super::utils::local_ast(i, None, &Blocks::new(i), &mut ast);
+    super::super::statement::local_ast(i, None, &Blocks::new(i), &mut ast);
     assert_eq!(ast.errors.len(), 1);
     assert_eq!(
         ast.errors[0].err.to_string(),

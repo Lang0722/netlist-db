@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::{
     BEGIN_TITLE,
-    utils::{name_str, space, space_newline},
+    tokens::{name_str, space, space_newline},
 };
 use crate::{err::ParseError, span::LocatedSpan};
 use nom::{
@@ -21,7 +21,7 @@ const FAILED_MEAS: &str = "failed";
 #[inline]
 fn float(i: LocatedSpan) -> IResult<LocatedSpan, Option<f64>> {
     alt((
-        map(super::utils::float, Some),
+        map(super::tokens::float, Some),
         map(tag(FAILED_MEAS), |_| None),
     ))
     .parse_complete(i)

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::{
     BEGIN_TITLE,
-    utils::{name_str, space, space_newline},
+    tokens::{name_str, space, space_newline},
 };
 use crate::{err::ParseError, span::LocatedSpan};
 use nom::{

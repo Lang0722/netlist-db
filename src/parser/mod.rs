@@ -1,3 +1,4 @@
+mod blocks;
 mod cmds;
 mod data_mc;
 pub use data_mc::*;
@@ -7,23 +8,24 @@ mod data_sweep;
 pub use data_sweep::*;
 mod instance;
 mod manager;
-mod measure;
-mod utils;
+mod statement;
+mod tokens;
 
 use alloc::sync::Arc;
+use blocks::Blocks;
 use manager::{Include, ParseManager};
 use nom::Input as _;
 #[cfg(test)]
 use regex::Regex;
+pub use statement::{MAX_NESTING, canonical_cmd};
+use statement::{Open, Step, local_ast, skip_statement};
 use std::{
     collections::HashSet,
     mem,
     path::{Path, PathBuf},
     sync::OnceLock,
 };
-use utils::{Blocks, Open, Step, local_ast, skip_statement};
-pub use utils::{MAX_NESTING, canonical_cmd};
-pub(crate) use utils::{is_formula_text, is_number_list, number_prefix};
+pub(crate) use tokens::{is_formula_text, is_number_list, number_prefix};
 
 use super::{
     Files, Parsed,
@@ -258,7 +260,7 @@ impl<'a> Level<'a> {
 ///
 /// The open `.subckt` bodies are a list here, not calls on the stack, so
 /// deep nesting does not use stack space; `MAX_NESTING` still limits the
-/// depth (see `utils::subckt_header`). Each body ends at its `.ends`. A
+/// depth (see `statement::subckt_header`). Each body ends at its `.ends`. A
 /// body that reaches the end of input (or `.end`) without `.ends` keeps the
 /// rest of the input and records an error at its `.subckt`.
 #[inline]
@@ -824,7 +826,7 @@ async fn _include(
     let mut head = LocalAST::default();
     head.errors.extend(encoding_note);
     head.errors.extend(plus_after_title);
-    if not_dot_title && let Some((rest, title, element)) = utils::title_line(i) {
+    if not_dot_title && let Some((rest, title, element)) = statement::title_line(i) {
         if element {
             head.errors.push(ParseErrorInner::TitleIsElement.record(i));
         }
@@ -942,7 +944,7 @@ fn join_continued_lines(text: String) -> String {
         }
         let mut dollar_comment = false;
         // whether the word here starts with a letter: a `$` in such a word is
-        // in a name (see `utils::dollar_in_name`)
+        // in a name (see `tokens::dollar_in_name`)
         let mut in_name = None;
         for c in body.chars() {
             match c {

@@ -3,7 +3,7 @@ use crate::{
     span::{LocatedSpan, Span},
 };
 
-use super::super::parser::utils::{loss_sep, multiline_sep, name, name_str, v, value};
+use super::tokens::{loss_sep, multiline_sep, name, name_str, v, value};
 use nom::{
     IResult, Parser,
     branch::alt,

@@ -385,9 +385,9 @@ async fn failed_blocks_linear() {
         ("linear_no_enddata", no_enddata, 1),
         ("linear_data_in_body", data_in_body, 2),
     ] {
-        let before = utils::BLOCK_SCANS.with(|n| n.get());
+        let before = blocks::BLOCK_SCANS.with(|n| n.get());
         let (parsed, _) = parse_text(tag, &text).await;
-        let after = utils::BLOCK_SCANS.with(|n| n.get());
+        let after = blocks::BLOCK_SCANS.with(|n| n.get());
         assert_eq!(errors(&parsed).len(), K, "{tag}");
         // A skip that scans the rest of the file again for each failure
         // makes `K` passes (in a debug build it took 18 s here).

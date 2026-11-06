@@ -1,7 +1,8 @@
-use super::utils::{
+use super::statement::{ports_params, statement_end};
+use super::tokens::{
     assigned_value, close_parens, continuation, equal, group_value, integer, key_str, key_value,
     key_value_str, loss_sep, mos_sep, multiline_sep, name, name_char, name_str, node_sep,
-    plus_line_after, ports_params, space, space1, span_text, statement_end, trailing_delims, value,
+    plus_line_after, space, space1, span_text, trailing_delims, value,
 };
 use crate::{
     ast::{KeyValueBuilder, ValueBuilder},

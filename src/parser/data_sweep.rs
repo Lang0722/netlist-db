@@ -19,7 +19,7 @@ use tokio::fs::read_to_string;
 
 use crate::{err::ParseError, span::LocatedSpan};
 
-use super::utils::{name_str, space_newline};
+use super::tokens::{name_str, space_newline};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum DataType {
