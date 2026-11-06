@@ -27,10 +27,13 @@ where
 extern crate alloc;
 pub mod ast;
 pub mod eval;
+pub mod hierarchy;
 pub mod instance;
 pub mod models;
 pub mod parser;
-pub mod utlis;
+/// The old, misspelled name of [`hierarchy`]
+#[doc(hidden)]
+pub use hierarchy as utlis;
 
 pub mod _impl_display;
 mod builder;

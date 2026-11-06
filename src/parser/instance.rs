@@ -1344,7 +1344,12 @@ fn pwl_points(mut i: LocatedSpan) -> IResult<LocatedSpan, (Points, Vec<KeyValueB
     if coords.is_empty() || coords.len() % 2 != 0 {
         return fail(base, ErrorKind::Verify);
     }
-    let points = coords.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+    let points = coords
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| (c[0], c[1]))
+        .collect();
     Ok((i, (points, params)))
 }
 

@@ -37,7 +37,7 @@ impl Drop for TempDir {
 }
 
 async fn parse_files(paths: &[PathBuf]) -> (Parsed, Files) {
-    crate::utlis::test::init_logger();
+    crate::hierarchy::test::init_logger();
     parse_top_multi(
         paths
             .iter()
@@ -3164,7 +3164,7 @@ async fn if_params_follow_the_order_of_the_file() {
         (format!(".if (0)\n.param q=2u\n.endif\n.param q=1u\n{use_q}"), 1.0),
         (format!("{}{}{use_q}", b("1u"), b("2u")), 2.0),
         // a text read later
-        (format!(".if (1)\n.param r='q*2'\n.endif\n.param q=1u\nM1 d g 0 0 n l=r w=1u\n"), 2.0),
+        (".if (1)\n.param r='q*2'\n.endif\n.param q=1u\nM1 d g 0 0 n l=r w=1u\n".to_string(), 2.0),
         (format!(".param q=1u\n.param r='q*2'\n{}M1 d g 0 0 n l=r w=1u\n", b("2u")), 4.0),
         // nested blocks
         (format!(".if (1)\n{}.param q=1u\n.endif\n{use_q}", b("2u")), 1.0),
@@ -3228,9 +3228,7 @@ async fn if_params_of_an_instance() {
 /// block. Bins keep the order of the file across a branch and the level.
 #[tokio::test]
 async fn if_models_and_subckts_in_a_branch() {
-    let text = format!(
-        "* t\nM1 d g 0 0 q l=1u w=1u\n.if (1)\n.model q nmos level=54\n.else\n.model q pmos level=54\n.endif\n"
-    );
+    let text = "* t\nM1 d g 0 0 q l=1u w=1u\n.if (1)\n.model q nmos level=54\n.else\n.model q pmos level=54\n.endif\n".to_string();
     let (has_err, rows) = if_deck(&text).await;
     assert!(!has_err);
     assert_eq!(rows, pairs(&[("M1", "q")]));

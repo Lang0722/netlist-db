@@ -89,10 +89,10 @@ impl<'a> Iterator for MeasCols<'a> {
             let name = self.names[i];
             self.idx += 1;
 
-            if let Some(p) = self.prefix {
-                if !name.starts_with(p) {
-                    continue;
-                }
+            if let Some(p) = self.prefix
+                && !name.starts_with(p)
+            {
+                continue;
             }
 
             return Some((
@@ -136,10 +136,9 @@ pub fn data_meas_csv(path: PathBuf, s: &str) -> Option<(Vec<&str>, Vec<Vec<Optio
 
 #[test]
 fn sim_mt0_csv() {
-    crate::utlis::test::init_logger();
+    crate::hierarchy::test::init_logger();
     const DATA: &str = include_str!("../../tests/sim.mt0.csv");
-    let (names, value_table) =
-        data_meas_csv(PathBuf::from("tests/sim.mt0.csv"), DATA.into()).unwrap();
+    let (names, value_table) = data_meas_csv(PathBuf::from("tests/sim.mt0.csv"), DATA).unwrap();
     for (k, v) in MeasCols::new(names, &value_table, Some("kcell")) {
         dbg!(k, v.collect::<Vec<_>>());
     }

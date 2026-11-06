@@ -127,6 +127,7 @@ fn float(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
 const SWEEP_FLAG: &str = "sweep";
 const TERMINATION: &str = "$&%#";
 
+#[expect(clippy::result_unit_err, reason = "the error is logged")]
 #[inline]
 pub async fn data_sweep(path: PathBuf) -> Result<HashMap<DataName, Vec<f64>>, ()> {
     match read_to_string(&path).await {
@@ -179,7 +180,7 @@ fn data_sweep_nom(i: LocatedSpan) -> IResult<LocatedSpan, HashMap<DataName, Vec<
 
 #[tokio::test]
 async fn sim_sw0() {
-    crate::utlis::test::init_logger();
+    crate::hierarchy::test::init_logger();
     const DATA: &str = include_str!("../../tests/sim.sw0");
     _ = dbg!(data_sweep_nom(DATA.into()));
     _ = dbg!(data_sweep("tests/sim.sw0".into()).await);

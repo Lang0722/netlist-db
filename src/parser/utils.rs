@@ -85,10 +85,10 @@ pub(super) fn multiline_sep<'a, T>(
 pub(super) fn loss_sep(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
     let (j, s) = space(i)?;
     // (a continuation can only start with one of these, after the spaces)
-    if j.fragment().starts_with(['\n', '$', '*', '+']) {
-        if let Ok(ok) = recognize(continuation).parse_complete(i) {
-            return Ok(ok);
-        }
+    if j.fragment().starts_with(['\n', '$', '*', '+'])
+        && let Ok(ok) = recognize(continuation).parse_complete(i)
+    {
+        return Ok(ok);
     }
     Ok((j, s))
 }
@@ -173,7 +173,7 @@ pub(crate) fn is_number_list(s: &str) -> bool {
 }
 
 #[inline]
-pub(super) fn key_str(i: LocatedSpan) -> IResult<LocatedSpan, (&str, Span)> {
+pub(super) fn key_str(i: LocatedSpan<'_>) -> IResult<LocatedSpan<'_>, (&str, Span)> {
     map(take_while1(is_key), |s: LocatedSpan| {
         let _s: &str = s.fragment();
         (_s, s.into())
@@ -324,7 +324,7 @@ pub(super) fn integer(i: LocatedSpan) -> IResult<LocatedSpan, usize> {
 }
 
 #[inline]
-pub(super) fn path_str(i: LocatedSpan) -> IResult<LocatedSpan, &str> {
+pub(super) fn path_str(i: LocatedSpan<'_>) -> IResult<LocatedSpan<'_>, &str> {
     map(
         alt((quoted_path, take_while1(is_path))),
         |s: LocatedSpan| {
@@ -349,7 +349,7 @@ pub(super) fn name(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
 }
 
 #[inline]
-pub(super) fn name_str(i: LocatedSpan) -> IResult<LocatedSpan, (&str, Span)> {
+pub(super) fn name_str(i: LocatedSpan<'_>) -> IResult<LocatedSpan<'_>, (&str, Span)> {
     map(name_span, |s: LocatedSpan| {
         let _s: &str = s.fragment();
         (_s, s.into())
@@ -884,11 +884,11 @@ pub(super) fn key_value(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder>
 /// `name=OPTxxx(init, min, max)` (the value is `OPTxxx(init, min, max)`).
 fn param_assignment(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
     let (mut i, mut k) = name(i)?;
-    if i.fragment().starts_with('(') {
-        if let Some(len) = balanced_group(i.fragment()) {
-            k.end += len;
-            i = i.take_from(len);
-        }
+    if i.fragment().starts_with('(')
+        && let Some(len) = balanced_group(i.fragment())
+    {
+        k.end += len;
+        i = i.take_from(len);
     }
     let (i, _) = (loss_sep, char('='), eq_sep).parse_complete(i)?;
     let (mut rest, mut v) = assigned_value(i)?;
@@ -900,14 +900,14 @@ fn param_assignment(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
             && word.chars().all(|c| c.is_alphanumeric() || c == '_')
         {
             let (group, _) = space(rest)?;
-            if group.fragment().starts_with('(') {
-                if let Some(len) = balanced_group(group.fragment()) {
-                    rest = group.take_from(len);
-                    v = ValueBuilder::Expr(Span {
-                        end: rest.location_offset(),
-                        ..e
-                    });
-                }
+            if group.fragment().starts_with('(')
+                && let Some(len) = balanced_group(group.fragment())
+            {
+                rest = group.take_from(len);
+                v = ValueBuilder::Expr(Span {
+                    end: rest.location_offset(),
+                    ..e
+                });
             }
         }
     }
@@ -1218,8 +1218,7 @@ pub(super) fn data(i: LocatedSpan) -> IResult<LocatedSpan, DataBuilder> {
     let mut params = vec![first];
     let mut end = i;
     let mut dataform = false;
-    loop {
-        let Ok((j, ())) = sep(end) else { break };
+    while let Ok((j, ())) = sep(end) {
         if j.fragment().starts_with('.') || float_unit(j).is_ok() {
             break;
         }
@@ -1320,7 +1319,7 @@ fn endlib(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
         ErrorKind::RegexpCapture,
     )))
 }
-pub(super) fn lib(i: LocatedSpan) -> IResult<LocatedSpan, Option<(&str, String)>> {
+pub(super) fn lib(i: LocatedSpan<'_>) -> IResult<LocatedSpan<'_>, Option<(&str, String)>> {
     alt((
         // include lib section (`.lib "file"tt` needs no space after the quote)
         map(

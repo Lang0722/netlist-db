@@ -32,6 +32,7 @@ fn data_mc0_variation<'a>(i: LocatedSpan<'a>) -> IResult<LocatedSpan<'a>, Vec<St
     .parse_complete(i)
 }
 
+#[expect(clippy::result_unit_err, reason = "the error is logged")]
 #[inline]
 pub async fn data_mc0_variation_csv(path: PathBuf) -> Result<Vec<String>, ()> {
     match read_to_string(&path).await {
@@ -52,7 +53,7 @@ pub async fn data_mc0_variation_csv(path: PathBuf) -> Result<Vec<String>, ()> {
 
 #[tokio::test]
 async fn test_data_mc0_variation_csv() {
-    crate::utlis::test::init_logger();
+    crate::hierarchy::test::init_logger();
     _ = dbg!(
         data_mc0_variation_csv("tests/sim.mc0.csv".into())
             .await

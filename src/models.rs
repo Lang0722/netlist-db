@@ -90,8 +90,8 @@ use crate::{
         Active, Binding, CondError, EvalError, FarRead, HSPICE_READ_REACH, ParHier, Scope,
         expr_names, function_name, in_order,
     },
+    hierarchy::MAX_HIERARCHY_DEPTH,
     instance::{Instance, InstanceCtx, MOSFET, is_key_place, is_off, plain_word},
-    utlis::MAX_HIERARCHY_DEPTH,
 };
 use core::fmt;
 use indexmap::IndexSet;

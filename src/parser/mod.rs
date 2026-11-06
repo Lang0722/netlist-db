@@ -695,7 +695,7 @@ async fn _include(
     file_id: FileId,
     include_pos: Option<Pos>,
     title: Option<TitleLine>,
-) -> Result<ParsedId, (FileId, ParseError)> {
+) -> Result<ParsedId, Box<(FileId, ParseError)>> {
     let mut file_path = file_id.path().to_path_buf();
     // Claim the file before reading it: a file included from several places
     // at once is read and parsed once. One file can also be reached by paths
@@ -755,7 +755,10 @@ async fn _include(
         Ok(text) => text,
         Err(e) => {
             release(&file_id).await;
-            return Err((file_id, ParseErrorInner::with(e.into(), include_pos)));
+            return Err(Box::new((
+                file_id,
+                ParseErrorInner::with(e.into(), include_pos),
+            )));
         }
     };
     let non_utf8 = text.non_utf8();
@@ -764,14 +767,14 @@ async fn _include(
             (line_off_set, without_section_lines(file_ctx))
         } else {
             release(&file_id).await;
-            return Err((
+            return Err(Box::new((
                 file_id,
                 ParseErrorInner::NoLibSection {
                     path: file_path,
                     section,
                 }
                 .with(include_pos),
-            ));
+            )));
         }
     } else {
         (0, text.into_text())
@@ -891,7 +894,7 @@ async fn include(
         }
     };
     let _res = _include(manager, file_id, include_pos, None).await;
-    res.set(_res.map_err(|(_, e)| e)).unwrap();
+    res.set(_res.map_err(|failed| failed.1)).unwrap();
 }
 
 /// HSPICE continues a statement with a `\` at the end of a line (the line
@@ -1038,10 +1041,10 @@ pub async fn parse_top_multi_with<I: Iterator<Item = FileId>>(
     for (file_id, handle) in handles {
         tops.push(match handle.await {
             Ok(res) => res,
-            Err(e) => Err((
+            Err(e) => Err(Box::new((
                 file_id,
                 ParseErrorInner::Internal(format!("parser task failed: {e}")).with(None),
-            )),
+            ))),
         });
     }
     drop(top_guard);
@@ -1063,7 +1066,8 @@ pub async fn parse_top_multi_with<I: Iterator<Item = FileId>>(
         .into_iter()
         .map(|top| match top {
             Ok(parsed_id) => parsed_id,
-            Err((file_id, e)) => {
+            Err(failed) => {
+                let (file_id, e) = *failed;
                 let parsed_id = ParsedId(inner.len());
                 inner.push((file_id, error2ast(e)));
                 files.push(String::new());

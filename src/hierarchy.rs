@@ -9,6 +9,7 @@ pub const MAX_HIERARCHY_DEPTH: usize = 256;
 impl<'s> Subckt<'s> {
     /// Walk the hierarchy under the subckt `cktname`: collect its internal
     /// nodes (with their instance paths) and the top-level subckts it uses.
+    /// This walk does not look inside `.if` blocks.
     ///
     /// Errors: the instance path of a subckt that is not defined, or of a
     /// subckt that instantiates itself (directly or through other subckts),

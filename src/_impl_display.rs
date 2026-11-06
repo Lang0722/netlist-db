@@ -78,10 +78,8 @@ pub fn display_inline_res<
     skip_first_sep: bool,
 ) -> Result<(), E> {
     let mut iter = iter.into_iter();
-    if skip_first_sep {
-        if let Some(first) = iter.next() {
-            fmt_one(first?, f)?;
-        }
+    if skip_first_sep && let Some(first) = iter.next() {
+        fmt_one(first?, f)?;
     }
     for t in iter {
         write!(f, "{sep}")?;
@@ -103,10 +101,8 @@ pub fn display_inline<
     skip_first_sep: bool,
 ) -> fmt::Result {
     let mut iter = iter.into_iter();
-    if skip_first_sep {
-        if let Some(first) = iter.next() {
-            fmt_one(first, f)?;
-        }
+    if skip_first_sep && let Some(first) = iter.next() {
+        fmt_one(first, f)?;
     }
     for t in iter {
         write!(f, "{sep}")?;

@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub fn span(file_ctx: &str, line_offset: u32) -> LocatedSpan {
+pub fn span(file_ctx: &str, line_offset: u32) -> LocatedSpan<'_> {
     unsafe { LocatedSpan::new_from_raw_offset(0, 1 + line_offset, file_ctx, ()) }
 }
 pub type LocatedSpan<'a> = nom_locate::LocatedSpan<&'a str>;
