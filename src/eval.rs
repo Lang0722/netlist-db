@@ -27,6 +27,9 @@
 //!   the other loops.)
 //! - A chain of parameters can have any length, in any order of the file (decks
 //!   `c_*`, `r_*`, `params50k`).
+//! - HSPICE reads a name at most [`HSPICE_READ_REACH`] levels above the reader.
+//!   This looks like a limit of HSPICE and not a rule, so the value here does not
+//!   follow it. A read past it gives a [`FarRead`] (see [`Scope::far_reads`]).
 //! - The same order chooses among functions defined with `.param f(x)=...`.
 //!   The names and the calls in a function's body are resolved at the level
 //!   that holds the function, not where it is called.
@@ -196,6 +199,33 @@ impl From<&Value<'_>> for Def {
     }
 }
 
+/// How many levels above the reader HSPICE finds a parameter or a function, in both
+/// `parhier` modes (decks `*_read_*`, `*_mid_*`, `*_fun_*`, `g_top_*`, `g_self_*`)
+pub const HSPICE_READ_REACH: usize = 31;
+
+/// A read of a definition past [`HSPICE_READ_REACH`]. HSPICE does not use that
+/// definition: it stops, or under `parhier=global` it takes a nearer value with no
+/// message. So the value here can differ from the value that HSPICE simulates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FarRead {
+    /// the parameter or function, in lowercase
+    pub name: String,
+    /// how many levels the definition is above the reader, at most
+    pub levels: usize,
+}
+
+impl fmt::Display for FarRead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "`{}` is defined {} levels above a line that reads it. HSPICE reads at most \
+             {HSPICE_READ_REACH} levels above: it stops, or it takes a nearer value with no \
+             message. So HSPICE can use a different value here",
+            self.name, self.levels
+        )
+    }
+}
+
 /// A function defined with `.param f(a, b) = 'expr'`
 #[derive(Debug, Clone)]
 struct Func {
@@ -225,6 +255,9 @@ pub struct Scope<'p> {
     in_condition: Cell<bool>,
     /// what `cache` holds, for a condition
     condition_cache: RefCell<HashMap<String, Result<f64, EvalError>>>,
+    /// the reads past [`HSPICE_READ_REACH`] (kept by the top level for every level
+    /// below it)
+    far_reads: RefCell<Vec<FarRead>>,
 }
 
 impl Scope<'static> {
@@ -241,6 +274,7 @@ impl Scope<'static> {
             parsed: RefCell::new(HashMap::new()),
             in_condition: Cell::new(false),
             condition_cache: RefCell::new(HashMap::new()),
+            far_reads: RefCell::new(Vec::new()),
         }
     }
 }
@@ -259,6 +293,7 @@ impl<'p> Scope<'p> {
             parsed: RefCell::new(HashMap::new()),
             in_condition: Cell::new(false),
             condition_cache: RefCell::new(HashMap::new()),
+            far_reads: RefCell::new(Vec::new()),
         }
     }
 
@@ -394,19 +429,25 @@ impl<'p> Scope<'p> {
     /// The value of the parameter `name`
     pub fn get(&self, name: &str) -> Result<f64, EvalError> {
         let key = name.to_ascii_lowercase();
-        match self.find(&key) {
-            Some(scope) => match scope.value_here(&key) {
-                // a text that reads its own name: the name at the level above
-                Err(EvalError::Recursive(looped))
-                    if looped == key && self.active.borrow().last() == Some(&key) =>
-                {
-                    match self.parent.and_then(|p| p.find(&key)) {
-                        Some(above) => above.value_here(&key),
-                        None => Err(EvalError::Recursive(looped)),
+        match self.find_at(&key) {
+            Some((levels, scope)) => {
+                self.note_read(&key, levels);
+                match scope.value_here(&key) {
+                    // a text that reads its own name: the name at the level above
+                    Err(EvalError::Recursive(looped))
+                        if looped == key && self.active.borrow().last() == Some(&key) =>
+                    {
+                        match self.parent.and_then(|p| p.find_at(&key)) {
+                            Some((levels, above)) => {
+                                self.note_read(&key, levels + 1);
+                                above.value_here(&key)
+                            }
+                            None => Err(EvalError::Recursive(looped)),
+                        }
                     }
+                    result => result,
                 }
-                result => result,
-            },
+            }
             None => match key.as_str() {
                 "pi" => Ok(PI),
                 // simulation variables: they read 0 in a value, and a condition
@@ -449,11 +490,39 @@ impl<'p> Scope<'p> {
 
     /// The level whose binding of `key` is used
     fn find(&self, key: &str) -> Option<&Scope<'p>> {
-        let mut levels = self.levels().filter(|s| s.binds(key));
+        self.find_at(key).map(|(_, scope)| scope)
+    }
+
+    /// The level whose binding of `key` is used, and how many levels it is above
+    /// this one
+    fn find_at(&self, key: &str) -> Option<(usize, &Scope<'p>)> {
+        let mut levels = self.levels().enumerate().filter(|(_, s)| s.binds(key));
         match self.parhier {
             ParHier::Local => levels.next(),
             ParHier::Global => levels.last(),
         }
+    }
+
+    /// Keeps a read `levels` above this level if it is past [`HSPICE_READ_REACH`]
+    fn note_read(&self, name: &str, levels: usize) {
+        if levels <= HSPICE_READ_REACH {
+            return;
+        }
+        let mut far = self.root().far_reads.borrow_mut();
+        match far.iter_mut().find(|f| f.name == name) {
+            Some(f) => f.levels = f.levels.max(levels),
+            None => far.push(FarRead {
+                name: name.to_owned(),
+                levels,
+            }),
+        }
+    }
+
+    /// The reads past [`HSPICE_READ_REACH`] so far, by name
+    pub fn far_reads(&self) -> Vec<FarRead> {
+        let mut far = self.root().far_reads.borrow().clone();
+        far.sort_by(|a, b| a.name.cmp(&b.name));
+        far
     }
 
     /// How the parameter `name` is bound, seen from this level: what decides
@@ -579,11 +648,14 @@ impl<'p> Scope<'p> {
     fn func(&self, name: &str) -> Option<(&Scope<'p>, &Func)> {
         let mut levels = self
             .levels()
-            .filter_map(|s| s.funcs.get(name).map(|f| (s, f)));
-        match self.parhier {
+            .enumerate()
+            .filter_map(|(at, s)| s.funcs.get(name).map(|f| (at, s, f)));
+        let (at, holder, f) = match self.parhier {
             ParHier::Local => levels.next(),
             ParHier::Global => levels.last(),
-        }
+        }?;
+        self.note_read(name, at);
+        Some((holder, f))
     }
 
     /// `locals`: the arguments of the user function being evaluated

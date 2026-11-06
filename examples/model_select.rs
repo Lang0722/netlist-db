@@ -27,6 +27,7 @@
 // file that holds it as one more file.
 use netlist_db::{
     AST, FileId,
+    eval::FarRead,
     models::{ModelUsage, MosfetModel, SelectError, Short},
     parser::parse_top_multi,
 };
@@ -95,12 +96,18 @@ fn report(
         std::process::exit(1);
     };
     let prefix = subckt.map(|s| format!("{s}:")).unwrap_or_default();
+    let warn = |far_reads: &[FarRead]| {
+        for far in far_reads {
+            eprintln!("warning: {prefix}{far}");
+        }
+    };
     if summary {
         let usage = match subckt {
             Some(name) => ast.model_usage_of(name).unwrap_or_else(|| no_subckt()),
             None => ast.model_usage(),
         };
         print_usage(out, &prefix, &usage).expect("write");
+        warn(&usage.far_reads);
         let chosen = usage.models.iter().map(|(_, n)| n).sum();
         let missing = usage
             .errors
@@ -120,14 +127,13 @@ fn report(
             }
             print(out, &prefix, &m).expect("write");
         };
-        match subckt {
-            Some(name) => {
-                if !ast.for_each_mosfet_model_of(name, &mut each) {
-                    no_subckt();
-                }
-            }
+        let far_reads = match subckt {
+            Some(name) => ast
+                .for_each_mosfet_model_of(name, &mut each)
+                .unwrap_or_else(|| no_subckt()),
             None => ast.for_each_mosfet_model(&mut each),
-        }
+        };
+        warn(&far_reads);
         (mosfets, chosen, missing)
     }
 }

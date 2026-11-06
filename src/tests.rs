@@ -5033,3 +5033,143 @@ async fn section_lines_in_a_section() {
         assert_eq!(rows, [("M1".to_owned(), l, 1.0)], "{library}");
     }
 }
+
+/// A deck of `depth` subckt levels. `s0` holds the MOSFET line `leaf`, and each `sK`
+/// holds one instance of the level below it. `above` comes before the definitions, and
+/// `below` after them, at the top level.
+fn tower(depth: usize, above: &str, leaf: &str, below: &str) -> String {
+    let mut deck = format!(".model n nmos level=54\n{above}\n.subckt s0 d g\n{leaf}\n.ends\n");
+    for k in 1..depth {
+        writeln!(deck, ".subckt s{k} d g\nX0 d g s{}\n.ends", k - 1).unwrap();
+    }
+    writeln!(deck, "{below}\nX0 d g s{}", depth - 1).unwrap();
+    deck
+}
+
+/// The far reads of both walks, which must agree, and the L of the first MOSFET
+async fn far_reads(deck: &str) -> (Vec<(String, usize)>, f64) {
+    let (_dir, parsed, files) = parse_text(&[("top.sp", deck)]).await;
+    let (ast, _) = files.build(parsed);
+    let mut l = None;
+    let listed = ast.for_each_mosfet_model(|m| {
+        l.get_or_insert(m.selection.as_ref().unwrap().l);
+    });
+    assert_eq!(listed, ast.model_usage().far_reads, "{deck}");
+    let rows = listed.into_iter().map(|f| (f.name, f.levels)).collect();
+    (rows, l.unwrap())
+}
+
+#[tokio::test]
+async fn warn_of_a_read_beyond_the_reach_of_hspice() {
+    let u = || vec![("u".to_owned(), 32)];
+    let read = "M0 d g 0 0 n l=u w=1u";
+    for mode in ["", ".option parhier=local\n"] {
+        // HSPICE reads a name 31 levels above the reader, and stops at 32 (`*_read_*`)
+        let above = format!("{mode}.param u=7n");
+        assert_eq!(
+            far_reads(&tower(31, &above, read, "")).await,
+            (vec![], 7e-9),
+            "{mode}"
+        );
+        assert_eq!(
+            far_reads(&tower(32, &above, read, "")).await,
+            (u(), 7e-9),
+            "{mode}"
+        );
+    }
+    // a function has the same reach (`g_fun_*`)
+    let (rows, _) = far_reads(&tower(
+        32,
+        ".param f(x)='x*2'",
+        "M0 d g 0 0 n l='f(3n)' w=1u",
+        "",
+    ))
+    .await;
+    assert_eq!(rows, [("f".to_owned(), 32)]);
+}
+
+#[tokio::test]
+async fn warn_of_a_definition_that_hspice_cannot_reach() {
+    // under `global`, HSPICE takes a nearer value from 32 levels on, with no message:
+    // L=5n, and L=100n here (`g_top_*`). `local` takes the near value in both tools.
+    let deck = |depth: usize, mode: &str| {
+        let mut deck = format!("{mode}.model n nmos level=54\n.param v=100n\n");
+        deck += ".subckt s0 d g v=1n\nM0 d g 0 0 n l=v w=1u\n.ends\n";
+        for k in 1..depth {
+            writeln!(deck, ".subckt s{k} d g v=1n\nX0 d g s{} v=5n\n.ends", k - 1).unwrap();
+        }
+        writeln!(deck, "X0 d g s{} v=5n", depth - 1).unwrap();
+        deck
+    };
+    assert_eq!(far_reads(&deck(31, "")).await, (vec![], 100e-9));
+    assert_eq!(
+        far_reads(&deck(32, "")).await,
+        (vec![("v".to_owned(), 32)], 100e-9)
+    );
+    let local = ".option parhier=local\n";
+    assert_eq!(far_reads(&deck(32, local)).await, (vec![], 5e-9));
+    assert_eq!(far_reads(&deck(96, local)).await, (vec![], 5e-9));
+
+    // the reach is from the reader, and not from the top (`*_mid_*`)
+    let read = "M0 d g 0 0 n l=u w=1u";
+    let mid = |depth: usize| {
+        tower(depth, "", read, "").replace(
+            &format!(".subckt s{} d g\n", depth - 1),
+            &format!(".subckt s{} d g\n.param u=7n\n", depth - 1),
+        )
+    };
+    assert_eq!(far_reads(&mid(32)).await.0, []);
+    assert_eq!(far_reads(&mid(33)).await.0, [("u".to_owned(), 32)]);
+}
+
+#[tokio::test]
+async fn warn_of_a_far_read_after_the_same_instance_near_the_top() {
+    // the near instance comes first, and it gives the same counts: the far one must
+    // still be evaluated in the summary
+    let read = "M0 d g 0 0 n l=u w=1u";
+    let near = tower(32, ".param u=7n", read, "X9 d g s0");
+    assert_eq!(far_reads(&near).await.0, [("u".to_owned(), 32)]);
+    let middle = tower(32, ".param u=7n", read, "X9 d g s5");
+    assert_eq!(far_reads(&middle).await.0, [("u".to_owned(), 32)]);
+    // the summary of many far instances stays a walk of each level once
+    let mut wide = tower(32, ".param u=7n", read, "");
+    for k in 1..32 {
+        wide = wide.replace(
+            &format!("X0 d g s{}\n", k - 1),
+            &format!("X0 d g s{0}\nX1 d g s{0}\n", k - 1),
+        );
+    }
+    let (_dir, parsed, files) = parse_text(&[("top.sp", &wide)]).await;
+    let (ast, _) = files.build(parsed);
+    let usage = ast.model_usage();
+    assert_eq!(usage.mosfets, 1 << 31);
+    assert_eq!(usage.far_reads[0].levels, 32);
+}
+
+#[tokio::test]
+async fn warn_of_a_far_read_of_its_own_name() {
+    // `local`: a text that reads its own name reads it at the level above
+    let deck = tower(
+        33,
+        ".option parhier=local\n.param v=1n",
+        ".param v='v+1n'\nM0 d g 0 0 n l=v w=1u",
+        "",
+    );
+    let (rows, l) = far_reads(&deck).await;
+    assert_eq!(rows, [("v".to_owned(), 33)]);
+    assert!((l - 2e-9).abs() < 1e-15, "{l}");
+}
+
+#[tokio::test]
+async fn warn_of_a_far_read_in_a_subckt_alone() {
+    let deck = tower(32, ".param u=7n", "M0 d g 0 0 n l=u w=1u", "");
+    let (_dir, parsed, files) = parse_text(&[("top.sp", &deck)]).await;
+    let (ast, _) = files.build(parsed);
+    // an instance of `s31` at the top level is the same tower
+    let top = ast.model_usage_of("s31").unwrap();
+    assert_eq!(top.far_reads[0].levels, 32);
+    let listed = ast.for_each_mosfet_model_of("s31", |_| {}).unwrap();
+    assert_eq!(listed, top.far_reads);
+    assert!(ast.for_each_mosfet_model_of("nope", |_| {}).is_none());
+    assert!(ast.model_usage_of("s30").unwrap().far_reads.is_empty());
+}

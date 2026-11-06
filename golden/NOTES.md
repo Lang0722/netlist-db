@@ -513,8 +513,14 @@ The tests in `src/tests.rs` and `src/eval.rs` name the decks.
   lines. Decks of round f36, r4.
 - Depth under `parhier=global`. HSPICE reads a parameter at most 31 levels above the
   reader, in both `parhier` modes. Past that, a top-level name is undefined and HSPICE
-  stops (`g_read_32`, `l_read_32`), and under `global` a nearer value wins (`g_top_32`,
-  `g_self_33`). netlist-db reads through any depth.
+  stops (`g_read_32`, `l_read_32`), and under `global` a nearer value wins with no
+  message (`g_top_32`, `g_self_33`). This looks like a limit or a bug of HSPICE, not a
+  rule. Decision: netlist-db does not copy it, and reads through any depth. So a value
+  can differ from the value that HSPICE simulates, and netlist-db warns at each read
+  past 31 levels (`FarRead`: `ModelUsage::far_reads`, the return of
+  `for_each_mosfet_model`, the log, and stderr in `model_select`). The distance counts
+  from the level that holds the text to the level of the definition that wins. A deep
+  deck that reads a near value agrees, with no warning (`l_top_96`).
 - `.alter` in an include (`inc_alter_inside`, `al_inside_inc`). Line 1 is always a title
   in HSPICE (`o_title_option`). `.param f=1u` with `.param f(x)=...` (`p_func_same_as_param`).
 

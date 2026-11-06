@@ -87,7 +87,8 @@ use crate::{
     AST, Subckt,
     ast::{KeyValue, Model, ModelType, Value},
     eval::{
-        Active, Binding, CondError, EvalError, ParHier, Scope, expr_names, function_name, in_order,
+        Active, Binding, CondError, EvalError, FarRead, HSPICE_READ_REACH, ParHier, Scope,
+        expr_names, function_name, in_order,
     },
     instance::{Instance, InstanceCtx, MOSFET, is_key_place, is_off, plain_word},
     utlis::MAX_HIERARCHY_DEPTH,
@@ -1081,7 +1082,7 @@ impl<'s> AST<'s> {
     /// see [`AST::for_each_mosfet_model`] and [`AST::model_usage`].
     pub fn mosfet_models(&self) -> Vec<MosfetModel<'_, 's>> {
         let mut out = Vec::new();
-        self.for_each_mosfet_model(|m| out.push(m));
+        log_far_reads(&self.for_each_mosfet_model(|m| out.push(m)));
         out
     }
 
@@ -1091,14 +1092,15 @@ impl<'s> AST<'s> {
     /// subckt. The paths start below the subckt (`MM1`, `XI0.MM2`).
     pub fn mosfet_models_of(&self, name: &str) -> Option<Vec<MosfetModel<'_, 's>>> {
         let mut out = Vec::new();
-        self.for_each_mosfet_model_of(name, |m| out.push(m))
-            .then_some(out)
+        log_far_reads(&self.for_each_mosfet_model_of(name, |m| out.push(m))?);
+        Some(out)
     }
 
     /// Calls `f` with each MOSFET of [`AST::mosfet_models`], in the same
     /// order, without keeping them: for circuits whose hierarchy holds too
-    /// many transistors to list in memory
-    pub fn for_each_mosfet_model<'a>(&'a self, f: impl FnMut(MosfetModel<'a, 's>)) {
+    /// many transistors to list in memory. Returns the reads where HSPICE can use
+    /// a different value.
+    pub fn for_each_mosfet_model<'a>(&'a self, f: impl FnMut(MosfetModel<'a, 's>)) -> Vec<FarRead> {
         let (scope, active) = self.top_level();
         let mut walk = Walk {
             sel: Selector::new(self, &active.branches),
@@ -1109,20 +1111,19 @@ impl<'s> AST<'s> {
         let on_path = with_branches(&[], self, &active);
         let scopes = with_scope(&[], &scope, &active);
         walk.ast(self, &active, &scopes, &on_path);
+        scope.far_reads()
     }
 
     /// [`AST::for_each_mosfet_model`] for the subckt `name`, as in
-    /// [`AST::mosfet_models_of`]. `false` if there is no such subckt.
+    /// [`AST::mosfet_models_of`]. `None` if there is no such subckt.
     pub fn for_each_mosfet_model_of<'a>(
         &'a self,
         name: &str,
         f: impl FnMut(MosfetModel<'a, 's>),
-    ) -> bool {
+    ) -> Option<Vec<FarRead>> {
         let (scope, top) = self.top_level();
         let on_top = with_branches(&[], self, &top);
-        let Some(def) = resolve(name, &on_top) else {
-            return false;
-        };
+        let def = resolve(name, &on_top)?;
         let (child, active) = instance_scope(&scope, def, &[]);
         let mut walk = Walk {
             sel: Selector::new(self, &top.branches),
@@ -1134,7 +1135,14 @@ impl<'s> AST<'s> {
         let top_scopes = with_scope(&[], &scope, &top);
         let scopes = with_scope(&top_scopes, &child, &active);
         walk.ast(&def.ast, &active, &scopes, &on_path);
-        true
+        Some(scope.far_reads())
+    }
+}
+
+/// Logs the reads where HSPICE can use a different value
+fn log_far_reads(far_reads: &[FarRead]) {
+    for far in far_reads {
+        crate::warn!("{far}");
     }
 }
 
@@ -1157,6 +1165,8 @@ pub struct ModelUsage<'a, 's> {
     /// concerns (for [`SelectError::NoSubckt`], how many `X` lines), and the
     /// path of one of them: the most frequent first
     pub errors: Vec<(SelectError, u64, String)>,
+    /// the reads where HSPICE can use a different value
+    pub far_reads: Vec<FarRead>,
 }
 
 impl<'s> AST<'s> {
@@ -1168,7 +1178,12 @@ impl<'s> AST<'s> {
         let on_path = with_branches(&[], self, &active);
         let scopes = with_scope(&[], &scope, &active);
         let counts = usage.level(self, &active, &scopes, &on_path, 0, 0);
-        usage.finish(&counts)
+        let far_reads = scope.far_reads();
+        log_far_reads(&far_reads);
+        ModelUsage {
+            far_reads,
+            ..usage.finish(&counts)
+        }
     }
 
     /// [`AST::model_usage`] for an instance of the subckt `name` (defined at
@@ -1186,7 +1201,12 @@ impl<'s> AST<'s> {
         let top_scopes = with_scope(&[], &scope, &top);
         let scopes = with_scope(&top_scopes, &child, &active);
         let counts = usage.level(&def.ast, &active, &scopes, &on_path, 1, visible);
-        Some(usage.finish(&counts))
+        let far_reads = scope.far_reads();
+        log_far_reads(&far_reads);
+        Some(ModelUsage {
+            far_reads,
+            ..usage.finish(&counts)
+        })
     }
 }
 
@@ -1259,7 +1279,14 @@ struct Usage<'a, 's> {
     errors: Vec<(SelectError, String)>,
     error_numbers: HashMap<String, usize>,
     /// the counts of the subckt instances evaluated
-    memo: HashMap<MemoKey, Rc<[(Use, u64)]>>,
+    memo: HashMap<(MemoKey, Option<usize>), Rc<[(Use, u64)]>>,
+    /// how many levels the instances of a definition (by address) hold, at most:
+    /// their own and those below it. An instance that can read past
+    /// [`HSPICE_READ_REACH`] has its level in the key of `memo`, so that each such
+    /// level is evaluated and its reads are found.
+    heights: HashMap<usize, usize>,
+    /// the deepest level that the current walk reached
+    deepest: usize,
     /// how often the counts of a definition (by address) were found in, or
     /// missing from, `memo`: (found, missing)
     memo_use: HashMap<usize, (u64, u64)>,
@@ -1294,6 +1321,8 @@ impl<'a, 's> Usage<'a, 's> {
             errors: Vec::new(),
             error_numbers: HashMap::new(),
             memo: HashMap::new(),
+            heights: HashMap::new(),
+            deepest: 0,
             memo_use: HashMap::new(),
             unkept: HashSet::new(),
             next_context: 2,
@@ -1557,6 +1586,9 @@ impl<'a, 's> Usage<'a, 's> {
                         return;
                     }
                     let addr = ptr::from_ref(def) as usize;
+                    let level = self.expanding.len();
+                    let height = self.heights.get(&addr).copied().unwrap_or(0);
+                    let far = (level + height > HSPICE_READ_REACH).then_some(level);
                     // (a line that passes nothing needs no new instance to
                     // look in the memo)
                     let child = (!x.params.is_empty() || !def.ast.cond.is_empty())
@@ -1581,9 +1613,11 @@ impl<'a, 's> Usage<'a, 's> {
                                 context,
                             ),
                         };
+                        let key = (key, far);
                         if let Some(c) = self.memo.get(&key) {
                             add(counts, c);
                             self.memo_use.entry(addr).or_default().0 += 1;
+                            self.deepest = self.deepest.max(level + height);
                             return;
                         }
                         Some(key)
@@ -1607,6 +1641,7 @@ impl<'a, 's> Usage<'a, 's> {
                     let inner = with_branches(on_path, &def.ast, &active);
                     self.path.push(&inst.name);
                     self.expanding.push(def);
+                    let deepest_before = core::mem::replace(&mut self.deepest, level + 1);
                     let c = self.level(
                         &def.ast,
                         &active,
@@ -1615,6 +1650,10 @@ impl<'a, 's> Usage<'a, 's> {
                         inner_context,
                         inner_visible,
                     );
+                    if self.deepest - level > height {
+                        self.heights.insert(addr, self.deepest - level);
+                    }
+                    self.deepest = self.deepest.max(deepest_before);
                     self.expanding.pop();
                     self.path.pop();
                     let c: Rc<[(Use, u64)]> = c.into_iter().collect();
@@ -1630,7 +1669,7 @@ impl<'a, 's> Usage<'a, 's> {
 
     /// Keeps the counts `c` of an instance of the definition `addr`, unless
     /// its instances seldom repeat
-    fn keep(&mut self, addr: usize, key: MemoKey, c: Rc<[(Use, u64)]>) {
+    fn keep(&mut self, addr: usize, key: (MemoKey, Option<usize>), c: Rc<[(Use, u64)]>) {
         /// instances of a definition evaluated before judging how often
         /// they repeat
         const TRIAL: u64 = 4096;
