@@ -92,7 +92,7 @@ use crate::{
     err::ParseErrorInner,
     instance::{ControlledKind, Instance, InstanceCtx, Source, source_args},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A diagnostic recorded while parsing
 #[derive(Debug, PartialEq)]
@@ -5172,4 +5172,155 @@ async fn warn_of_a_far_read_in_a_subckt_alone() {
     assert_eq!(listed, top.far_reads);
     assert!(ast.for_each_mosfet_model_of("nope", |_| {}).is_none());
     assert!(ast.model_usage_of("s30").unwrap().far_reads.is_empty());
+}
+
+/// A deck whose instance lines are all in an `.if` block is a circuit, not a
+/// library: the tool that looks for a library must not skip these lines.
+#[tokio::test]
+async fn lines_in_a_top_level_if_are_not_a_library() {
+    let is_library = async |text: &str| {
+        let (_dir, parsed, files) = parse_deck(&[("deck.sp", text)]).await;
+        files.build(parsed).0.is_library()
+    };
+    let cell = ".subckt s d\nM1 d d 0 0 n l=1u w=1u\n.ends\n";
+    assert!(is_library(&format!("* t\n{cell}")).await);
+    assert!(is_library(&format!("* t\n.if (1)\n.param a=1\n.endif\n{cell}")).await);
+    assert!(!is_library(&format!("* t\n{cell}X1 d s\n")).await);
+    assert!(!is_library(&format!("* t\n{cell}.if (1)\nX1 d s\n.endif\n")).await);
+    let nested = ".if (0)\n.else\n.if (1)\nM1 d d 0 0 n l=1u w=1u\n.endif\n.endif\n";
+    assert!(!is_library(&format!("* t\n{nested}")).await);
+}
+
+/// `.unprot` has short forms (see `canonical_cmd`): each one ends an encrypted
+/// block, and the rest of the file is read.
+#[tokio::test]
+async fn encrypted_block_ends_at_a_short_form() {
+    for end in [".unprot", ".UNPR", ".unp", ".unprotect"] {
+        let text = format!("R1 a b 1k\n.prot freelib\nH]=3g\\#\n{end}\nR2 b c 1k\n");
+        let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
+        assert_eq!(diagnostics(&parsed), [diag("Encrypted", 2)], "{end}");
+        let (ast, has_err) = files.build(parsed);
+        assert!(!has_err, "{end}");
+        assert_eq!(names(&ast), ["R1", "R2"], "{end}");
+    }
+}
+
+/// With no `.unprot`, an encrypted block takes the rest of the file. The lines
+/// of the rest are lost, so this is an error, as for a plain `.prot` block.
+#[tokio::test]
+async fn encrypted_block_with_no_end_is_an_error() {
+    let text = "R1 a b 1k\n.prot freelib\nH]=3g\\#\nR2 b c 1k\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
+    let (ast, has_err) = files.build(parsed);
+    assert!(has_err);
+    assert_eq!(names(&ast), ["R1"]);
+}
+
+/// A `\` continuation after a `$` that is in a name: the `$` starts no comment,
+/// so the next line goes on with the statement.
+#[tokio::test]
+async fn continuation_after_a_dollar_in_a_name() {
+    let rows =
+        async |lines: &str| deck_rows(&format!("* t\n.model n nmos level=54\n{lines}")).await;
+    let got = rows("M$1 d g 0 0 n l=1u \\\nw=2u\n").await;
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].0, "M$1");
+    assert_eq!((got[0].2, got[0].3), (1.0, 2.0));
+    // in a value of a parameter too
+    let got = rows(".param a$b=3u\nM1 d g 0 0 n l=a$b \\\nw=2u\n").await;
+    assert_eq!((got[0].2, got[0].3), (3.0, 2.0));
+    // at the start of a word and after a number, a `$` still starts a comment,
+    // and a `\` in the comment continues nothing
+    for line in ["w=2u $ note", "w=2u$ note"] {
+        let got = rows(&format!(
+            "M1 d g 0 0 n l=1u {line} \\\nM2 d g 0 0 n l=1u w=2u\n"
+        ))
+        .await;
+        assert_eq!(got.len(), 2, "{got:?}");
+    }
+}
+
+/// Two names that differ in a byte that is not UTF-8 are two names: `X1` must
+/// call the subckt that it names.
+#[tokio::test]
+async fn names_with_other_bytes_stay_apart() {
+    let dir = TempDir::new("bytes");
+    let deck = dir.0.join("deck.sp");
+    std::fs::write(
+        &deck,
+        b"* t\n.subckt \xe9 d\nM1 d d 0 0 one l=1u w=1u\n.ends\n\
+          .subckt \xe8 d\nM1 d d 0 0 two l=1u w=1u\n.ends\n\
+          X1 a \xe9\nX2 a \xe8\n\
+          .model one nmos level=54\n.model two nmos level=54\n",
+    )
+    .unwrap();
+    let (parsed, files) = parse_files(&[deck]).await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(ast.subckt.len(), 2);
+    let rows = ast.mosfet_models();
+    let model = |row: usize| rows[row].selection.as_ref().unwrap().model.name.to_string();
+    assert_eq!((model(0).as_str(), model(1).as_str()), ("one", "two"));
+}
+
+/// A definition that an instance path re-enters: the counts of a subckt depend
+/// on the path above it, so a count kept from another path is wrong. `usage_agrees`
+/// (in `deck_rows`) compares the summary with the list.
+#[tokio::test]
+async fn usage_of_a_definition_that_a_path_reenters() {
+    let defs = ".subckt a p q\nxs p q s\n.ends\n\
+                .subckt s p q\n.subckt s p q\nM1 p q p q nch l=1u w=1u\n.ends\nxa p q a\n.ends\n\
+                .model nch nmos level=54\n";
+    for lines in ["X1 a b s\nx2 1 0 a\n", "x2 1 0 a\nX1 a b s\n"] {
+        let deck = format!("* t\n{lines}{defs}");
+        let rows = deck_rows(&deck).await;
+        let bad = rows.iter().filter(|r| r.1.starts_with("error")).count();
+        assert_eq!((rows.len(), bad), (2, 1), "{deck}: {rows:?}");
+    }
+    // a re-entry with other lines: a sibling reaches the definition from the
+    // other side, at the same context
+    let deck = "* t\nX1 a\nX2 b\n\
+                .subckt a p\nM1 p p p p nch l=1u w=1u\nxb p b\n.ends\n\
+                .subckt b p\nM2 p p p p nch l=1u w=1u\nxa p a\n.ends\n\
+                .model nch nmos level=54\n";
+    deck_rows(deck).await;
+}
+
+/// A definition under a re-entry keeps its memo when no path can re-enter it.
+#[tokio::test]
+async fn usage_keeps_counts_of_a_definition_outside_a_cycle() {
+    let (_dir, parsed, files) = parse_deck(&[(
+        "deck.sp",
+        "* t\nX1 a\nX2 a\n\
+         .subckt a p\nxl p leaf\nxb p b\n.ends\n\
+         .subckt b p\nxl p leaf\nxa p a\n.ends\n\
+         .subckt leaf p\nM1 p p p p nch l=1u w=1u\n.ends\n\
+         .model nch nmos level=54\n",
+    )])
+    .await;
+    let (ast, _) = files.build(parsed);
+    let names: HashSet<String> = ast
+        .reentrant_defs()
+        .into_iter()
+        .map(|d| d.name.to_lowercase())
+        .collect();
+    assert_eq!(names, HashSet::from(["a".to_owned(), "b".to_owned()]));
+}
+
+/// A name of a parameter with a byte that is not UTF-8 can be read in an
+/// expression, and two such names stay two names.
+#[tokio::test]
+async fn expressions_read_names_with_other_bytes() {
+    let dir = TempDir::new("bytes");
+    let deck = dir.0.join("deck.sp");
+    std::fs::write(
+        &deck,
+        b"* t\n.model n nmos level=54\n.param p\xe9=1u p\xe8=2u\n\
+          M1 d g 0 0 n l=p\xe9 w='p\xe8'\n",
+    )
+    .unwrap();
+    let (parsed, files) = parse_files(&[deck]).await;
+    let (ast, _) = files.build(parsed);
+    let rows = ast.mosfet_models();
+    let chosen = rows[0].selection.as_ref().unwrap();
+    assert_eq!((chosen.l, chosen.w), (1e-6, 2e-6));
 }

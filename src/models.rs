@@ -1170,6 +1170,30 @@ pub struct ModelUsage<'a, 's> {
 }
 
 impl<'s> AST<'s> {
+    /// Whether the netlist only defines things: no instance line at the top
+    /// level, also in no branch of an `.if` block
+    pub fn is_library(&self) -> bool {
+        self.instance.is_empty()
+            && self
+                .cond
+                .iter()
+                .flat_map(|block| &block.branches)
+                .all(|branch| branch.ast.is_library())
+    }
+
+    /// The subckts on a cycle of calls, and those whose lines lead to such a
+    /// cycle. A call goes by name, so this holds each subckt that an instance
+    /// path can re-enter. Only under these subckts do the counts depend on the
+    /// path above.
+    pub(crate) fn reentrant_defs(&self) -> Vec<&Subckt<'s>> {
+        let mut defs = Vec::new();
+        let mut calls = HashMap::new();
+        collect_calls(self, None, &mut defs, &mut calls);
+        let reaching = names_that_reach_a_cycle(&calls);
+        defs.retain(|def| reaching.contains(def.name.to_lowercase().as_str()));
+        defs
+    }
+
     /// How many MOSFETs of the circuit (the top level, and the subckt
     /// instances under it) use each model
     pub fn model_usage(&self) -> ModelUsage<'_, 's> {
@@ -1208,6 +1232,73 @@ impl<'s> AST<'s> {
             ..usage.finish(&counts)
         })
     }
+}
+
+/// Adds to `defs` the subckts of `ast` and of its branches, and to `calls` the
+/// lowercase names that the lines of each subckt call. `owner`: the name of the
+/// subckt that `ast` is in.
+fn collect_calls<'a, 's>(
+    ast: &'a AST<'s>,
+    owner: Option<&'a str>,
+    defs: &mut Vec<&'a Subckt<'s>>,
+    calls: &mut HashMap<&'a str, HashSet<String>>,
+) {
+    if let Some(owner) = owner {
+        for inst in &ast.instance {
+            if let InstanceCtx::Subckt(x) = &inst.ctx {
+                calls
+                    .entry(owner)
+                    .or_default()
+                    .insert(x.cktname.to_lowercase());
+            }
+        }
+    }
+    for branch in ast.cond.iter().flat_map(|block| &block.branches) {
+        collect_calls(&branch.ast, owner, defs, calls);
+    }
+    for (name, def) in &ast.subckt {
+        defs.push(def);
+        collect_calls(&def.ast, Some(name), defs, calls);
+    }
+}
+
+/// The names in `calls` that are on a cycle or lead to one. The search keeps an
+/// explicit stack, because a chain of calls can be long.
+fn names_that_reach_a_cycle<'c>(calls: &'c HashMap<&str, HashSet<String>>) -> HashSet<&'c str> {
+    let mut open = HashSet::new();
+    let mut done = HashSet::new();
+    let mut reaching = HashSet::new();
+    for (&start, callees) in calls {
+        if done.contains(start) {
+            continue;
+        }
+        open.insert(start);
+        let mut stack = vec![(start, callees.iter())];
+        while let Some((name, next)) = stack.last_mut() {
+            let name = *name;
+            let Some(callee) = next.next() else {
+                stack.pop();
+                open.remove(name);
+                done.insert(name);
+                if reaching.contains(name)
+                    && let Some((caller, _)) = stack.last()
+                {
+                    reaching.insert(*caller);
+                }
+                continue;
+            };
+            let callee = callee.as_str();
+            if open.contains(callee) || reaching.contains(callee) {
+                reaching.insert(name);
+            } else if !done.contains(callee)
+                && let Some((&key, more)) = calls.get_key_value(callee)
+            {
+                open.insert(key);
+                stack.push((key, more.iter()));
+            }
+        }
+    }
+    reaching
 }
 
 /// What a MOSFET uses: a model (by address), or an error (by number)
@@ -1270,6 +1361,10 @@ enum MemoKey {
     Context(usize, Passed, usize),
 }
 
+/// The key of `Usage::memo`: what the counts depend on, and the level of an instance
+/// that can read past [`HSPICE_READ_REACH`]
+type KeptKey = (MemoKey, Option<usize>);
+
 /// The counting walk of [`AST::model_usage`]
 struct Usage<'a, 's> {
     sel: Selector<'a, 's>,
@@ -1279,7 +1374,7 @@ struct Usage<'a, 's> {
     errors: Vec<(SelectError, String)>,
     error_numbers: HashMap<String, usize>,
     /// the counts of the subckt instances evaluated
-    memo: HashMap<(MemoKey, Option<usize>), Rc<[(Use, u64)]>>,
+    memo: HashMap<KeptKey, Rc<[(Use, u64)]>>,
     /// how many levels the instances of a definition (by address) hold, at most:
     /// their own and those below it. An instance that can read past
     /// [`HSPICE_READ_REACH`] has its level in the key of `memo`, so that each such
@@ -1290,9 +1385,11 @@ struct Usage<'a, 's> {
     /// how often the counts of a definition (by address) were found in, or
     /// missing from, `memo`: (found, missing)
     memo_use: HashMap<usize, (u64, u64)>,
-    /// the definitions whose instances are not kept in `memo`: almost each
-    /// one is different (a value passed that differs on every instance, read
-    /// below), so that keeping them would only take memory
+    /// the definitions whose instances are not kept in `memo`: a path can
+    /// re-enter them, so that their counts depend on the path (see
+    /// [`AST::reentrant_defs`]); or almost each one is different (a value passed
+    /// that differs on every instance, read below), so that keeping them would
+    /// only take memory
     unkept: HashSet<usize>,
     /// the context of the next level that passes or defines parameters, or
     /// defines models or subckts (a level that does none of these sees the
@@ -1324,7 +1421,11 @@ impl<'a, 's> Usage<'a, 's> {
             heights: HashMap::new(),
             deepest: 0,
             memo_use: HashMap::new(),
-            unkept: HashSet::new(),
+            unkept: ast
+                .reentrant_defs()
+                .into_iter()
+                .map(|def| ptr::from_ref(def) as usize)
+                .collect(),
             next_context: 2,
             visible: HashMap::new(),
             reads: HashMap::new(),
@@ -1669,7 +1770,7 @@ impl<'a, 's> Usage<'a, 's> {
 
     /// Keeps the counts `c` of an instance of the definition `addr`, unless
     /// its instances seldom repeat
-    fn keep(&mut self, addr: usize, key: (MemoKey, Option<usize>), c: Rc<[(Use, u64)]>) {
+    fn keep(&mut self, addr: usize, key: KeptKey, c: Rc<[(Use, u64)]>) {
         /// instances of a definition evaluated before judging how often
         /// they repeat
         const TRIAL: u64 = 4096;

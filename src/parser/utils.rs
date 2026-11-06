@@ -186,17 +186,45 @@ fn is_path(c: char) -> bool {
     c.is_alphanumeric() || !c.is_whitespace()
 }
 
+/// A character that stands for a byte that is not UTF-8 (see
+/// `parser::raw_byte`), or U+FFFD: it stays in its name, so the statement is
+/// kept.
+#[inline]
+fn is_unread(c: char) -> bool {
+    c == '\u{FFFD}' || super::is_raw_byte(c)
+}
+
+/// The ASCII letters and digits, and `others`: a table for each ASCII character
+const fn ascii_set(others: &str) -> [bool; 128] {
+    let mut set = [false; 128];
+    let mut c = 0;
+    while c < 128 {
+        set[c] = (c as u8).is_ascii_alphanumeric();
+        c += 1;
+    }
+    let others = others.as_bytes();
+    let mut k = 0;
+    while k < others.len() {
+        set[others[k] as usize] = true;
+        k += 1;
+    }
+    set
+}
+
 #[inline]
 fn is_key(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 /// `!` is in names such as `gnd!` (ground) and `vdd!` (golden `ground_alias`).
-/// U+FFFD stands for a byte that is not UTF-8 (see `parser::decode`): it
-/// stays in its name, so the statement is kept.
+#[inline]
 fn is_name(c: char) -> bool {
     // `<>` (bus bits) and `!` (global nets) are common in CDL netlists, `~`
     // (inverted signals) in netlists written by schematic editors
-    c.is_alphanumeric() || "/_.+-*^:@%#[]<>!|~".contains(c) || c == '\u{FFFD}'
+    static SET: [bool; 128] = ascii_set("/_.+-*^:@%#[]<>!|~");
+    match SET.get(c as usize) {
+        Some(&inside) => inside,
+        None => c.is_alphanumeric() || is_unread(c),
+    }
 }
 
 /// A name: [`is_name`] characters, but not starting with `*`, which starts an
@@ -222,8 +250,13 @@ fn name_span(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
     let (rest, taken) = i.take_split(end);
     Ok((rest, taken))
 }
+#[inline]
 fn is_formula(c: char) -> bool {
-    c.is_alphanumeric() || "/_.+-*^:".contains(c) || c == '\u{FFFD}'
+    static SET: [bool; 128] = ascii_set("/_.+-*^:");
+    match SET.get(c as usize) {
+        Some(&inside) => inside,
+        None => c.is_alphanumeric() || is_unread(c),
+    }
 }
 
 /// Whether a `$` after `text`, an expression without quotes, is in a name: the
@@ -1595,6 +1628,7 @@ fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, ParseError)> {
 
 /// `.prot freelib` (or `.protect freelib`) starts a block encrypted for HSPICE,
 /// which only HSPICE can read: it is skipped up to `.unprot`, with a warning.
+/// With no `.unprot`, the block takes the rest of the file, and this is an error.
 /// (A plain `.prot` block is not encrypted; it is parsed as usual.) `i` is
 /// after the keyword. Returns the input after the block, and the report.
 fn encrypted_block(i: LocatedSpan) -> Option<(LocatedSpan, ParseError)> {
@@ -1602,12 +1636,14 @@ fn encrypted_block(i: LocatedSpan) -> Option<(LocatedSpan, ParseError)> {
     if !word.eq_ignore_ascii_case("freelib") {
         return None;
     }
-    static UNPROT: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?im)^[ \t]*\.unprot(ect)?\b").unwrap());
     let rest = line_end(rest);
     let text: &str = rest.fragment();
+    let Some(line) = unprot_line(text) else {
+        let report = ParseErrorInner::MissingUnprot.record(i);
+        return Some((rest.take_from(text.len()), report));
+    };
     // stop at the newline before `.unprot`, which is then parsed as usual
-    let end = UNPROT.find(text).map_or(text.len(), |m| m.start() - 1);
+    let end = line - 1;
     let lines = text[..end].matches('\n').count();
     Some((
         rest.take_from(end),
@@ -2082,31 +2118,34 @@ pub(super) fn statement_end(i: LocatedSpan<'_>) -> Result<LocatedSpan<'_>, Parse
     }
 }
 
-/// The end of a protected region whose `.prot` line is at `i` (after the
-/// `.prot` keyword): the first later line that starts, after spaces, with
-/// `.unprot` or `.unprotect` (in any letter case). Returns the input after
-/// that logical line, and the number of that line. `None` when no line
-/// ends the region. The lines in the region are not parsed, so their text
-/// can be anything.
-fn unprot(i: LocatedSpan<'_>) -> Option<(LocatedSpan<'_>, u32)> {
-    let s = i.fragment();
+/// The offset of the first line after the first newline of `s` that starts,
+/// after spaces, with `.unprot` or one of its short forms (in any letter case).
+/// The lines before it are not parsed, so their text can be anything.
+fn unprot_line(s: &str) -> Option<usize> {
     let mut from = 0;
     while let Some(n) = s[from..].find('\n') {
         let line = from + n + 1;
-        let rest = &s[line..];
-        let text = rest.trim_start_matches([' ', '\t']);
+        let text = s[line..].trim_start_matches([' ', '\t']);
         if let Some(cmd) = text.strip_prefix('.') {
             let end = cmd.find(|c: char| !is_key(c)).unwrap_or(cmd.len());
-            let cmd = cmd[..end].to_ascii_lowercase();
-            if canonical_cmd(&cmd) == "unprot" {
-                let at = i.take_from(line + rest.len() - text.len());
-                let last = at.location_line();
-                return Some((skip_blank(skip_statement(at)), last));
+            if canonical_cmd(&cmd[..end].to_ascii_lowercase()) == "unprot" {
+                return Some(line);
             }
         }
         from = line;
     }
     None
+}
+
+/// The end of a protected region whose `.prot` line is at `i` (after the
+/// `.prot` keyword): see [`unprot_line`]. Returns the input after that logical
+/// line, and the number of that line. `None` when no line ends the region.
+fn unprot(i: LocatedSpan<'_>) -> Option<(LocatedSpan<'_>, u32)> {
+    let s = i.fragment();
+    let line = unprot_line(s)?;
+    let at = i.take_from(s.len() - s[line..].trim_start_matches([' ', '\t']).len());
+    let last = at.location_line();
+    Some((skip_blank(skip_statement(at)), last))
 }
 
 /// True when the statement at `i` has a `{` or a `}` outside its `$`

@@ -173,7 +173,7 @@ async fn main() {
     }
     let start = Instant::now();
     let (mut mosfets, mut chosen, mut missing) = (0, 0, 0);
-    if subckt.is_none() && ast.instance.is_empty() {
+    if subckt.is_none() && ast.is_library() {
         // a library: each subckt, with its default parameters
         for def in ast.subckt.values() {
             let (n, c, x) = report(&mut out, &ast, Some(&def.name), summary);

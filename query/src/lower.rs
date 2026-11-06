@@ -729,7 +729,7 @@ impl<'p> Lower<'p> {
             && self.non_utf8_files.insert(&paths[pid])
         {
             let message = format!(
-                "\"{}\" has bytes that are not UTF-8 (the first that was read is on this line): they were read as U+FFFD (\u{FFFD}) and the statements were kept, but a name or a value with such a byte may not match its other spellings",
+                "\"{}\" has bytes that are not UTF-8 (the first that was read is on this line): each one was read as a private character, one for each byte value, and the statements were kept",
                 self.paths[pid]
             );
             let loc = LocIdx {
@@ -3818,7 +3818,7 @@ mod tests {
         assert_eq!(warn.len(), 1, "{:#?}", net.diags);
         assert_eq!(warn[0].0, crate::api::Level::Warning);
         assert_eq!(warn[0].1, "deck.sp:2");
-        assert!(warn[0].2.contains("U+FFFD"), "{}", warn[0].2);
+        assert!(warn[0].2.contains("private character"), "{}", warn[0].2);
         // Once per file, also when the file is included twice.
         let deck = write_deck(
             "non_utf8",

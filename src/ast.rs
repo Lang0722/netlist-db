@@ -287,8 +287,8 @@ pub struct ASTBuilder {
     /// Set for a top file with an `.end` line.
     pub after_end: Option<AfterEnd>,
     /// The first line with bytes that are not UTF-8, when the file (or
-    /// the `.lib` section) has such bytes. They are read as U+FFFD, and the
-    /// statements are kept.
+    /// the `.lib` section) has such bytes. Each one is read as a private
+    /// character, and the statements are kept.
     pub non_utf8: Option<u32>,
 }
 

@@ -447,15 +447,37 @@ fn path_in(work_dir: &Path, file_name: &Path) -> PathBuf {
     path
 }
 
+/// The character that stands for `byte`, a byte that is not UTF-8 (0x80 or
+/// above). Each value has its own character in a private range, so that two
+/// names that differ in such a byte stay two names.
+fn raw_byte(byte: u8) -> char {
+    char::from_u32(0xF700 + u32::from(byte)).expect("a private character")
+}
+
+/// Whether `c` is a character of [`raw_byte`]
+pub(crate) fn is_raw_byte(c: char) -> bool {
+    ('\u{F780}'..='\u{F7FF}').contains(&c)
+}
+
+/// `bytes` as text, with [`raw_byte`] for each byte that is not UTF-8
+fn with_raw_bytes(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        text.push_str(chunk.valid());
+        text.extend(chunk.invalid().iter().map(|&byte| raw_byte(byte)));
+    }
+    text
+}
+
 /// Read a netlist as text: remove UTF-8 byte order marks (also from inside a
 /// file, e.g. one made by joining files), and turn lone CR line ends (classic
 /// Mac OS) into LF. Bytes that are not UTF-8 (e.g. a `µ` written in Latin-1)
-/// are read as U+FFFD, instead of rejecting the whole file. Also returns the
-/// first line with such bytes.
+/// are read with [`raw_byte`], instead of rejecting the whole file. Also returns
+/// the first line with such bytes.
 fn decode(bytes: Vec<u8>) -> (String, Option<u32>) {
     let (mut text, lossy) = match String::from_utf8(bytes) {
         Ok(text) => (text, false),
-        Err(e) => (String::from_utf8_lossy(e.as_bytes()).into_owned(), true),
+        Err(e) => (with_raw_bytes(e.as_bytes()), true),
     };
     if text.contains('\u{feff}') {
         text = text.replace('\u{feff}', "");
@@ -484,7 +506,7 @@ fn decode(bytes: Vec<u8>) -> (String, Option<u32>) {
         text = out;
     }
     let line = lossy.then(|| {
-        let at = text.find('\u{FFFD}').unwrap_or(0);
+        let at = text.find(is_raw_byte).unwrap_or(0);
         u32::try_from(text[..at].matches('\n').count() + 1).unwrap_or(u32::MAX)
     });
     (text, line)
@@ -721,7 +743,7 @@ async fn _include(
     // section are not read)
     let non_utf8 = match &file_id {
         FileId::Section { .. } => non_utf8.and_then(|_| {
-            let at = file_ctx.find('\u{FFFD}')?;
+            let at = file_ctx.find(is_raw_byte)?;
             let lines = file_ctx[..at].matches('\n').count();
             Some(line_off_set.saturating_add(1 + u32::try_from(lines).unwrap_or(u32::MAX)))
         }),
@@ -729,8 +751,8 @@ async fn _include(
     };
     let encoding_note = non_utf8.map(|line| {
         ParseErrorInner::Encoding(format!(
-            "The file is not valid UTF-8: the bytes that are not UTF-8 were read as U+FFFD \
-             (the first one on line {line})"
+            "The file is not valid UTF-8: each byte that is not UTF-8 was read as a private \
+             character (the first one on line {line})"
         ))
         .with(None)
     });
@@ -879,15 +901,20 @@ fn join_continued_lines(text: String) -> String {
             in_quote = false;
         }
         let mut dollar_comment = false;
+        // whether the word here starts with a letter: a `$` in such a word is
+        // in a name (see `utils::dollar_in_name`)
+        let mut in_name = None;
         for c in body.chars() {
             match c {
                 '\'' => in_quote = !in_quote,
-                '$' if !in_quote => {
+                '$' if !in_quote && in_name != Some(true) => {
                     dollar_comment = true;
                     break;
                 }
                 _ => {}
             }
+            in_name = (c.is_alphanumeric() || "_.$".contains(c))
+                .then(|| in_name.unwrap_or(c.is_alphabetic() || c == '_'));
         }
         let trimmed = body.trim_end();
         let backslashes = if comment_line || dollar_comment {
@@ -2868,11 +2895,11 @@ mod end_and_utf8_tests {
         // (the parser gives one warning, and no error)
         assert!(errors(&parsed).iter().all(|e| e.is_warning()));
         assert_eq!(top(&parsed).non_utf8, Some(2));
-        assert!(files.inner[parsed.top_ids[0].0].contains("caf\u{FFFD} "));
+        assert!(files.inner[parsed.top_ids[0].0].contains("caf\u{F7E9} "));
         let (ast, _) = files.build(parsed);
         assert_eq!(names(&ast.instance), ["v1", "r1"]);
 
-        // A bad byte in a statement: the statement is kept, with U+FFFD.
+        // A bad byte in a statement: the statement is kept.
         let tmp = TempDir::new("non_utf8");
         let dir = &tmp.0;
         let main = dir.join("main.sp");
@@ -2888,7 +2915,7 @@ mod end_and_utf8_tests {
             .unwrap();
         assert_eq!(inc.1.non_utf8, Some(3));
         let (ast, _) = files.build(parsed);
-        assert_eq!(names(&ast.instance), ["R1", "R\u{FFFD}2", "R3", "R4"]);
+        assert_eq!(names(&ast.instance), ["R1", "R\u{F7E9}2", "R3", "R4"]);
 
         // A `.lib` section: the first bad line in the section, and none
         // when the bad bytes are outside it.

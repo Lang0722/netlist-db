@@ -66,6 +66,7 @@
 use crate::{
     AST, CondBlock,
     ast::{KeyValue, ParamFunc, Value},
+    parser::is_raw_byte,
 };
 use core::fmt;
 use std::{
@@ -1333,9 +1334,9 @@ impl<'e> Parser<'e> {
             self.pos += len;
             return Ok(Expr::Num(v));
         }
-        if c.is_alphabetic() || c == '_' {
+        if c.is_alphabetic() || c == '_' || is_raw_byte(c) {
             let len = rest
-                .find(|c: char| !(c.is_alphanumeric() || "_.$".contains(c)))
+                .find(|c: char| !(c.is_alphanumeric() || "_.$".contains(c) || is_raw_byte(c)))
                 .unwrap_or(rest.len());
             let name = rest[..len].to_ascii_lowercase();
             self.pos += len;
