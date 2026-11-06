@@ -1,4 +1,5 @@
-use super::{Copies, SHORT_CTX, analyze, analyze_with, distance, glob, suggest};
+use super::queries::{distance, glob};
+use super::{Copies, SHORT_CTX, analyze, analyze_with, suggest};
 use crate::{LoadOptions, Netlist, Page, QueryError, SubcktSort};
 
 /// Loads `text` as the deck of test `name` (in a temporary directory,
