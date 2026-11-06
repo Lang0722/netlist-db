@@ -69,13 +69,24 @@ use crate::{
     parser::is_raw_byte,
 };
 use core::fmt;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
     f64::consts::PI,
+    rc::Rc,
     sync::Arc,
 };
+
+/// `name` in lowercase, with no copy when it already is
+#[inline]
+pub(crate) fn lower(name: &str) -> Cow<'_, str> {
+    if name.bytes().any(|c| c.is_ascii_uppercase()) {
+        Cow::Owned(name.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(name)
+    }
+}
 
 /// Why a value could not be computed
 #[derive(Debug, Clone, PartialEq)]
@@ -261,6 +272,13 @@ struct Func {
     body: Def,
 }
 
+/// The definitions of a level, by lowercase name
+type Defs = HashMap<Rc<str>, Def>;
+/// The functions of a level, by lowercase name
+type Funcs = HashMap<String, Func>;
+/// What the instances of a definition share
+type LevelMaps = (Rc<Defs>, Rc<Funcs>);
+
 /// The parameters of one level of the hierarchy: the top level, or one
 /// subckt instance (its `.subckt` defaults, its local `.param` statements and
 /// the values passed on the instance line).
@@ -268,21 +286,25 @@ struct Func {
 pub struct Scope<'p> {
     parent: Option<&'p Scope<'p>>,
     parhier: ParHier,
-    /// `.param` statements and `.subckt` defaults
-    defs: HashMap<String, Def>,
+    /// `.param` statements and `.subckt` defaults. The instances of a definition
+    /// share these (see [`Scope::define_shared`]).
+    defs: Rc<Defs>,
     /// values passed on the instance line: they hide `defs`
-    passed: HashMap<String, Def>,
-    funcs: HashMap<String, Func>,
-    cache: RefCell<HashMap<String, Result<f64, EvalError>>>,
+    passed: Defs,
+    funcs: Rc<Funcs>,
+    /// what [`Scope::define_shared`] keeps for each definition (kept by the top
+    /// level for every level below it)
+    shared: RefCell<HashMap<usize, LevelMaps>>,
+    cache: RefCell<HashMap<Rc<str>, Result<f64, EvalError>>>,
     /// parameters being evaluated, to find the ones that depend on themselves
-    active: RefCell<Vec<String>>,
+    active: RefCell<Vec<Rc<str>>>,
     /// parsed expressions (kept by the top level for every level below it)
     parsed: RefCell<HashMap<String, Arc<Expr>>>,
     /// a condition of an `.if` line is being evaluated: see the module's
     /// documentation
     in_condition: Cell<bool>,
     /// what `cache` holds, for a condition
-    condition_cache: RefCell<HashMap<String, Result<f64, EvalError>>>,
+    condition_cache: RefCell<HashMap<Rc<str>, Result<f64, EvalError>>>,
     /// the reads past [`HSPICE_READ_REACH`] (kept by the top level for every level
     /// below it)
     far_reads: RefCell<Vec<FarRead>>,
@@ -300,45 +322,35 @@ pub struct Scope<'p> {
 impl Scope<'static> {
     /// An empty top level
     pub fn new(parhier: ParHier) -> Self {
-        Self {
-            parent: None,
-            parhier,
-            defs: HashMap::new(),
-            passed: HashMap::new(),
-            funcs: HashMap::new(),
-            cache: RefCell::new(HashMap::new()),
-            active: RefCell::new(Vec::new()),
-            parsed: RefCell::new(HashMap::new()),
-            in_condition: Cell::new(false),
-            condition_cache: RefCell::new(HashMap::new()),
-            far_reads: RefCell::new(Vec::new()),
-            stack_base: Cell::new(0),
-            calls: RefCell::new(HashMap::new()),
-        }
+        Self::empty(None, parhier)
     }
 }
 
 impl<'p> Scope<'p> {
     /// An empty level below this one (a subckt instance)
     pub fn child(&'p self) -> Scope<'p> {
+        Scope::empty(Some(self), self.parhier)
+    }
+
+    fn empty(parent: Option<&'p Scope<'p>>, parhier: ParHier) -> Self {
         Scope {
-            parent: Some(self),
-            parhier: self.parhier,
-            defs: HashMap::new(),
-            passed: HashMap::new(),
-            funcs: HashMap::new(),
-            cache: RefCell::new(HashMap::new()),
-            active: RefCell::new(Vec::new()),
-            parsed: RefCell::new(HashMap::new()),
+            parent,
+            parhier,
+            defs: Rc::default(),
+            passed: Defs::default(),
+            funcs: Rc::default(),
+            shared: RefCell::default(),
+            cache: RefCell::default(),
+            active: RefCell::default(),
+            parsed: RefCell::default(),
             in_condition: Cell::new(false),
-            condition_cache: RefCell::new(HashMap::new()),
-            far_reads: RefCell::new(Vec::new()),
+            condition_cache: RefCell::default(),
+            far_reads: RefCell::default(),
             stack_base: Cell::new(0),
-            calls: RefCell::new(HashMap::new()),
+            calls: RefCell::default(),
         }
     }
 
-    /// Forgets the values computed at this level
     fn clear_values(&mut self) {
         self.cache.get_mut().clear();
         self.condition_cache.get_mut().clear();
@@ -354,9 +366,9 @@ impl<'p> Scope<'p> {
     pub fn define(&mut self, kv: &KeyValue<'_>) {
         let body = Def::from(&kv.v);
         if let Some((name, args)) = function_key(&kv.k) {
-            self.funcs.insert(name, Func { args, body });
+            Rc::make_mut(&mut self.funcs).insert(name, Func { args, body });
         } else {
-            self.defs.insert(kv.k.to_ascii_lowercase(), body);
+            Rc::make_mut(&mut self.defs).insert(Rc::from(&*lower(&kv.k)), body);
         }
         self.clear_values();
     }
@@ -365,15 +377,14 @@ impl<'p> Scope<'p> {
     pub fn define_func(&mut self, f: &ParamFunc<'_>) {
         let args = f.args.iter().map(|a| a.to_ascii_lowercase()).collect();
         let body = Def::from(&Value::Expr(f.body.clone()));
-        self.funcs
-            .insert(f.name.to_ascii_lowercase(), Func { args, body });
+        Rc::make_mut(&mut self.funcs).insert(f.name.to_ascii_lowercase(), Func { args, body });
         self.clear_values();
     }
 
     /// Define a parameter with a value (or the error that computing it gave),
     /// as a `.param` statement of this level would
     pub fn set(&mut self, name: &str, value: Result<f64, EvalError>) {
-        self.defs.insert(name.to_ascii_lowercase(), value.into());
+        Rc::make_mut(&mut self.defs).insert(Rc::from(&*lower(name)), value.into());
         self.clear_values();
     }
 
@@ -381,9 +392,36 @@ impl<'p> Scope<'p> {
     /// (`X1 a b inv w='2*p'`). It is evaluated at this level (see the module's
     /// documentation).
     pub fn pass(&mut self, kv: &KeyValue<'_>) {
-        self.passed
-            .insert(kv.k.to_ascii_lowercase(), (&kv.v).into());
+        self.passed.insert(Rc::from(&*lower(&kv.k)), (&kv.v).into());
         self.clear_values();
+    }
+
+    /// Defines `params` and `funcs` at a new level, as [`Scope::define`] and
+    /// [`Scope::define_func`] do. `id` names the definition that holds them. All its
+    /// instances share one copy, so that an instance costs little. A later
+    /// definition at one level makes a copy for that level.
+    pub(crate) fn define_shared<'k, 'v: 'k>(
+        &mut self,
+        id: usize,
+        params: impl Iterator<Item = &'k KeyValue<'v>>,
+        funcs: &[ParamFunc<'_>],
+    ) {
+        let root = self.root();
+        let known = root.shared.borrow().get(&id).cloned();
+        let (defs, funcs) = known.unwrap_or_else(|| {
+            let mut level = Scope::new(root.parhier);
+            for kv in params {
+                level.define(kv);
+            }
+            for f in funcs {
+                level.define_func(f);
+            }
+            let maps = (level.defs, level.funcs);
+            root.shared.borrow_mut().insert(id, maps.clone());
+            maps
+        });
+        self.defs = defs;
+        self.funcs = funcs;
     }
 
     /// Defines the plain `.param` statements of a level, from a list and its
@@ -464,24 +502,26 @@ impl<'p> Scope<'p> {
 
     /// Whether `name` is defined at this level (not above)
     pub fn defines(&self, name: &str) -> bool {
-        self.binds(&name.to_ascii_lowercase())
+        self.binds(&lower(name))
     }
 
     /// The value of the parameter `name`
     pub fn get(&self, name: &str) -> Result<f64, EvalError> {
-        let key = name.to_ascii_lowercase();
-        match self.find_at(&key) {
+        let key = lower(name);
+        let key: &str = &key;
+        match self.find_at(key) {
             Some((levels, scope)) => {
-                self.note_read(&key, levels);
-                match scope.value_here(&key) {
+                self.note_read(key, levels);
+                match scope.value_here(key) {
                     // a text that reads its own name: the name at the level above
                     Err(EvalError::Recursive(looped))
-                        if looped == key && self.active.borrow().last() == Some(&key) =>
+                        if looped == key
+                            && self.active.borrow().last().is_some_and(|k| **k == *key) =>
                     {
-                        match self.parent.and_then(|p| p.find_at(&key)) {
+                        match self.parent.and_then(|p| p.find_at(key)) {
                             Some((levels, above)) => {
-                                self.note_read(&key, levels + 1);
-                                above.value_here(&key)
+                                self.note_read(key, levels + 1);
+                                above.value_here(key)
                             }
                             None => Err(EvalError::Recursive(looped)),
                         }
@@ -489,12 +529,12 @@ impl<'p> Scope<'p> {
                     result => result,
                 }
             }
-            None => match key.as_str() {
+            None => match key {
                 "pi" => Ok(PI),
                 // simulation variables: they read 0 in a value, and a condition
                 // cannot read them, as measured (decks `p_time_in_expr`, `sv_hertz*`)
                 "time" | "hertz" if !self.in_condition.get() => Ok(0.0),
-                "time" | "hertz" => Err(EvalError::NotStatic(key)),
+                "time" | "hertz" => Err(EvalError::NotStatic(key.to_owned())),
                 _ => Err(EvalError::Undefined(name.to_owned())),
             },
         }
@@ -572,7 +612,7 @@ impl<'p> Scope<'p> {
     /// with the same bindings for the parameters that an expression reads
     /// give it the same value.
     pub(crate) fn binding(&self, name: &str) -> Binding {
-        let key = name.to_ascii_lowercase();
+        let key = lower(name);
         self.find(&key).map(|s| {
             s.value_here(&key)
                 .map(f64::to_bits)
@@ -671,19 +711,22 @@ impl<'p> Scope<'p> {
         if let Some(v) = cache.borrow().get(key) {
             return v.clone();
         }
-        if self.active.borrow().iter().any(|k| k == key) {
+        if self.active.borrow().iter().any(|k| **k == *key) {
             return Err(EvalError::Recursive(key.to_owned()));
         }
         if self.active.borrow().len() >= MAX_DEPTH || self.stack_used() > STACK_BUDGET {
             return Err(EvalError::TooDeep(key.to_owned(), self.height()));
         }
-        let passed = self.passed.get(key);
-        self.active.borrow_mut().push(key.to_owned());
-        let mut v = self.value_of(passed.unwrap_or_else(|| &self.defs[key]));
+        let passed = self.passed.get_key_value(key);
+        let (name, def) = passed
+            .or_else(|| self.defs.get_key_value(key))
+            .expect("this level binds the name");
+        self.active.borrow_mut().push(name.clone());
+        let mut v = self.value_of(def);
         self.active.borrow_mut().pop();
         // a value passed whose text leads back to it: as a whole, above
         if matches!(&v, Err(EvalError::Recursive(looped)) if looped == key)
-            && let (Some(def), Some(parent)) = (passed, self.parent)
+            && let (Some((_, def)), Some(parent)) = (passed, self.parent)
         {
             v = parent.value_of(def).map_err(|e| match e {
                 EvalError::TooDeep(..) => e,
@@ -693,7 +736,7 @@ impl<'p> Scope<'p> {
         // (a cycle depends on the name where the evaluation started: read
         // later, this name may have a value. A chain gets further next time.)
         if !matches!(v, Err(EvalError::Recursive(_) | EvalError::TooDeep(..))) {
-            cache.borrow_mut().insert(key.to_owned(), v.clone());
+            cache.borrow_mut().insert(name.clone(), v.clone());
         }
         v
     }

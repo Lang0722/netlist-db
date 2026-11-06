@@ -88,22 +88,16 @@ use crate::{
     ast::{KeyValue, Model, ModelType, Value},
     eval::{
         Active, Binding, CondError, EvalError, FarRead, HSPICE_READ_REACH, ParHier, Scope,
-        expr_names, function_name, in_order,
+        expr_names, function_name, in_order, lower,
     },
     hierarchy::MAX_HIERARCHY_DEPTH,
     instance::{Instance, InstanceCtx, MOSFET, is_key_place, is_off, plain_word},
 };
-use core::fmt;
+use core::fmt::{self, Write as _};
 use indexmap::IndexSet;
 use itertools::Itertools as _;
-use std::{
-    borrow::Cow,
-    cell::OnceCell,
-    collections::{HashMap, HashSet},
-    iter::once,
-    ptr,
-    rc::Rc,
-};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::{borrow::Cow, cell::OnceCell, cmp::Reverse, iter::once, ptr, rc::Rc};
 
 /// Why no model could be chosen
 #[derive(Debug, Clone, PartialEq)]
@@ -241,19 +235,60 @@ impl fmt::Display for Short {
         let x = self.0;
         // the shortest exact form, if short; else the fewest digits that
         // give back `x` within 1e-12 (relative)
-        let exact = format!("{x:e}");
-        if exact.len() <= 12 {
-            return f.write_str(&exact);
+        let mut text = NumberText::default();
+        write!(text, "{x:e}")?;
+        if text.len <= 12 {
+            return f.write_str(text.as_str());
         }
-        for digits in 0..16 {
-            let s = format!("{x:.digits$e}");
-            if s.parse::<f64>()
-                .is_ok_and(|y| (y - x).abs() <= x.abs() * 1e-12)
-            {
-                return f.write_str(&s);
+        let in_digits = |digits: usize, text: &mut NumberText| {
+            text.len = 0;
+            write!(text, "{x:.digits$e}").is_ok()
+                && text
+                    .as_str()
+                    .parse::<f64>()
+                    .is_ok_and(|y| (y - x).abs() <= x.abs() * 1e-12)
+        };
+        // (one more digit can only come nearer to `x`, so this search can halve)
+        if !in_digits(15, &mut text) {
+            return write!(f, "{x:e}");
+        }
+        let (mut low, mut high) = (0, 15);
+        while low < high {
+            let middle = (low + high) / 2;
+            if in_digits(middle, &mut text) {
+                high = middle;
+            } else {
+                low = middle + 1;
             }
         }
-        write!(f, "{x:e}")
+        in_digits(high, &mut text);
+        f.write_str(text.as_str())
+    }
+}
+
+/// The text of a number, on the stack: one for each number of a listing
+#[derive(Default)]
+struct NumberText {
+    bytes: [u8; 32],
+    len: usize,
+}
+
+impl NumberText {
+    fn as_str(&self) -> &str {
+        // (`write_str` adds whole strings)
+        core::str::from_utf8(&self.bytes[..self.len]).unwrap_or_default()
+    }
+}
+
+impl fmt::Write for NumberText {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let end = self.len + s.len();
+        self.bytes
+            .get_mut(self.len..end)
+            .ok_or(fmt::Error)?
+            .copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
     }
 }
 
@@ -655,8 +690,8 @@ struct Bin<'a, 's> {
 impl<'a, 's> ModelIndex<'a, 's> {
     fn new(models: impl IntoIterator<Item = &'a Model<'s>>) -> Self {
         let mut index = Self {
-            exact: HashMap::new(),
-            bins: HashMap::new(),
+            exact: HashMap::default(),
+            bins: HashMap::default(),
         };
         for model in models {
             // (no other type serves an M line, and it hides nothing: decks
@@ -688,7 +723,7 @@ impl<'a, 's> ModelIndex<'a, 's> {
 
 /// The functions defined with `.param f(x)=...` anywhere in `ast`
 fn function_names(ast: &AST<'_>) -> HashSet<String> {
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     let mut stack = vec![ast];
     while let Some(a) = stack.pop() {
         names.extend(a.param.iter().filter_map(|kv| function_name(&kv.k)));
@@ -728,11 +763,11 @@ impl<'a, 's> Selector<'a, 's> {
         Self {
             opts: Options::new(ast, active),
             functions: function_names(ast),
-            index: HashMap::new(),
-            merged: HashMap::new(),
-            names: HashMap::new(),
-            limit_names: HashMap::new(),
-            limits: HashMap::new(),
+            index: HashMap::default(),
+            merged: HashMap::default(),
+            names: HashMap::default(),
+            limit_names: HashMap::default(),
+            limits: HashMap::default(),
         }
     }
 
@@ -837,7 +872,8 @@ impl<'a, 's> Selector<'a, 's> {
         // (a bin divides W by a smaller NF, and the circuit has one finger:
         // decks `mx_nf_*`)
         let nf = nf.max(1.0);
-        let key = name.to_ascii_lowercase();
+        let key = lower(name);
+        let key: &str = &key;
         let mut seen = 0;
         let mut end = on_path.len();
         while end > 0 {
@@ -849,10 +885,10 @@ impl<'a, 's> Selector<'a, 's> {
             let index = self.group_index(&on_path[start..end]);
             end = start;
             // a model of this very name
-            if let Some(&model) = index.exact.get(&key) {
+            if let Some(&model) = index.exact.get(key) {
                 return Ok(Selection { model, l, w, nf });
             }
-            let Some(bins) = index.bins.get(&key) else {
+            let Some(bins) = index.bins.get(key) else {
                 continue;
             };
             if let Some(bin) = bins.iter().find(|bin| !bin.complete) {
@@ -904,10 +940,11 @@ impl<'a, 's> Selector<'a, 's> {
     /// with `a` as a node (decks `q_two_model_words*`).
     fn read_line<'m, 'l>(&mut self, m: &'m MOSFET<'l>, on_path: &[&'a AST<'s>]) -> MosLine<'m, 'l> {
         let mut names_model = |word: &str| {
-            let key = word.to_ascii_lowercase();
+            let key = lower(word);
+            let key: &str = &key;
             on_path.iter().any(|&ast| {
                 let index = self.index(ast);
-                index.exact.contains_key(&key) || index.bins.contains_key(&key)
+                index.exact.contains_key(key) || index.bins.contains_key(key)
             })
         };
         let after_fourth = m.extra_nodes.iter().chain(once(&m.mname));
@@ -932,8 +969,18 @@ impl<'a, 's> Selector<'a, 's> {
         scopes: &[&Scope<'_>],
         on_path: &[&'a AST<'s>],
     ) -> Result<Selection<'a, 's>, SelectError> {
-        let scope = scopes.last().expect("the top level at least");
         let line = self.read_line(m, on_path);
+        self.select_line(line, scopes, on_path)
+    }
+
+    /// The model of a MOSFET whose line reads `line`: see [`Selector::select`]
+    fn select_line(
+        &mut self,
+        line: MosLine<'_, '_>,
+        scopes: &[&Scope<'_>],
+        on_path: &[&'a AST<'s>],
+    ) -> Result<Selection<'a, 's>, SelectError> {
+        let scope = scopes.last().expect("the top level at least");
         let size = size(line, scope, &self.opts)?;
         let selection = self.choose(line.name(), size, scopes, on_path)?;
         if line.nodes() > MAX_MOSFET_NODES {
@@ -942,10 +989,10 @@ impl<'a, 's> Selector<'a, 's> {
                 nodes: line.nodes(),
             });
         }
-        if line.nodes() > 4 && m.extra_nodes[0].starts_with(|c: char| c.is_ascii_digit()) {
+        if line.nodes() > 4 && line.m.extra_nodes[0].starts_with(|c: char| c.is_ascii_digit()) {
             return Err(SelectError::DigitFifthWord {
                 name: line.name().to_owned(),
-                word: m.extra_nodes[0].to_string(),
+                word: line.m.extra_nodes[0].to_string(),
             });
         }
         Ok(selection)
@@ -974,12 +1021,11 @@ fn instance_scope<'p, 'a, 's>(
     line: &[KeyValue<'_>],
 ) -> (Scope<'p>, Active<'a, 's>) {
     let mut child = scope.child();
-    for kv in def.params.iter().chain(&def.ast.param) {
-        child.define(kv);
-    }
-    for f in &def.ast.param_func {
-        child.define_func(f);
-    }
+    child.define_shared(
+        ptr::from_ref(def) as usize,
+        def.params.iter().chain(&def.ast.param),
+        &def.ast.param_func,
+    );
     let line = || line.iter().filter(|kv| !is_multiplier(kv));
     for kv in line() {
         child.pass(kv);
@@ -1187,7 +1233,7 @@ impl<'s> AST<'s> {
     /// path above.
     pub(crate) fn reentrant_defs(&self) -> Vec<&Subckt<'s>> {
         let mut defs = Vec::new();
-        let mut calls = HashMap::new();
+        let mut calls = HashMap::default();
         collect_calls(self, None, &mut defs, &mut calls);
         let reaching = names_that_reach_a_cycle(&calls);
         defs.retain(|def| reaching.contains(def.name.to_lowercase().as_str()));
@@ -1265,9 +1311,9 @@ fn collect_calls<'a, 's>(
 /// The names in `calls` that are on a cycle or lead to one. The search keeps an
 /// explicit stack, because a chain of calls can be long.
 fn names_that_reach_a_cycle<'c>(calls: &'c HashMap<&str, HashSet<String>>) -> HashSet<&'c str> {
-    let mut open = HashSet::new();
-    let mut done = HashSet::new();
-    let mut reaching = HashSet::new();
+    let mut open = HashSet::default();
+    let mut done = HashSet::default();
+    let mut reaching = HashSet::default();
     for (&start, callees) in calls {
         if done.contains(start) {
             continue;
@@ -1414,21 +1460,21 @@ impl<'a, 's> Usage<'a, 's> {
         Self {
             sel: Selector::new(ast, active),
             parhier: scope.parhier(),
-            models: HashMap::new(),
+            models: HashMap::default(),
             errors: Vec::new(),
-            error_numbers: HashMap::new(),
-            memo: HashMap::new(),
-            heights: HashMap::new(),
+            error_numbers: HashMap::default(),
+            memo: HashMap::default(),
+            heights: HashMap::default(),
             deepest: 0,
-            memo_use: HashMap::new(),
+            memo_use: HashMap::default(),
             unkept: ast
                 .reentrant_defs()
                 .into_iter()
                 .map(|def| ptr::from_ref(def) as usize)
                 .collect(),
             next_context: 2,
-            visible: HashMap::new(),
-            reads: HashMap::new(),
+            visible: HashMap::default(),
+            reads: HashMap::default(),
             reading: Vec::new(),
             path: Vec::new(),
             expanding: Vec::new(),
@@ -1458,7 +1504,7 @@ impl<'a, 's> Usage<'a, 's> {
             .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name.cmp(&b.0.name)));
         usage
             .errors
-            .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+            .sort_by_cached_key(|(e, n, path)| (Reverse(*n), path.clone(), e.to_string()));
         usage
     }
 
@@ -1631,7 +1677,7 @@ impl<'a, 's> Usage<'a, 's> {
         visible: usize,
     ) -> Counts {
         let scope = *scopes.last().expect("the top level at least");
-        let mut counts = Counts::new();
+        let mut counts = Counts::default();
         for e in &active.errors {
             let used = Use::Error(self.error_number(condition_error(e), &e.block.line.name));
             *counts.entry(used).or_default() += 1;
@@ -1855,15 +1901,23 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
 
     /// The path of the line `name` of the current level
     fn path_of(&self, name: &str) -> String {
-        self.path.iter().copied().chain(once(name)).join(".")
+        let size = self.path.iter().map(|p| p.len() + 1).sum::<usize>() + name.len();
+        let mut path = String::with_capacity(size);
+        for level in &self.path {
+            path.push_str(level);
+            path.push('.');
+        }
+        path.push_str(name);
+        path
     }
 
     fn line(&mut self, inst: &'a Instance<'s>, scopes: &[&Scope<'_>], on_path: &[&'a AST<'s>]) {
         let scope = *scopes.last().expect("the top level at least");
         match &inst.ctx {
             InstanceCtx::MOSFET(m) => {
-                let selection = self.sel.select(m, scopes, on_path);
-                let mname = self.sel.read_line(m, on_path).name();
+                let line = self.sel.read_line(m, on_path);
+                let selection = self.sel.select_line(line, scopes, on_path);
+                let mname = line.name();
                 let path = self.path_of(&inst.name);
                 (self.f)(MosfetModel {
                     path,
@@ -1903,6 +1957,28 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
                 self.path.pop();
             }
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Short;
+
+    /// The fewest digits that give back the number within 1e-12 (relative)
+    #[test]
+    fn short_numbers() {
+        let cases = [
+            (1e-6, "1e-6"),
+            (1.2e-4, "1.2e-4"),
+            (1.1999999999999999e-4, "1.2e-4"),
+            (100e-9 + 123456.0e-12, "2.23456e-7"),
+            (std::f64::consts::PI, "3.14159265359e0"),
+            (-2.5e3, "-2.5e3"),
+            (0.0, "0e0"),
+        ];
+        for (x, text) in cases {
+            assert_eq!(Short(x).to_string(), text);
         }
     }
 }

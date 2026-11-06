@@ -26,6 +26,7 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4.28"
 fast-float2 = "0.2.3"
 indexmap = "2.11"
+rustc-hash = "2"
 nom = "8"
 nom_locate = "5"
 regex = "1.11"
@@ -61,6 +62,7 @@ netlist-macros = { path = "macros" }
 netlist-expr = { path = "expr" }
 fast-float2.workspace = true
 indexmap.workspace = true
+rustc-hash.workspace = true
 log.workspace = true
 nom.workspace = true
 nom_locate.workspace = true

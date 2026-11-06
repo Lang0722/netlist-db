@@ -727,6 +727,16 @@ pub(super) fn value(i: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
         }
         _ => {}
     }
+    // (a number that a white space ends: `formula` stops there too)
+    if let Ok((i_num, num)) = float_unit.parse_complete(i)
+        && i_num
+            .fragment()
+            .as_bytes()
+            .first()
+            .is_none_or(|c| matches!(c, b' ' | b'\t' | b'\r' | b'\n'))
+    {
+        return Ok((i_num, ValueBuilder::Num(num)));
+    }
     match (float_unit.parse_complete(i), formula.parse_complete(i)) {
         (Ok((i_num, num)), Ok((i_formula, formula))) => {
             // when the len of rest of formula is less than num
