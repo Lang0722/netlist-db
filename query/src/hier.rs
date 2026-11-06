@@ -62,8 +62,9 @@ use std::{
     borrow::Cow,
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
-    hash::{BuildHasherDefault, Hasher},
 };
+
+pub(crate) use rustc_hash::{FxHashMap as FxMap, FxHashSet as FxSet};
 
 /// An iterator whose length is known, for [`api::page`].
 struct Known<I> {
@@ -255,42 +256,6 @@ impl Hier {
         self.dup_elems.contains(&(def, name))
     }
 }
-
-/// A fast hasher for small integer keys (FxHash).
-#[derive(Default)]
-pub(crate) struct FxHasher(u64);
-
-impl Hasher for FxHasher {
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.write_u64(b as u64);
-        }
-    }
-
-    #[inline]
-    fn write_u32(&mut self, x: u32) {
-        self.write_u64(x as u64);
-    }
-
-    #[inline]
-    fn write_u64(&mut self, x: u64) {
-        self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
-    }
-
-    #[inline]
-    fn write_usize(&mut self, x: usize) {
-        self.write_u64(x as u64);
-    }
-
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-}
-
-pub(crate) type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
-pub(crate) type FxSet<K> = HashSet<K, BuildHasherDefault<FxHasher>>;
 
 /// Lists of definitions by name, in compressed rows.
 #[derive(Default)]

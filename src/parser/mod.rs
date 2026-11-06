@@ -16,7 +16,7 @@ mod tokens;
 use alloc::sync::Arc;
 use blocks::Blocks;
 use include::{_include, include_path, search_includes, spawn_include};
-pub use include::{MAX_INCLUDE_DEPTH, expanded_text_limit};
+pub use include::{IncludeLimits, IncludeStep, MAX_INCLUDE_DEPTH};
 use manager::{Include, ParseManager};
 pub(crate) use source::is_raw_byte;
 use source::statement_lines;

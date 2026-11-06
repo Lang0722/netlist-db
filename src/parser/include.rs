@@ -27,12 +27,53 @@ pub const MAX_INCLUDE_DEPTH: usize = 1100;
 /// How many files are open at one time
 pub(super) const MAX_OPEN_FILES: usize = 64;
 
-/// How much text the includes can expand to, counting each copy of a file:
-/// files that each include the next one twice expand to 2^n copies. `total` is the
-/// size of all the files, each one once.
-pub fn expanded_text_limit(total: usize) -> usize {
-    let room = if cfg!(test) { 1 << 20 } else { 1 << 30 };
-    total.saturating_mul(16).saturating_add(room)
+/// What a walk does at an include line
+pub enum IncludeStep {
+    Follow,
+    /// It skips the include, with this message.
+    Skip(String),
+    /// It skips the include, and an earlier message said why.
+    SkipQuietly,
+}
+
+/// The limits of a walk that follows the include lines, and each copy of a file
+/// that it read: files that each include the next one twice expand to 2^n copies.
+pub struct IncludeLimits {
+    /// How much text the walk can still take in. `None`: past the limit.
+    room: Option<usize>,
+}
+
+impl IncludeLimits {
+    /// `total`: the size of all the files, each one once
+    pub fn new(total: usize) -> Self {
+        let room = if cfg!(test) { 1 << 20 } else { 1 << 30 };
+        Self {
+            room: Some(total.saturating_mul(16).saturating_add(room)),
+        }
+    }
+
+    /// The step at an include of a file of `size` bytes, with `depth` files in the
+    /// chain of includes above it
+    pub fn step(&mut self, depth: usize, size: usize) -> IncludeStep {
+        let Some(room) = self.room else {
+            return IncludeStep::SkipQuietly;
+        };
+        if depth >= MAX_INCLUDE_DEPTH {
+            return IncludeStep::Skip(format!(
+                "more than {MAX_INCLUDE_DEPTH} files in a chain of includes: this include is \
+                 skipped"
+            ));
+        }
+        self.room = room.checked_sub(size);
+        if self.room.is_none() {
+            return IncludeStep::Skip(
+                "the includes expand to too much text (a file that includes others twice?): \
+                 this include and all later ones are skipped"
+                    .to_owned(),
+            );
+        }
+        IncludeStep::Follow
+    }
 }
 
 /// The text of `path`. An include line must name a regular file: a device or a

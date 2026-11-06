@@ -520,7 +520,7 @@ async fn file_included_twice_is_parsed_once() {
 /// them still count.
 #[test]
 fn diagnostics_are_capped_per_file() {
-    use crate::{MAX_DIAGNOSTICS_PER_FILE, Reporter};
+    use crate::{MAX_DIAGNOSTICS_PER_FILE, netlist_build::Reporter};
     let file_id: FileId = PathBuf::from("x.sp").into();
     let mut reporter = Reporter::default();
     for _ in 0..MAX_DIAGNOSTICS_PER_FILE + 50 {

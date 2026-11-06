@@ -37,7 +37,7 @@ use netlist_db::{
         InstanceCtxBuilder, MOS_POSITIONAL, MOSFETBuilder, RCL_POSITIONAL, SourceBuilder,
         VoltageBuilder, gives_no_value,
     },
-    parser::{MAX_NESTING, parse_top_multi_with},
+    parser::{IncludeLimits, IncludeStep, MAX_NESTING, parse_top_multi_with},
 };
 use std::{
     borrow::Cow,
@@ -306,9 +306,7 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
         },
         reported: vec![false; parsed.inner.len()],
         reading: Vec::new(),
-        room: Some(netlist_db::parser::expanded_text_limit(
-            texts.iter().map(String::len).sum(),
-        )),
+        limits: IncludeLimits::new(texts.iter().map(String::len).sum()),
         sites: Vec::new(),
         site: None,
         def_site: Vec::new(),
@@ -423,9 +421,7 @@ struct Lower<'p> {
     /// The files being lowered, the top file first: a file that includes
     /// one of them again is an include cycle.
     reading: Vec<usize>,
-    /// How much text the includes can still take in: see
-    /// `parser::expanded_text_limit`. `None`: past the limit, and reported.
-    room: Option<usize>,
+    limits: IncludeLimits,
     /// Each read of an included file: the include line, and the read that
     /// holds that line (`None`: the top file).
     sites: Vec<(LocIdx, Option<u32>)>,
@@ -810,31 +806,21 @@ impl<'p> Lower<'p> {
         ))
     }
 
-    /// Whether the walk can follow an include of the file `id` in the file `pid`:
-    /// the limits are those of `Files::build`. It reports the first one passed.
+    /// Whether the walk can follow an include of the file `id` in the file `pid`.
+    /// It reports the first limit passed.
     fn include_in_limits(&mut self, id: usize, pid: usize, pos: Option<Pos>) -> bool {
-        use netlist_db::parser::MAX_INCLUDE_DEPTH;
-        let Some(room) = self.room else {
-            return false;
-        };
-        let loc = pos.map(|p| LocIdx {
-            file: pid as u32,
-            line: p.line_num,
-        });
-        if self.reading.len() >= MAX_INCLUDE_DEPTH {
-            let message = format!(
-                "more than {MAX_INCLUDE_DEPTH} files in a chain of includes: this include is skipped"
-            );
-            self.diag(Level::Error, "include_limit", message, loc);
-            return false;
+        match self.limits.step(self.reading.len(), self.texts[id].len()) {
+            IncludeStep::Follow => true,
+            IncludeStep::SkipQuietly => false,
+            IncludeStep::Skip(message) => {
+                let loc = pos.map(|p| LocIdx {
+                    file: pid as u32,
+                    line: p.line_num,
+                });
+                self.diag(Level::Error, "include_limit", message, loc);
+                false
+            }
         }
-        self.room = room.checked_sub(self.texts[id].len());
-        if self.room.is_none() {
-            let message = "the includes expand to too much text (a file that includes others twice?): this include and all later ones are skipped".to_owned();
-            self.diag(Level::Error, "include_limit", message, loc);
-            return false;
-        }
-        true
     }
 
     /// Reports that file `pid` includes file `again` (at `pos`), which is
