@@ -104,6 +104,10 @@ pub enum ParseErrorInner {
     /// An `.alter` line in a `.subckt` body
     #[error("`.alter` inside a `.subckt`")]
     AlterInSubckt,
+    /// An include that goes past a limit (see `parser::MAX_INCLUDE_DEPTH` and
+    /// `parser::expanded_text_limit`): the include is skipped
+    #[error("{0}")]
+    IncludeLimit(String),
     /// A `.prot` region that reaches the end of its file without `.unprot`
     #[error("`.prot` has no `.unprot`")]
     MissingUnprot,
@@ -435,7 +439,9 @@ impl ParseError {
                             "Duplicate definition of subckt `{name}`; it replaces the earlier one"
                         ),
                     ),
-                    ParseErrorInner::Unsupported(msg) => ("Error", msg.clone()),
+                    ParseErrorInner::Unsupported(msg) | ParseErrorInner::IncludeLimit(msg) => {
+                        ("Error", msg.clone())
+                    }
                     ParseErrorInner::NonHspice(msg) => ("Warning", msg.clone()),
                     ParseErrorInner::Internal(msg) => ("InternalError", msg.clone()),
                     ParseErrorInner::Encrypted { lines } => (

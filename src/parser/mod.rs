@@ -34,6 +34,43 @@ use crate::{
     span::{FileId, FileStorage, LocatedSpan, ParsedId, Pos, Span, span},
 };
 
+/// The longest chain of includes that is followed. The walks that follow includes
+/// recurse. HSPICE reads a chain of 1000 files (deck `i_chain_1000`), and a real deck
+/// has a short chain.
+pub const MAX_INCLUDE_DEPTH: usize = 1100;
+
+/// How many files are open at one time
+const MAX_OPEN_FILES: usize = 64;
+
+/// How much text the includes can expand to, counting each copy of a file:
+/// files that each include the next one twice expand to 2^n copies. `total` is the
+/// size of all the files, each one once.
+pub fn expanded_text_limit(total: usize) -> usize {
+    let room = if cfg!(test) { 1 << 20 } else { 1 << 30 };
+    total.saturating_mul(16).saturating_add(room)
+}
+
+/// The text of `path`. An include line must name a regular file: a device or a
+/// FIFO can give text with no end, or no text.
+async fn read_source(
+    manager: &ParseManager,
+    path: &Path,
+    include: bool,
+) -> std::io::Result<Vec<u8>> {
+    let _open = manager
+        .open_files
+        .acquire()
+        .await
+        .map_err(std::io::Error::other)?;
+    if include && !tokio::fs::metadata(path).await?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    tokio::fs::read(path).await
+}
+
 const BEGIN_TITLE: &str = ".TITLE";
 
 /// How line 1 of a top file is read. HSPICE ignores line 1 of the top
@@ -700,7 +737,7 @@ async fn _include(
                 .or_default()
                 .clone();
             cell.get_or_init(|| async {
-                tokio::fs::read(&file_path)
+                read_source(&manager, &file_path, true)
                     .await
                     .map(|bytes| Arc::new(decode(bytes)))
                     .map_err(|e| (e.kind(), e.to_string()))
@@ -710,7 +747,7 @@ async fn _include(
             .map(LibText::Shared)
             .map_err(|(kind, msg)| std::io::Error::new(kind, msg))
         }
-        FileId::Include { .. } => tokio::fs::read(&file_path)
+        FileId::Include { .. } => read_source(&manager, &file_path, title.is_none())
             .await
             .map(|bytes| LibText::Own(decode(bytes))),
     };

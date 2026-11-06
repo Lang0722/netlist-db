@@ -115,7 +115,8 @@ impl<'a> Iterator for Col<'a> {
         if self.row >= self.vt.len() {
             return None;
         }
-        let v = self.vt[self.row][self.col]; // Option<f64>: Copy
+        // (a short row has no value in the last columns)
+        let v = self.vt[self.row].get(self.col).copied().flatten();
         self.row += 1;
         Some(v)
     }

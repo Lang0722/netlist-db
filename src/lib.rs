@@ -368,6 +368,9 @@ struct BuildCtx<'s, 'p> {
     /// with the include line in it that is followed: an include of one of
     /// them is an include cycle.
     reading: Vec<(usize, Option<Pos>)>,
+    /// How much text the walk can still take in: see
+    /// [`parser::expanded_text_limit`]. `None`: past the limit, and reported.
+    room: Option<usize>,
 }
 
 impl ast::ASTBuilder {
@@ -444,6 +447,28 @@ impl ast::ASTBuilder {
                 }
                 ast::Segment::Include { res, pos } => match res.get() {
                     Some(Ok(id)) => {
+                        let Some(room) = cx.room else { continue };
+                        if cx.reading.len() >= parser::MAX_INCLUDE_DEPTH {
+                            let msg = format!(
+                                "more than {} files in a chain of includes: \
+                                 this include is skipped",
+                                parser::MAX_INCLUDE_DEPTH
+                            );
+                            let e = err::ParseErrorInner::IncludeLimit(msg).with(*pos);
+                            cx.reporter.report(&e, file_id, file);
+                            continue;
+                        }
+                        let size = cx.files.inner[id.0].len();
+                        cx.room = room.checked_sub(size);
+                        if cx.room.is_none() {
+                            let msg = "the includes expand to too much text (a file that \
+                                       includes others twice?): this include and all later \
+                                       ones are skipped"
+                                .to_owned();
+                            let e = err::ParseErrorInner::IncludeLimit(msg).with(*pos);
+                            cx.reporter.report(&e, file_id, file);
+                            continue;
+                        }
                         if let Some(last) = cx.reading.last_mut() {
                             last.1 = *pos;
                         }
@@ -575,6 +600,9 @@ impl Files {
             parsed_inner: &parsed.inner,
             reporter: Reporter::default(),
             reading: Vec::new(),
+            room: Some(parser::expanded_text_limit(
+                self.inner.iter().map(String::len).sum(),
+            )),
         };
         let mut to = Target::new(&mut ast);
         let mut last = None;

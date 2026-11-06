@@ -98,16 +98,29 @@ pub enum EvalError {
     NotStatic(String),
     /// A result that is not a finite number (a division by zero, ...)
     NotFinite(String),
-    /// A parameter out of reach of the stack: a chain of more than [`MAX_DEPTH`]
-    /// others leads to it. [`Scope::settle`] resolves this, so it stays inside this
-    /// module.
-    TooDeep(String),
+    /// A parameter out of reach of the stack: a long chain of others leads to it.
+    /// The number is the height of its level: how many levels are above it.
+    /// [`Scope::settle`] resolves this, so it stays inside this module.
+    TooDeep(String, usize),
+    /// An evaluation that computes more than [`MAX_CALLS`] different calls of
+    /// functions: calls that each call the next ones with new values take
+    /// exponential time. The name is the function of the last call.
+    TooManyCalls(String),
 }
 
 /// How many parameters one evaluation can follow in a chain (`a='b'`, `b='c'`,
 /// ...) before it starts again from the far name, and how deeply an expression
 /// may nest
 pub const MAX_DEPTH: usize = 100;
+
+/// How much stack (in bytes) one evaluation uses before it starts again from the
+/// far name, also across levels. A chain that crosses levels is longer than
+/// [`MAX_DEPTH`] counts.
+const STACK_BUDGET: usize = 512 * 1024;
+
+/// How many different calls of functions defined with `.param f(x)` one evaluation
+/// can compute
+const MAX_CALLS: usize = if cfg!(test) { 1 << 12 } else { 1 << 22 };
 
 /// Two values within this relative distance are equal
 const EQUAL_TOLERANCE: f64 = 1e-13;
@@ -122,6 +135,15 @@ const DIVIDE_BY_ZERO: f64 = 1e28;
 const LOG_FROM: f64 = 1e-28;
 /// `exp`, `sinh` and `cosh` read their argument up to this size, as measured
 const EXP_LIMIT: f64 = 80.0;
+
+/// The results of calls of functions: see `Scope::calls`
+type Calls = HashMap<(usize, Vec<u64>), Result<f64, EvalError>>;
+
+/// Where the stack is now
+fn stack_address() -> usize {
+    let probe = 0u8;
+    core::ptr::from_ref(&probe) as usize
+}
 
 /// Whether two values count as equal in a comparison
 fn near(x: f64, y: f64) -> bool {
@@ -145,9 +167,14 @@ impl fmt::Display for EvalError {
             Self::Recursive(name) => write!(f, "parameter `{name}` depends on itself"),
             Self::NotStatic(what) => write!(f, "`{what}` is only known during a simulation"),
             Self::NotFinite(expr) => write!(f, "`{expr}` is not a finite number"),
-            Self::TooDeep(name) => write!(
+            Self::TooDeep(name, _) => write!(
                 f,
                 "parameter `{name}` depends on a chain of more than {MAX_DEPTH} others"
+            ),
+            Self::TooManyCalls(name) => write!(
+                f,
+                "too many different calls of functions (more than {MAX_CALLS}), the last \
+                 one of `{name}`"
             ),
         }
     }
@@ -259,6 +286,15 @@ pub struct Scope<'p> {
     /// the reads past [`HSPICE_READ_REACH`] (kept by the top level for every level
     /// below it)
     far_reads: RefCell<Vec<FarRead>>,
+    /// where the stack was when the outermost evaluation started; 0: no evaluation
+    /// is under way (kept by the top level for every level below it)
+    stack_base: Cell<usize>,
+    /// the results of the calls of functions in the outermost evaluation, by
+    /// function (address) and values of the arguments (kept by the top level).
+    /// The values of the parameters do not change in an evaluation, so that a call
+    /// with the same values gives the same result. HSPICE reads calls that fan out
+    /// to 2^26 calls (decks `fn_fan_*`).
+    calls: RefCell<Calls>,
 }
 
 impl Scope<'static> {
@@ -276,6 +312,8 @@ impl Scope<'static> {
             in_condition: Cell::new(false),
             condition_cache: RefCell::new(HashMap::new()),
             far_reads: RefCell::new(Vec::new()),
+            stack_base: Cell::new(0),
+            calls: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -295,6 +333,8 @@ impl<'p> Scope<'p> {
             in_condition: Cell::new(false),
             condition_cache: RefCell::new(HashMap::new()),
             far_reads: RefCell::new(Vec::new()),
+            stack_base: Cell::new(0),
+            calls: RefCell::new(HashMap::new()),
         }
     }
 
@@ -406,7 +446,7 @@ impl<'p> Scope<'p> {
         for level in self.levels() {
             level.in_condition.set(true);
         }
-        let v = self.eval_tree(&tree, &[], 0);
+        let v = self.outermost(|| self.eval_tree(&tree, &[], 0));
         for level in self.levels() {
             level.in_condition.set(false);
         }
@@ -471,7 +511,7 @@ impl<'p> Scope<'p> {
     /// The value of the expression `expr`
     pub fn eval_str(&self, expr: &str) -> Result<f64, EvalError> {
         let tree = self.parse(expr)?;
-        let v = self.eval_tree(&tree, &[], 0)?;
+        let v = self.outermost(|| self.eval_tree(&tree, &[], 0))?;
         if v.is_finite() {
             Ok(v)
         } else {
@@ -551,37 +591,71 @@ impl<'p> Scope<'p> {
 
     /// The value of `key`, which this level binds
     fn value_here(&self, key: &str) -> Result<f64, EvalError> {
-        let outermost = self.active.borrow().is_empty();
-        match self.follow(key) {
-            Err(EvalError::TooDeep(far)) if outermost => self.settle(key, far),
-            v => v,
-        }
+        self.outermost(|| self.follow(key))
     }
 
-    /// The value of `key` at the start of a chain that is too long for the stack.
-    /// `far` is the name that the evaluation could not reach. Its value comes first,
-    /// with an empty stack, and the cache keeps it. So the next evaluation of `key`
-    /// gets further. HSPICE reads a chain of any length (decks `c_*`, `r_*`).
-    fn settle(&self, key: &str, far: String) -> Result<f64, EvalError> {
-        let mut pending = vec![key.to_owned(), far];
-        loop {
-            let name = pending.last().expect("`key` stays until the end");
-            match self.follow(name) {
-                // (a name comes again only in a loop)
-                Err(EvalError::TooDeep(far)) if pending.contains(&far) => {
-                    return Err(EvalError::Recursive(far));
+    /// The result of `compute`. If no evaluation is under way, this one is the
+    /// outermost: it starts the measures of the stack and of the calls, and it
+    /// resolves a chain that is too long for the stack (see [`Scope::settle`]).
+    fn outermost(&self, compute: impl Fn() -> Result<f64, EvalError>) -> Result<f64, EvalError> {
+        let root = self.root();
+        if root.stack_base.get() != 0 {
+            return compute();
+        }
+        root.stack_base.set(stack_address());
+        root.calls.borrow_mut().clear();
+        let v = loop {
+            match compute() {
+                Err(EvalError::TooDeep(far, height)) => {
+                    if let Err(looped) = self.settle(far, height) {
+                        break Err(looped);
+                    }
                 }
-                Err(EvalError::TooDeep(far)) => pending.push(far),
+                v => break v,
+            }
+        };
+        root.stack_base.set(0);
+        v
+    }
+
+    /// Computes the parameter `far` at the level of height `height`, and the ones
+    /// it leads to. The first value comes with an empty stack, and the cache keeps
+    /// it. So the next evaluation of `far` gets further. HSPICE reads a chain of
+    /// any length (decks `c_*`, `r_*`). The error: a name that comes again in a
+    /// chain too long for the stack, or a loop.
+    fn settle(&self, far: String, height: usize) -> Result<(), EvalError> {
+        let mut pending = vec![(far, height)];
+        while let Some((name, height)) = pending.last() {
+            let level = self
+                .levels()
+                .nth(self.height() - height)
+                .expect("an evaluation reads the levels above it");
+            match level.follow(name) {
+                Err(EvalError::TooDeep(next, at)) => {
+                    // (a name comes again only in a loop)
+                    if pending.iter().any(|(n, h)| *n == next && *h == at) {
+                        return Err(EvalError::Recursive(next));
+                    }
+                    pending.push((next, at));
+                }
                 // (the cache does not keep a loop, so this name would come again)
                 Err(EvalError::Recursive(looped)) => return Err(EvalError::Recursive(looped)),
-                v => {
+                _ => {
                     pending.pop();
-                    if pending.is_empty() {
-                        return v;
-                    }
                 }
             }
         }
+        Ok(())
+    }
+
+    /// How many levels are above this one
+    fn height(&self) -> usize {
+        self.levels().count() - 1
+    }
+
+    /// How much stack the outermost evaluation has used
+    fn stack_used(&self) -> usize {
+        stack_address().abs_diff(self.root().stack_base.get())
     }
 
     /// The value of `key`, with the stack as it is, or [`EvalError::TooDeep`]
@@ -600,8 +674,8 @@ impl<'p> Scope<'p> {
         if self.active.borrow().iter().any(|k| k == key) {
             return Err(EvalError::Recursive(key.to_owned()));
         }
-        if self.active.borrow().len() >= MAX_DEPTH {
-            return Err(EvalError::TooDeep(key.to_owned()));
+        if self.active.borrow().len() >= MAX_DEPTH || self.stack_used() > STACK_BUDGET {
+            return Err(EvalError::TooDeep(key.to_owned(), self.height()));
         }
         let passed = self.passed.get(key);
         self.active.borrow_mut().push(key.to_owned());
@@ -611,13 +685,14 @@ impl<'p> Scope<'p> {
         if matches!(&v, Err(EvalError::Recursive(looped)) if looped == key)
             && let (Some(def), Some(parent)) = (passed, self.parent)
         {
-            v = parent
-                .value_of(def)
-                .map_err(|_| EvalError::Recursive(key.to_owned()));
+            v = parent.value_of(def).map_err(|e| match e {
+                EvalError::TooDeep(..) => e,
+                _ => EvalError::Recursive(key.to_owned()),
+            });
         }
         // (a cycle depends on the name where the evaluation started: read
         // later, this name may have a value. A chain gets further next time.)
-        if !matches!(v, Err(EvalError::Recursive(_) | EvalError::TooDeep(_))) {
+        if !matches!(v, Err(EvalError::Recursive(_) | EvalError::TooDeep(..))) {
             cache.borrow_mut().insert(key.to_owned(), v.clone());
         }
         v
@@ -691,25 +766,33 @@ impl<'p> Scope<'p> {
                     eval(b)?
                 }
             }
-            Expr::Bin(Op::And, a, b) => flag(truth(eval(a)?) && truth(eval(b)?)),
-            Expr::Bin(Op::Or, a, b) => flag(truth(eval(a)?) || truth(eval(b)?)),
-            Expr::Bin(op, a, b) => {
-                let (x, y) = (eval(a)?, eval(b)?);
-                match op {
-                    Op::Add => x + y,
-                    Op::Sub => x - y,
-                    Op::Mul => x * y,
-                    Op::Div if y == 0.0 => x * DIVIDE_BY_ZERO,
-                    Op::Div => x / y,
-                    Op::Pow => power(x, y),
-                    Op::Lt => flag(x < y && (exact || !near(x, y))),
-                    Op::Le => flag(x < y || near(x, y)),
-                    Op::Gt => flag(x > y && (exact || !near(x, y))),
-                    Op::Ge => flag(x > y || near(x, y)),
-                    Op::Eq => flag(near(x, y)),
-                    Op::Ne => flag(!near(x, y)),
-                    Op::And | Op::Or => unreachable!(),
+            Expr::Chain(first, rest) => {
+                let mut x = eval(first)?;
+                for (op, next) in rest {
+                    x = match op {
+                        Op::And => flag(truth(x) && truth(eval(next)?)),
+                        Op::Or => flag(truth(x) || truth(eval(next)?)),
+                        op => {
+                            let y = eval(next)?;
+                            match op {
+                                Op::Add => x + y,
+                                Op::Sub => x - y,
+                                Op::Mul => x * y,
+                                Op::Div if y == 0.0 => x * DIVIDE_BY_ZERO,
+                                Op::Div => x / y,
+                                Op::Pow => power(x, y),
+                                Op::Lt => flag(x < y && (exact || !near(x, y))),
+                                Op::Le => flag(x < y || near(x, y)),
+                                Op::Gt => flag(x > y && (exact || !near(x, y))),
+                                Op::Ge => flag(x > y || near(x, y)),
+                                Op::Eq => flag(near(x, y)),
+                                Op::Ne => flag(!near(x, y)),
+                                Op::And | Op::Or => unreachable!(),
+                            }
+                        }
+                    };
                 }
+                x
             }
             Expr::Call(name, args) => {
                 if is_simulation_function(name) {
@@ -737,12 +820,25 @@ impl<'p> Scope<'p> {
                             found: args.len(),
                         });
                     }
-                    if depth > 64 {
+                    // (twice the budget: a chain of parameters stops first, at
+                    // a name that can be settled)
+                    if depth > 64 || self.stack_used() > 2 * STACK_BUDGET {
                         return Err(EvalError::Recursive(name.clone()));
                     }
                     let values = args.iter().map(eval).collect::<Result<Vec<_>, _>>()?;
+                    let key = (
+                        core::ptr::from_ref(f) as usize,
+                        values.iter().map(|v| v.to_bits()).collect(),
+                    );
+                    let root = self.root();
+                    if let Some(v) = root.calls.borrow().get(&key) {
+                        return v.clone();
+                    }
+                    if root.calls.borrow().len() >= MAX_CALLS {
+                        return Err(EvalError::TooManyCalls(name.clone()));
+                    }
                     let locals: Vec<_> = f.args.iter().cloned().zip(values).collect();
-                    return match &f.body {
+                    let v = match &f.body {
                         Def::Num(n) => Ok(*n),
                         Def::Expr(body) => {
                             // (its names and calls: where it is defined)
@@ -751,6 +847,11 @@ impl<'p> Scope<'p> {
                         }
                         Def::Err(e) => Err(e.clone()),
                     };
+                    // (a loop and the depth depend on the calls above this one)
+                    if !matches!(v, Err(EvalError::Recursive(_) | EvalError::TooDeep(..))) {
+                        root.calls.borrow_mut().insert(key, v.clone());
+                    }
+                    return v;
                 }
                 let values = args.iter().map(eval).collect::<Result<Vec<_>, _>>()?;
                 builtin(name, &values)
@@ -921,9 +1022,11 @@ pub(crate) fn expr_names(expr: &str, functions: &HashSet<String>) -> Option<Vec<
                 }
             }
             Expr::Neg(a) | Expr::Not(a) => walk(a, functions, out)?,
-            Expr::Bin(_, a, b) => {
-                walk(a, functions, out)?;
-                walk(b, functions, out)?;
+            Expr::Chain(first, rest) => {
+                walk(first, functions, out)?;
+                for (_, next) in rest {
+                    walk(next, functions, out)?;
+                }
             }
             Expr::Cond(c, a, b) => {
                 walk(c, functions, out)?;
@@ -1116,10 +1219,20 @@ enum Expr {
     Var(String),
     Neg(Box<Expr>),
     Not(Box<Expr>),
-    Bin(Op, Box<Expr>, Box<Expr>),
+    /// operators of one precedence, left to right: a long chain is not a deep tree
+    Chain(Box<Expr>, Vec<(Op, Expr)>),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
     /// a function call; the name is lowercase
     Call(String, Vec<Expr>),
+}
+
+/// `first`, then the operators `rest`
+fn chain(first: Expr, rest: Vec<(Op, Expr)>) -> Expr {
+    if rest.is_empty() {
+        first
+    } else {
+        Expr::Chain(Box::new(first), rest)
+    }
 }
 
 /// A recursive-descent parser, by increasing precedence:
@@ -1224,17 +1337,17 @@ impl<'e> Parser<'e> {
         ops: &[(&str, &str, Op)],
         next: fn(&mut Self) -> Result<Expr, EvalError>,
     ) -> Result<Expr, EvalError> {
-        let mut e = next(self)?;
+        let first = next(self)?;
+        let mut rest = Vec::new();
         'outer: loop {
             for (token, longer, op) in ops {
                 if self.peek_not(token, longer) {
                     self.pos += token.len();
-                    let rhs = next(self)?;
-                    e = Expr::Bin(*op, Box::new(e), Box::new(rhs));
+                    rest.push((*op, next(self)?));
                     continue 'outer;
                 }
             }
-            return Ok(e);
+            return Ok(chain(first, rest));
         }
     }
 
@@ -1289,12 +1402,12 @@ impl<'e> Parser<'e> {
     }
 
     fn power(&mut self) -> Result<Expr, EvalError> {
-        let mut base = self.primary()?;
+        let base = self.primary()?;
+        let mut rest = Vec::new();
         while self.eat("**") || self.eat("^") {
-            let exp = self.exponent()?;
-            base = Expr::Bin(Op::Pow, Box::new(base), Box::new(exp));
+            rest.push((Op::Pow, self.exponent()?));
         }
-        Ok(base)
+        Ok(chain(base, rest))
     }
 
     fn exponent(&mut self) -> Result<Expr, EvalError> {
@@ -1382,6 +1495,28 @@ mod tests {
             k: Cow::Borrowed(k),
             v: Value::Expr(Cow::Borrowed(text)),
         }
+    }
+
+    /// A long expression must not end the process: its length is not a depth.
+    #[test]
+    fn long_chains_of_operators() {
+        let s = top(&[]);
+        let n = 200_000;
+        let sum = format!("1{}", "+1".repeat(n));
+        assert_eq!(s.eval_str(&sum), Ok((n + 1) as f64));
+        let product = format!("1{}", "*1".repeat(n));
+        assert_eq!(s.eval_str(&product), Ok(1.0));
+        let power = format!("2{}", "**1".repeat(n));
+        assert_eq!(s.eval_str(&power), Ok(2.0));
+        let and = format!("1{}", "&&1".repeat(n));
+        assert_eq!(s.eval_str(&and), Ok(1.0));
+        // (left to right)
+        assert_eq!(s.eval_str("10-3-2"), Ok(5.0));
+        assert_eq!(s.eval_str("8/2/2"), Ok(2.0));
+        // (the right side of `&&` and `||` is not read when the left decides)
+        assert_eq!(s.eval_str("0&&nope&&nope"), Ok(0.0));
+        assert_eq!(s.eval_str("1||nope||nope"), Ok(1.0));
+        assert!(s.eval_str("1&&0||nope").is_err());
     }
 
     #[test]

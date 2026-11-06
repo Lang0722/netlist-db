@@ -306,6 +306,9 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
         },
         reported: vec![false; parsed.inner.len()],
         reading: Vec::new(),
+        room: Some(netlist_db::parser::expanded_text_limit(
+            texts.iter().map(String::len).sum(),
+        )),
         sites: Vec::new(),
         site: None,
         def_site: Vec::new(),
@@ -420,6 +423,9 @@ struct Lower<'p> {
     /// The files being lowered, the top file first: a file that includes
     /// one of them again is an include cycle.
     reading: Vec<usize>,
+    /// How much text the includes can still take in: see
+    /// `parser::expanded_text_limit`. `None`: past the limit, and reported.
+    room: Option<usize>,
     /// Each read of an included file: the include line, and the read that
     /// holds that line (`None`: the top file).
     sites: Vec<(LocIdx, Option<u32>)>,
@@ -629,6 +635,7 @@ impl<'p> Lower<'p> {
                             self.include_cycle(pid, id.0, *pos);
                         }
                     }
+                    Some(Ok(id)) if !self.include_in_limits(id.0, pid, *pos) => {}
                     Some(Ok(id)) => {
                         let first = !std::mem::replace(&mut self.reported[id.0], true);
                         let at = LocIdx {
@@ -801,6 +808,33 @@ impl<'p> Lower<'p> {
             named(&la, &lb),
             named(&lb, &la)
         ))
+    }
+
+    /// Whether the walk can follow an include of the file `id` in the file `pid`:
+    /// the limits are those of `Files::build`. It reports the first one passed.
+    fn include_in_limits(&mut self, id: usize, pid: usize, pos: Option<Pos>) -> bool {
+        use netlist_db::parser::MAX_INCLUDE_DEPTH;
+        let Some(room) = self.room else {
+            return false;
+        };
+        let loc = pos.map(|p| LocIdx {
+            file: pid as u32,
+            line: p.line_num,
+        });
+        if self.reading.len() >= MAX_INCLUDE_DEPTH {
+            let message = format!(
+                "more than {MAX_INCLUDE_DEPTH} files in a chain of includes: this include is skipped"
+            );
+            self.diag(Level::Error, "include_limit", message, loc);
+            return false;
+        }
+        self.room = room.checked_sub(self.texts[id].len());
+        if self.room.is_none() {
+            let message = "the includes expand to too much text (a file that includes others twice?): this include and all later ones are skipped".to_owned();
+            self.diag(Level::Error, "include_limit", message, loc);
+            return false;
+        }
+        true
     }
 
     /// Reports that file `pid` includes file `again` (at `pos`), which is
@@ -1753,6 +1787,7 @@ fn describe(err: &ParseErrorInner, text: &str, line: Option<&str>) -> (&'static 
         E::Unsupported(what) => ("unsupported_form", what.clone()),
         E::NonHspice(what) => ("not_hspice", what.clone()),
         E::Internal(what) => ("parser_failed", what.clone()),
+        E::IncludeLimit(what) => ("include_limit", what.clone()),
         E::Encrypted { .. } => ("encrypted_block", err.to_string()),
         E::Encoding(what) => ("non_utf8", what.clone()),
         E::LineInQuotes => ("quoted_comment_line", err.to_string()),
@@ -3806,6 +3841,38 @@ mod tests {
         );
         let net = load(deck.main.clone());
         assert!(diags_of(&net, "after_end").is_empty(), "{:#?}", net.diags);
+    }
+
+    /// The walk of the includes has the limit of `Files::build`. (A big stack: the
+    /// frames of a debug build are big.)
+    #[test]
+    fn include_chain_has_a_limit() {
+        let n = netlist_db::parser::MAX_INCLUDE_DEPTH + 10;
+        let files: Vec<(String, String)> = (0..n)
+            .map(|i| {
+                (
+                    format!("f{i}.sp"),
+                    format!("R{i} a b 1\n.inc 'f{}.sp'\n", i + 1),
+                )
+            })
+            .chain([(format!("f{n}.sp"), "R a b 1\n".to_owned())])
+            .collect();
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        let deck = write_deck("include_limit", &refs);
+        let path = deck.main.clone();
+        let codes = std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || {
+                let net = load(path);
+                diags_of(&net, "include_limit").len()
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(codes, 1);
     }
 
     #[test]

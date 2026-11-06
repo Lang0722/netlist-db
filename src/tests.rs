@@ -126,6 +126,7 @@ fn kind(e: &ParseErrorInner) -> &'static str {
         ParseErrorInner::TitleIsElement => "TitleIsElement",
         ParseErrorInner::AlterInSubckt => "AlterInSubckt",
         ParseErrorInner::MissingUnprot => "MissingUnprot",
+        ParseErrorInner::IncludeLimit(_) => "IncludeLimit",
         ParseErrorInner::PlusAfterTitle => "PlusAfterTitle",
         ParseErrorInner::NodeCount { .. } => "NodeCount",
         ParseErrorInner::LineInQuotes => "LineInQuotes",
@@ -5306,6 +5307,62 @@ async fn usage_keeps_counts_of_a_definition_outside_a_cycle() {
     assert_eq!(names, HashSet::from(["a".to_owned(), "b".to_owned()]));
 }
 
+/// A chain of parameters across levels must not end the process, and must give
+/// the value: each level's chain reads the one of the level above.
+#[tokio::test]
+async fn long_chain_of_parameters_across_levels() {
+    use core::fmt::Write as _;
+    let (levels, links) = (100, 70);
+    let mut deck = String::from("* t\n.model n nmos level=54\n.param p0_0=3u\nX0 d s1\n");
+    for level in 1..levels {
+        let _ = writeln!(deck, ".subckt s{level} d");
+        for k in 0..links - 1 {
+            let _ = writeln!(deck, ".param p{level}_{k}='p{level}_{}'", k + 1);
+        }
+        let last = links - 1;
+        let _ = writeln!(deck, ".param p{level}_{last}='p{}_0'", level - 1);
+        if level + 1 < levels {
+            let _ = writeln!(deck, "X0 d s{}", level + 1);
+        } else {
+            let _ = writeln!(deck, "M1 d d 0 0 n l=p{level}_0 w=1u");
+        }
+        let _ = writeln!(deck, ".ends");
+    }
+    let rows = deck_rows(&deck).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].2, 3.0, "{:?}", rows[0]);
+}
+
+/// A chain of function calls that fans out repeats the same calls: it gives the
+/// value in short time. HSPICE gives the value too (decks `fn_fan_*`).
+#[tokio::test]
+async fn function_calls_that_fan_out_give_the_value() {
+    use core::fmt::Write as _;
+    let mut deck = String::from("* t\n.model n nmos level=54\n");
+    for i in 0..40 {
+        let _ = writeln!(deck, ".param f{i}(x)='f{}(x)+f{}(x)'", i + 1, i + 1);
+    }
+    deck.push_str(".param f40(x)='x'\nM1 d d 0 0 n l='f0(1f)' w=1u\n");
+    let rows = deck_rows(&deck).await;
+    assert_eq!(rows.len(), 1);
+    assert!((rows[0].2 - 1.099_511_627_776e3).abs() < 1e-3, "{rows:?}");
+}
+
+/// Calls that fan out with other values each time cannot repeat: they stop with
+/// an error, not with a run that never ends.
+#[tokio::test]
+async fn function_calls_with_new_values_stop() {
+    use core::fmt::Write as _;
+    let mut deck = String::from("* t\n.model n nmos level=54\n");
+    for i in 0..60 {
+        let _ = writeln!(deck, ".param f{i}(x)='f{}(x*2+1)+f{}(x*3+1)'", i + 1, i + 1);
+    }
+    deck.push_str(".param f60(x)='x'\nM1 d d 0 0 n l='f0(1f)' w=1u\n");
+    let rows = deck_rows(&deck).await;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].1.contains("too many"), "{rows:?}");
+}
+
 /// A name of a parameter with a byte that is not UTF-8 can be read in an
 /// expression, and two such names stay two names.
 #[tokio::test]
@@ -5323,4 +5380,121 @@ async fn expressions_read_names_with_other_bytes() {
     let rows = ast.mosfet_models();
     let chosen = rows[0].selection.as_ref().unwrap();
     assert_eq!((chosen.l, chosen.w), (1e-6, 2e-6));
+}
+
+/// A deep chain of includes must not end the process: past the limit it is an
+/// error. (A big stack: the frames of a debug build are big.)
+#[test]
+fn include_chain_has_a_limit() {
+    let chain = |n: usize| {
+        (0..n)
+            .map(|i| {
+                (
+                    format!("f{i}.sp"),
+                    format!("R{i} a b 1\n.inc 'f{}.sp'\n", i + 1),
+                )
+            })
+            .chain([(format!("f{n}.sp"), String::from("R a b 1\n"))])
+            .collect::<Vec<_>>()
+    };
+    let build = async |files: Vec<(String, String)>| {
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        let (_dir, parsed, files) = parse_text(&refs).await;
+        let (ast, has_err) = files.build(parsed);
+        (ast.instance.len(), has_err)
+    };
+    let test = async {
+        // (HSPICE reads a chain of 1000 files: deck `i_chain_1000`)
+        assert_eq!(build(chain(1000)).await, (1001, false));
+        let n = crate::parser::MAX_INCLUDE_DEPTH + 10;
+        let (lines, has_err) = build(chain(n)).await;
+        assert!(has_err);
+        assert!(lines < n, "{lines}");
+    };
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn_scoped(scope, || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(test);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    });
+}
+
+/// Files that include the next one twice expand to 2^n copies. Past the limit,
+/// the build stops following includes, with an error.
+#[tokio::test]
+async fn include_expansion_has_a_limit() {
+    let mut files: Vec<(String, String)> = (0..40)
+        .map(|i| {
+            let next = i + 1;
+            (
+                format!("f{i}.sp"),
+                format!(".inc 'f{next}.sp'\n.inc 'f{next}.sp'\n"),
+            )
+        })
+        .collect();
+    files.push(("f40.sp".to_owned(), "R a b 1\n".to_owned()));
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(n, c)| (n.as_str(), c.as_str()))
+        .collect();
+    let (_dir, parsed, built) = parse_text(&refs).await;
+    let (ast, has_err) = built.build(parsed);
+    assert!(has_err);
+    assert!(ast.instance.len() < 1 << 30);
+}
+
+/// A file included many times, within the limit, stays correct.
+#[tokio::test]
+async fn include_repeated_within_the_limit() {
+    let top = ".inc 'a.sp'\n".repeat(1000);
+    let (_dir, parsed, files) = parse_text(&[("top.sp", &top), ("a.sp", "R1 a b 1\n")]).await;
+    let (ast, has_err) = files.build(parsed);
+    assert!(!has_err);
+    assert_eq!(ast.instance.len(), 1000);
+}
+
+/// A `$` in a name must not take quadratic time.
+#[tokio::test]
+async fn many_dollars_in_one_word_are_read_in_linear_time() {
+    let word = "a$".repeat(200_000);
+    let deck = format!("* t\n.param {word}=2u\n.param b={word}\n.param c={word}*2\n");
+    let start = std::time::Instant::now();
+    let (_dir, parsed, files) = parse_deck(&[("deck.sp", &deck)]).await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(ast.param.len(), 3);
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+}
+
+/// An include of a thing that is not a file (a device, a FIFO) is an error:
+/// reading `/dev/zero` never ends.
+#[cfg(unix)]
+#[tokio::test]
+async fn include_of_a_device_is_an_error() {
+    let (_dir, parsed, files) = parse_text(&[("top.sp", "R1 a b 1\n.inc '/dev/zero'\n")]).await;
+    let (ast, has_err) = files.build(parsed);
+    assert!(has_err);
+    assert_eq!(ast.instance.len(), 1);
+}
+
+/// A row of a table that has fewer values than the header has no value there.
+#[test]
+fn short_row_of_a_measure_table() {
+    use crate::parser::MeasCols;
+    let table = vec![vec![Some(1.0), Some(2.0)], vec![Some(3.0)]];
+    let mut cols = MeasCols::new(vec!["a", "b"], &table, None);
+    let (_, a) = cols.next().unwrap();
+    assert_eq!(a.collect::<Vec<_>>(), [Some(1.0), Some(3.0)]);
+    let (_, b) = cols.next().unwrap();
+    assert_eq!(b.collect::<Vec<_>>(), [Some(2.0), None]);
 }

@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex as StdMutex},
 };
-use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio::sync::{Mutex, OnceCell, Semaphore, oneshot};
 
 use super::ParseOptions;
 use crate::{
@@ -23,6 +23,8 @@ pub struct ParseManager {
     /// for all its sections), and its first line that is not UTF-8; or why it
     /// could not be read
     pub(super) lib_text: Mutex<HashMap<PathBuf, Arc<OnceCell<SharedText>>>>,
+    /// a permit for each file that is open
+    pub(super) open_files: Semaphore,
     /// `ParseOptions::lib_override`, in order: the file name (the last
     /// component of the path; `None` when the path has none, which matches
     /// no call), the section to replace and the section to load, all in
@@ -105,6 +107,7 @@ impl ParseManager {
                 done_tx: StdMutex::new(Some(tx)),
                 file_storage: Mutex::new(FileStorage::default()),
                 lib_text: Mutex::new(HashMap::new()),
+                open_files: Semaphore::new(super::MAX_OPEN_FILES),
                 lib_override,
                 lib_override_matched,
                 skip_prot: opts.skip_prot,

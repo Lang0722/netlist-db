@@ -259,13 +259,19 @@ fn is_formula(c: char) -> bool {
     }
 }
 
-/// Whether a `$` after `text`, an expression without quotes, is in a name: the
-/// last word of `text` starts with a letter. After a number, a `$` starts a
-/// comment (`l=1u$ w=9u`, `l=a$b*2`: decks `cm_dollar_*`).
-fn dollar_in_name(text: &str) -> bool {
-    text.rsplit(|c: char| !(c.is_alphanumeric() || "_.$".contains(c)))
+/// Whether a `$` at `end` of `s`, an expression without quotes, is in a name: the
+/// last word before it starts with a letter. After a number, a `$` starts a
+/// comment (`l=1u$ w=9u`, `l=a$b*2`: decks `cm_dollar_*`). `named` is 0, or the
+/// offset after an earlier `$` that is in a name: the search for the start of the
+/// word stops there, so that many `$` in a word take linear time.
+fn dollar_in_name(s: &str, named: usize, end: usize) -> bool {
+    let text = &s[named..end];
+    let word = text
+        .rsplit(|c: char| !(c.is_alphanumeric() || "_.$".contains(c)))
         .next()
-        .is_some_and(|word| word.starts_with(|c: char| c.is_alphabetic() || c == '_'))
+        .unwrap_or_default();
+    (named > 0 && word.len() == text.len())
+        || word.starts_with(|c: char| c.is_alphabetic() || c == '_')
 }
 
 /// A file path in `'…'` or `"…"`: the text between the quotes.
@@ -466,13 +472,14 @@ pub(super) fn formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
             ErrorKind::TakeWhile1,
         )));
     }
-    let mut end = 0;
+    let (mut end, mut named) = (0, 0);
     loop {
         end = s[end..]
             .find(|c: char| !is_formula(c))
             .map_or(s.len(), |n| end + n);
-        if s[end..].starts_with('$') && dollar_in_name(&s[..end]) {
+        if s[end..].starts_with('$') && dollar_in_name(s, named, end) {
             end += 1;
+            named = end;
             continue;
         }
         match paren_group_len(&s[end..]) {
@@ -506,9 +513,12 @@ pub(super) fn assigned_formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
             ErrorKind::TakeWhile1,
         )));
     }
-    let mut end = 0;
+    let (mut end, mut named) = (0, 0);
     while let Some(c) = s[end..].chars().next() {
-        if is_formula(c) || (c == '$' && dollar_in_name(&s[..end])) {
+        if c == '$' && dollar_in_name(s, named, end) {
+            end += 1;
+            named = end;
+        } else if is_formula(c) {
             end += c.len_utf8();
         } else if c == '(' {
             match balanced_group(&s[end..]) {
