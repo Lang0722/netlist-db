@@ -25,7 +25,7 @@ use crate::{
 use crate::{
     ast::{
         CondLine, DataBuilder, DataFileBuilder, DataFilesBuilder, DataValuesBuilder,
-        KeyValueBuilder, ModelBuilder, PnameColNumBuilder, UnknwonBuilder, ValueBuilder,
+        KeyValueBuilder, ModelBuilder, PnameColNumBuilder, UnknownBuilder, ValueBuilder,
     },
     span::{LocatedSpan, Pos, Span},
 };
@@ -311,7 +311,7 @@ pub(super) fn lib(i: LocatedSpan<'_>) -> IResult<LocatedSpan<'_>, Option<(&str, 
     ))
     .parse_complete(i)
 }
-/// HSPICE commands kept verbatim (in [`LocalAST::unknwon`]) without a warning,
+/// HSPICE commands kept verbatim (in [`LocalAST::unknown`]) without a warning,
 /// including the short forms `.mea`, `.prot` and `.unpr` used in vendor model
 /// kits. Other unknown commands are kept as well, with a warning.
 const KNOWN_COMMANDS: &[&str] = &[
@@ -496,7 +496,7 @@ pub(super) enum Step<'a> {
     /// file.
     Alter {
         pos: Option<Pos>,
-        stmt: UnknwonBuilder,
+        stmt: UnknownBuilder,
     },
     /// An `.end` line (at `pos`). HSPICE does not read the lines after the
     /// `.end` of the top file (golden `after_end`).
@@ -666,7 +666,7 @@ fn keep_verbatim<'a>(
     if !known {
         ast.errors.push(ParseErrorInner::Unknown(cmd).record(i));
     }
-    ast.unknwon.push(UnknwonBuilder { cmd, tokens, raw });
+    ast.unknown.push(UnknownBuilder { cmd, tokens, raw });
     skip_blank(end)
 }
 
@@ -939,7 +939,7 @@ pub(super) fn statement<'a>(
                     }
                     // The rest of the line is the title of the run.
                     let next = skip_blank(skip_statement(i));
-                    let stmt = UnknwonBuilder {
+                    let stmt = UnknownBuilder {
                         cmd,
                         tokens: Vec::new(),
                         raw: raw_span(i, i.take_from(i.len())),
@@ -983,7 +983,7 @@ pub(super) fn statement<'a>(
                         _ => Vec::new(),
                     };
                     i = skip_blank(end);
-                    ast.unknwon.push(UnknwonBuilder { cmd, tokens, raw });
+                    ast.unknown.push(UnknownBuilder { cmd, tokens, raw });
                 }
                 "if" | "elseif" => {
                     let cond;

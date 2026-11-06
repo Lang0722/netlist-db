@@ -59,7 +59,7 @@ fn close(a: f64, b: f64) -> bool {
 
 /// The element as netlist text.
 fn spice(x: &Instance) -> String {
-    use crate::_impl_display::{DefaultFmt, SpiceFmt as _};
+    use crate::display::{DefaultFmt, SpiceFmt as _};
     let mut s = String::new();
     DefaultFmt.instance(x, &mut s).unwrap();
     s

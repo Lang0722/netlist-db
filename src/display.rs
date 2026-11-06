@@ -578,7 +578,7 @@ pub trait SpiceFmt: Sized {
         display_inline(f, t.args.iter(), |t, f| write!(f, "{t}"), ',', true)?;
         write!(f, ")='{}'", t.body)
     }
-    fn unknwon<W: fmt::Write>(&self, t: &ast::Unknwon<'_>, f: &mut W) -> fmt::Result {
+    fn unknown<W: fmt::Write>(&self, t: &ast::Unknown<'_>, f: &mut W) -> fmt::Result {
         write!(f, ".{}", t.cmd)?;
         if t.raw.is_empty() {
             // no verbatim text (built by hand): print the tokens
@@ -655,7 +655,7 @@ pub trait SpiceFmt: Sized {
         })?;
         display_multiline(f, t.data.iter(), |t, f| self.data(t, f))?;
         display_multiline(f, t.general.iter(), |t, f| self.general(t, f))?;
-        display_multiline(f, t.unknwon.iter(), |t, f| self.unknwon(t, f))?;
+        display_multiline(f, t.unknown.iter(), |t, f| self.unknown(t, f))?;
         for block in &t.cond {
             for (k, branch) in block.branches.iter().enumerate() {
                 match (k, &branch.cond) {

@@ -444,7 +444,7 @@ async fn failed_block_one_error() {
         let (ast, _) = files.build(parsed);
         assert_eq!(names(&ast.instance), ["R0", "R9"], "{tag}");
         assert!(ast.data.is_empty(), "{tag}");
-        assert!(ast.unknwon.is_empty(), "{tag}");
+        assert!(ast.unknown.is_empty(), "{tag}");
     }
 
     // A `.lib` section with no `.endl` skips only its line.

@@ -1016,7 +1016,7 @@ impl<'s> AST<'s> {
         } else {
             ParHier::Global
         };
-        let commands = in_order(self, &active.branches, &|a| &a.unknwon, &|b| b.unknwon_at);
+        let commands = in_order(self, &active.branches, &|a| &a.unknown, &|b| b.unknown_at);
         let temp = commands.iter().find(|u| is_temp(&u.cmd));
         let tnom = options
             .iter()

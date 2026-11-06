@@ -281,7 +281,7 @@ impl LibText {
 /// closes it depends on the order in which the files are read, so it is
 /// found by the walks that follow the includes in document order
 /// (`Files::build`, and the query crate's lowering).
-pub(super) async fn _include(
+pub(super) async fn read_include(
     manager: Arc<ParseManager>,
     file_id: FileId,
     include_pos: Option<Pos>,
@@ -463,7 +463,7 @@ pub(super) async fn include(
             path: file_path.clone(),
         }
     };
-    let _res = _include(manager, file_id, include_pos, None).await;
+    let _res = read_include(manager, file_id, include_pos, None).await;
     res.set(_res.map_err(|failed| failed.1)).unwrap();
 }
 

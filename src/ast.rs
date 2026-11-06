@@ -53,7 +53,7 @@ pub struct ParamFuncBuilder {
 
 /// A dot-command that is not modeled (e.g. `.tran`, `.meas`, `.global`).
 #[derive(Debug, Clone, Builder)]
-pub struct UnknwonBuilder {
+pub struct UnknownBuilder {
     pub cmd: Span,
     /// best-effort tokens; see `raw` for the exact text
     pub tokens: Vec<TokenBuilder>,
@@ -186,7 +186,7 @@ pub struct LocalAST {
     pub general: Vec<GeneralBuilder>,
     pub init_condition: Vec<(Span, ValueBuilder, Option<Span>)>,
     pub nodeset: Vec<(Span, ValueBuilder, Option<Span>)>,
-    pub unknwon: Vec<UnknwonBuilder>,
+    pub unknown: Vec<UnknownBuilder>,
     pub errors: Vec<ParseError>,
     /// The lines of the `.end` statements of a file that is not a top
     /// file (an `.include` file or a `.lib` section). HSPICE ignores them,
@@ -210,7 +210,7 @@ impl LocalAST {
             && self.general.is_empty()
             && self.init_condition.is_empty()
             && self.nodeset.is_empty()
-            && self.unknwon.is_empty()
+            && self.unknown.is_empty()
             && self.errors.is_empty()
             && self.ignored_end.is_empty()
     }
@@ -251,7 +251,7 @@ pub enum Segment {
     Alter {
         index: usize,
         pos: Option<Pos>,
-        stmt: UnknwonBuilder,
+        stmt: UnknownBuilder,
     },
 }
 

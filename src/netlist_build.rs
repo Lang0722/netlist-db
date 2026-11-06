@@ -122,7 +122,7 @@ impl<'a, 's> Target<'a, 's> {
                     model_at: at.model.len(),
                     instance_at: at.instance.len(),
                     option_at: at.option.len(),
-                    unknwon_at: at.unknwon.len(),
+                    unknown_at: at.unknown.len(),
                     branches: vec![CondBranch {
                         cond: Some(cond.build(file)),
                         ast: AST::default(),
@@ -234,7 +234,7 @@ impl ast::ASTBuilder {
         // HSPICE: the netlist of a file ends at its first `.alter` line. What
         // follows describes other runs of the same circuit (other corners or
         // parameters), so it is not added to this netlist. That text is kept
-        // verbatim in one `unknwon` entry, and the later `.alter` lines are
+        // verbatim in one `unknown` entry, and the later `.alter` lines are
         // only counted.
         let mut after_alter = false;
         for seg in &mut self.segments {
@@ -336,7 +336,7 @@ impl ast::ASTBuilder {
                     ast.alter_runs += 1;
                     if !after_alter {
                         after_alter = true;
-                        ast.unknwon.push(builder::Builder::build(stmt, file));
+                        ast.unknown.push(builder::Builder::build(stmt, file));
                     }
                 }
             }
@@ -410,7 +410,7 @@ fn build_statements<'s>(
         once,
     );
     add_statements(&mut ast.nodeset, &mut local_ast.nodeset, file, once);
-    add_statements(&mut ast.unknwon, &mut local_ast.unknwon, file, once);
+    add_statements(&mut ast.unknown, &mut local_ast.unknown, file, once);
     for e in &local_ast.errors {
         reporter.report(e, file_id, file);
     }

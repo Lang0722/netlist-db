@@ -1245,7 +1245,7 @@ async fn alter_blocks_are_not_merged() {
     assert_eq!((scope.get("w"), scope.get("dx")), (Ok(1e-6), Ok(0.0)));
     // the `.alter` blocks are kept, verbatim, and printed back
     let alter = ast
-        .unknwon
+        .unknown
         .iter()
         .find(|u| u.cmd.eq_ignore_ascii_case("alter"))
         .unwrap();

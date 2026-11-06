@@ -15,8 +15,8 @@ mod tokens;
 
 use alloc::sync::Arc;
 use blocks::Blocks;
-use include::{_include, include_path, search_includes, spawn_include};
 pub use include::{IncludeLimits, IncludeStep, MAX_INCLUDE_DEPTH};
+use include::{include_path, read_include, search_includes, spawn_include};
 use manager::{Include, ParseManager};
 pub(crate) use source::is_raw_byte;
 use source::statement_lines;
@@ -373,7 +373,7 @@ pub async fn parse_top_multi_with<I: Iterator<Item = FileId>>(
             let handle = crate::spawn({
                 let manager = manager.clone();
                 let file_id = file_id.clone();
-                async move { _include(manager, file_id, None, Some(title)).await }
+                async move { read_include(manager, file_id, None, Some(title)).await }
             });
             (file_id, handle)
         })

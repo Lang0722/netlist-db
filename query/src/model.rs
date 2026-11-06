@@ -66,7 +66,6 @@ pub(crate) struct SourceFile {
     /// The path, as the parser opened it.
     pub(crate) path: String,
     /// The `.lib` section, for a section.
-    #[allow(dead_code)] // read by later tasks (DSPF scanner)
     pub(crate) section: Option<String>,
     /// The text that the parser read: the whole file, or the body of the
     /// section.
@@ -75,7 +74,6 @@ pub(crate) struct SourceFile {
 
 /// `name=value`: a `.param`, a header default, an `X` override, an element
 /// parameter or an `.option`.
-#[allow(dead_code)] // read by later queries (hierarchy, parameters, connectivity)
 #[derive(Debug, Clone)]
 pub(crate) struct ParamDef {
     pub(crate) name: Sym,
@@ -92,7 +90,6 @@ pub(crate) struct ParamDef {
 }
 
 /// A `.param` function: `.param f(a,b)='a*b'`.
-#[allow(dead_code)] // read by later queries (hierarchy, parameters, connectivity)
 #[derive(Debug, Clone)]
 pub(crate) struct FuncDef {
     pub(crate) name: Sym,
@@ -103,7 +100,6 @@ pub(crate) struct FuncDef {
 }
 
 /// A `.model` card. Its parameters are text only (in the file at `loc`).
-#[allow(dead_code)] // read by later queries (hierarchy, parameters, connectivity)
 #[derive(Debug, Clone)]
 pub(crate) struct ModelDef {
     pub(crate) name: Sym,
@@ -206,7 +202,6 @@ pub(crate) fn pin_role(kind: ElemKind, idx: usize) -> PinRole {
 }
 
 /// One element line.
-#[allow(dead_code)] // read by later queries (hierarchy, parameters, connectivity)
 #[derive(Debug, Clone)]
 pub(crate) struct Element {
     /// The element name, with its letter.
@@ -241,7 +236,6 @@ pub(crate) struct Element {
 }
 
 /// A definition: the top level ([`ROOT`]) or a `.subckt`/`.macro`.
-#[allow(dead_code)] // read by later queries (hierarchy, parameters, connectivity)
 #[derive(Debug, Clone)]
 pub(crate) struct Def {
     /// The name (empty for the root). `Netlist::def_display` gives the

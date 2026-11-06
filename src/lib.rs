@@ -35,7 +35,9 @@ pub mod parser;
 #[doc(hidden)]
 pub use hierarchy as utlis;
 
-pub mod _impl_display;
+pub mod display;
+#[doc(hidden)]
+pub use display as _impl_display;
 mod builder;
 mod err;
 mod netlist_build;
@@ -99,7 +101,7 @@ pub struct AST<'s> {
     pub protected: Vec<(u32, u32)>,
     /// The number of `.alter` lines: the runs after the first one. The
     /// statements of the `.alter` blocks are not in this AST: their text is
-    /// kept verbatim in one `unknwon` entry with the command `alter`.
+    /// kept verbatim in one `unknown` entry with the command `alter`.
     pub alter_runs: usize,
     pub option: Vec<(Cow<'s, str>, Option<ast::Value<'s>>)>,
     /// transient initial conditions
@@ -114,7 +116,7 @@ pub struct AST<'s> {
     pub nodeset: Vec<(Cow<'s, str>, ast::Value<'s>, Option<Cow<'s, str>>)>,
     pub general: Vec<ast::General<'s>>,
     pub data: Vec<ast::Data<'s>>,
-    pub unknwon: Vec<ast::Unknwon<'s>>,
+    pub unknown: Vec<ast::Unknown<'s>>,
     /// The `.if` blocks of this level, in netlist order. The statements in
     /// their branches are not in the lists above.
     pub cond: Vec<CondBlock<'s>>,
@@ -131,7 +133,7 @@ pub struct CondBlock<'s> {
     pub model_at: usize,
     pub instance_at: usize,
     pub option_at: usize,
-    pub unknwon_at: usize,
+    pub unknown_at: usize,
     pub branches: Vec<CondBranch<'s>>,
     /// What the row of an error in a condition of this block refers to. A row
     /// names a line of the netlist, and this one has no element.

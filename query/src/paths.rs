@@ -127,7 +127,7 @@ pub(crate) enum Want {
 
 /// The elements of instance path `path`: for each, the definition that
 /// holds it and its index there. `""` or `"."` is the root (no elements).
-#[allow(dead_code)] // the interface of the later queries (parameters, nets)
+#[cfg(test)]
 pub(crate) fn split_path(net: &Netlist, path: &str) -> Result<Vec<(DefId, ElemIdx)>, QueryError> {
     walk(net, path, Want::Element).map(|w| w.elems)
 }

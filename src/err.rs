@@ -54,7 +54,7 @@ pub enum ParseErrorInner {
     /// at `.ends`
     #[error("`.endif` is missing")]
     MissingEndif,
-    /// Unknown dot-command; it is kept as-is in [`crate::ast::Unknwon`]
+    /// Unknown dot-command; it is kept as-is in [`crate::ast::Unknown`]
     #[error("{0:?}")]
     Unknown(Span),
     #[error("Circular definition")]

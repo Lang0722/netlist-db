@@ -29,7 +29,7 @@ use netlist_db::{
     FileId, Files, ParseError, ParseErrorInner, ParseOptions, Parsed, Pos, Span,
     ast::{
         ASTBuilder, CondLine, DataValuesBuilder, KeyValueBuilder, LocalAST, ModelBuilder,
-        ModelTypeBuilder, ParamFuncBuilder, Segment, SubcktBuilder, TokenBuilder, UnknwonBuilder,
+        ModelTypeBuilder, ParamFuncBuilder, Segment, SubcktBuilder, TokenBuilder, UnknownBuilder,
         ValueBuilder,
     },
     instance::{
@@ -787,7 +787,7 @@ impl<'p> Lower<'p> {
                 Kind::Func => local.param_func.get(i).map(|f| f.name.line_num),
                 Kind::Global => local.global.get(i).map(|g| g.line_num),
                 Kind::Option => local.option.get(i).map(|(k, _)| k.line_num),
-                Kind::Command => local.unknwon.get(i).map(|c| c.cmd.line_num),
+                Kind::Command => local.unknown.get(i).map(|c| c.cmd.line_num),
             }
         };
         // a merge of the kinds: the next statement of each kind
@@ -849,7 +849,7 @@ impl<'p> Lower<'p> {
                         let (key, value) = &local.option[i];
                         self.option(key, value.as_ref(), pid, report);
                     }
-                    Kind::Command => self.command(&local.unknwon[i], pid, report),
+                    Kind::Command => self.command(&local.unknown[i], pid, report),
                 }
             }
         }
@@ -1131,7 +1131,7 @@ impl<'p> Lower<'p> {
 
     /// Lowers an analysis or output command (an unknown command has an
     /// error of its own).
-    fn command(&mut self, cmd: &UnknwonBuilder, pid: usize, report: bool) {
+    fn command(&mut self, cmd: &UnknownBuilder, pid: usize, report: bool) {
         let texts = self.texts;
         let text: &'p str = &texts[pid];
         let name = &text[cmd.cmd.start..cmd.cmd.end];

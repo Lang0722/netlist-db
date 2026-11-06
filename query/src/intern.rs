@@ -138,7 +138,6 @@ impl Interner {
     }
 
     /// The number of distinct names.
-    #[allow(dead_code)] // read by the tests
     pub(crate) fn len(&self) -> usize {
         self.ends.len()
     }

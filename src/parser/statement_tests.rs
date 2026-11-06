@@ -502,7 +502,7 @@ R1 a b 1
     assert_eq!(ast.data.len(), 1);
     // The commands are kept with their tokens (`.temp 50`).
     let temp = ast
-        .unknwon
+        .unknown
         .iter()
         .find(|u| u.cmd.eq_ignore_ascii_case("temp"))
         .expect(".temp kept");

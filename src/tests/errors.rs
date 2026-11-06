@@ -58,7 +58,7 @@ async fn group_first_value_and_endl_word() {
     assert_eq!(diagnostics(&parsed), [diag("UnknownCommand", 3)]);
     let (ast, _) = files.build(parsed);
     assert_eq!(names(&ast), ["R1", "V1", "R2", "R3"]);
-    assert_eq!(ast.unknwon.len(), 1);
+    assert_eq!(ast.unknown.len(), 1);
     // HSPICE rejects a group in a `.temp` line, and reads a value in quotes
     for (text, errors) in [
         (".temp (50)\n", 1),
