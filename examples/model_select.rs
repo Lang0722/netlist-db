@@ -18,8 +18,12 @@
 //
 // An X line with no definition on its instance path gets an `error:` row, and
 // a note on stderr says that the count can be too low. So does a `.if` condition
-// that cannot be computed. The exit status does not change, as for the other
-// errors.
+// that cannot be computed.
+//
+// Each error and warning in the text of the netlist goes to stderr, with its
+// file and line. The exit status is 1 when the netlist has an error or a MOSFET
+// has no model, and the rows on stdout are those that could be read. Warnings do
+// not change the exit status.
 //
 // The parameters follow the last `.option parhier` of the netlist. Without one
 // they follow HSPICE's default, `global`, and a note on stderr says so. A
@@ -37,6 +41,44 @@ use std::{
     path::PathBuf,
     time::Instant,
 };
+
+/// Writes the messages of the library to stderr, so that stdout has only the rows
+#[cfg(not(feature = "tracing"))]
+struct Messages;
+
+#[cfg(not(feature = "tracing"))]
+impl log::Log for Messages {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        let level = record.level().as_str().to_ascii_lowercase();
+        eprintln!("{level}: {}", record.args());
+    }
+    fn flush(&self) {}
+}
+
+/// Runs `build` with the errors and warnings of the library on stderr. The other
+/// steps do not log: `report` prints the warnings of the selection, with the
+/// name of the subckt.
+fn with_messages<T>(build: impl FnOnce() -> T) -> T {
+    #[cfg(not(feature = "tracing"))]
+    {
+        log::set_logger(&Messages).expect("the only logger");
+        log::set_max_level(log::LevelFilter::Warn);
+        let built = build();
+        log::set_max_level(log::LevelFilter::Off);
+        built
+    }
+    #[cfg(feature = "tracing")]
+    {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        tracing::subscriber::with_default(subscriber, build)
+    }
+}
 
 fn print(out: &mut impl Write, prefix: &str, m: &MosfetModel<'_, '_>) -> std::io::Result<()> {
     match &m.selection {
@@ -157,10 +199,10 @@ async fn main() {
         path: PathBuf::from(path),
     }))
     .await;
-    let (ast, has_err) = files.build(parsed);
+    let (ast, has_err) = with_messages(|| files.build(parsed));
     let parsed_in = start.elapsed();
     if has_err {
-        eprintln!("(the netlist has errors; install a logger to see them)");
+        eprintln!("(the netlist has errors: see the messages above)");
     }
     if ast.option_value("parhier").is_none() {
         eprintln!("(no `.option parhier` in the netlist: parhier=global, HSPICE's default)");
@@ -193,4 +235,7 @@ async fn main() {
         parsed_in.as_secs_f64(),
         start.elapsed().as_secs_f64()
     );
+    if has_err || missing > 0 || chosen != mosfets {
+        std::process::exit(1);
+    }
 }

@@ -95,6 +95,10 @@ cargo run --release --example model_select -- deck.sp
 cargo run --release --example model_select -- --summary deck.sp
 ```
 
+Rows go to stdout. Errors and warnings go to stderr, with their file and line.
+The exit status is 1 when the netlist has an error or a MOSFET has no model. The
+rows are then those that could be read, so a count can be too low.
+
 ## Example
 Download the [releases/latest/examples.zip](https://github.com/zao111222333/netlist-db/releases/latest/download/examples.zip), then
 ``` shell

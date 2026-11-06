@@ -163,7 +163,8 @@ def compare(decks, results, name, ms):
     rows, stderr, rc = ndb(os.path.join(decks, name + ".sp"), decks, ms)
     text_err = "the netlist has errors" in stderr
     row_err = [r for r in rows if r[5:] and r[5].startswith("error")] if rows else []
-    crash = rc != 0
+    # (status 1: the deck has an error, and the rows that could be read are there)
+    crash = rc not in (0, 1)
     info = {"hspice": errs[:2], "ndb_rows": len(rows), "text_err": text_err, "row_err": [r[0] + ": " + r[5] for r in row_err[:2]]}
     if crash:
         return "NDB-CRASH", [stderr[-300:]], info

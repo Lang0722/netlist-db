@@ -34,7 +34,11 @@ BINS = ("case7", "case8", "case9", "case10", "case11")
 
 
 def netlist_db(ms, deck):
-    out = subprocess.run(ms + [deck], capture_output=True, text=True, check=True).stdout
+    r = subprocess.run(ms + [deck], capture_output=True, text=True)
+    # (status 1: the deck has an error, and stdout has the rows that could be read)
+    if r.returncode not in (0, 1):
+        raise subprocess.CalledProcessError(r.returncode, r.args, r.stdout, r.stderr)
+    out = r.stdout
     rows = {}
     for line in out.splitlines()[1:]:
         f = line.split("\t")

@@ -78,17 +78,25 @@ def prepare_models(text):
     return "\n".join(out) + "\n"
 
 
+def model_select(deck):
+    """Runs model_select. Status 1: the deck has an error, and stdout has the
+    rows that could be read. Other statuses are failures of the tool."""
+    r = subprocess.run([MS, deck], capture_output=True, text=True)
+    if r.returncode not in (0, 1):
+        raise subprocess.CalledProcessError(r.returncode, r.args, r.stdout, r.stderr)
+    return r
+
+
 def listing(deck):
     """netlist-db's listing of a deck: (path, model name, L, W, NF, model)"""
-    out = subprocess.run([MS, deck], capture_output=True, text=True, check=True).stdout
+    out = model_select(deck).stdout
     return [line.split("\t") for line in out.splitlines()[1:]]
 
 
 def has_text_error(deck):
     """Whether netlist-db reports an error in the text of a deck (it still
     lists the MOSFETs it could read)"""
-    err = subprocess.run([MS, deck], capture_output=True, text=True, check=True).stderr
-    return "the netlist has errors" in err
+    return "the netlist has errors" in model_select(deck).stderr
 
 
 def finish(path, text):
