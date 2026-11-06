@@ -320,10 +320,10 @@ instances, 1.02M expanded devices, 114,000 lines). The decks come from
 | Load | 0.08 s | < 1 s |
 | `list_subckts` (by copies) | 0.2 ms | < 10 ms |
 | `resolve_element("x5_3.m7")` | 0.5–0.6 ms | < 10 ms |
-| `net_info("x5_3", "n4")` | 0.02 ms | < 10 ms |
-| Peak memory, base deck | 79 MB | |
-| Peak memory, one more level (10x the instances, about 10% more lines) | 91–93 MB (1.15–1.18x) | < 1.3x |
-| Peak memory, two more levels (1.11M instances) vs the same lines with the groups unused (10,000 instances) | 104–106 MB vs 104–105 MB (1.00–1.01x) | < 1.1x |
+| `net_info("x5_3", "n4")` | 0.25 ms | < 10 ms |
+| Peak memory, base deck | 84 MB | |
+| Peak memory, one more level (10x the instances, about 10% more lines) | 97–99 MB (1.16–1.18x) | < 1.3x |
+| Peak memory, two more levels (1.11M instances) vs the same lines with the groups unused (10,000 instances) | 110 MB vs 112 MB (0.99x) | < 1.1x |
 
 The memory follows the input lines, not the expanded hierarchy: with the
 same lines, 1.11M expanded instances need the same memory as 10,000. A
