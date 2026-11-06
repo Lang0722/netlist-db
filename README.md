@@ -332,6 +332,30 @@ DSPF (100,000 nets, 400,000 parasitic R, 400,000 parasitic C, 100,000
 MOSFETs) loads in 0.84 s. The same text with no `*|DSPF` line loads in
 0.53 s.
 
+## Where the code is
+
+| To find | Look in |
+|---|---|
+| The text of a file before the parse: bytes, comments, joined lines | `src/parser/source.rs` |
+| Include lines: search, read, limits (`IncludeLimits`) | `src/parser/include.rs` |
+| Words of a line: separators, numbers, names, values | `src/parser/tokens.rs` |
+| Statements: dot commands, `.subckt` headers | `src/parser/statement.rs` |
+| Blocks that a failed statement skips | `src/parser/blocks.rs` |
+| Element lines (M, X, R, C, sources) | `src/parser/instance.rs` |
+| The walk from a parse to a netlist (`Files::build`) | `src/netlist_build.rs` |
+| Printing a netlist back as text | `src/display.rs` |
+| The selector's parameters and scopes | `src/eval.rs` |
+| The selector's expression parser and built-in functions | `src/eval/expr.rs` |
+| Model selection for each MOSFET | `src/models.rs` |
+| Bin rules: limits, L and W of a line | `src/models/bins.rs` |
+| Model counts through the hierarchy (`--summary`) | `src/models/summary.rs` |
+| Query tool: from a parse to its data | `query/src/lower.rs`, `query/src/lower/` |
+| Query tool: instances and their counts | `query/src/hier.rs`, `query/src/hier/` |
+| Query tool: parameters | `query/src/params.rs`, `query/src/params/` |
+| Query tool: expressions | `expr/src/` |
+
+The tests of a file are in a `tests.rs` beside it or in a folder named after it. `src/tests/` holds the tests of the whole crate, a file for each topic.
+
 ## Regression
 ``` bash
 cargo install cargo-regression # install for first time
