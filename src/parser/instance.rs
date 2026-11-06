@@ -1,7 +1,7 @@
 use super::utils::{
-    close_parens, continuation, equal, group_value, integer, key_str, key_value, key_value_str,
-    loss_sep, multiline_sep, name, name_char, name_str, node_sep, plus_line_after, ports_params,
-    space, space1, span_text, statement_end, trailing_delims, value,
+    assigned_value, close_parens, continuation, equal, group_value, integer, key_str, key_value,
+    key_value_str, loss_sep, mos_sep, multiline_sep, name, name_char, name_str, node_sep,
+    plus_line_after, ports_params, space, space1, span_text, statement_end, trailing_delims, value,
 };
 use crate::{
     ast::{KeyValueBuilder, ValueBuilder},
@@ -11,6 +11,7 @@ use crate::{
         ControlledSourceBuilder, CurrentBuilder, DIODE_POSITIONAL, DiodeBuilder, InductorBuilder,
         InstanceBuilder, InstanceCtxBuilder, MOSFETBuilder, MutualInductorBuilder, RCL_POSITIONAL,
         ResistorBuilder, SourceBuilder, SourceFuncBuilder, SubcktBuilder, VoltageBuilder,
+        gives_no_value, plain_word,
     },
     span::{LocatedSpan, Span},
 };
@@ -20,7 +21,7 @@ use nom::{
     character::char,
     combinator::{map, map_res, not, opt},
     error::{Error, ErrorKind},
-    multi::{count, many0},
+    multi::{count, many0, many1},
     sequence::{preceded, terminated},
 };
 
@@ -497,16 +498,6 @@ fn _inductor(i: LocatedSpan<'_>) -> CtxResult<'_> {
     ))
 }
 
-/// A value in quotes, with its quotes in the span
-#[inline]
-fn quoted_value(i: LocatedSpan) -> IResult<LocatedSpan, (Span, ValueBuilder)> {
-    if i.fragment().starts_with(['\'', '"']) {
-        spanned_value(i)
-    } else {
-        fail(i, ErrorKind::Verify)
-    }
-}
-
 /// A positional value or a `key=value` parameter
 enum Arg {
     Pos((Span, ValueBuilder)),
@@ -553,7 +544,8 @@ struct Split {
 /// the largest usual node count (4 for M and Q, 2 for D).
 ///
 /// The model name is the last token that does not start as a number and
-/// is not `OFF`, so node names can be numbers (`M1 1 2 3 4 nch`). After
+/// gives a value (see [`gives_no_value`]), so node names can be numbers
+/// (`M1 1 2 3 4 nch`). After
 /// it, a bare `OFF` (an initial-condition flag) is dropped, but with no `names`
 /// it stays at its place (see [`crate::instance::is_off`]). The other tokens are
 /// the values of `names`, in that order:
@@ -568,6 +560,10 @@ struct Split {
 /// Any other token there (`2n7002`) is a model name that starts with a
 /// digit: an error. More values than `names` are an error, but with no
 /// `names` any number of values is read.
+///
+/// With no `names` (a MOSFET), a number with an operator after it (`2u*1`) is an
+/// expression, and after `full_nodes` nodes any other token that starts with a
+/// number is that number (see [`plain_word`]).
 fn split_model(
     start: LocatedSpan,
     mut tokens: Vec<Span>,
@@ -576,7 +572,7 @@ fn split_model(
     full_nodes: usize,
 ) -> Result<Split, ParseErrorInner> {
     let text = |s: &Span| text_of(&start, s);
-    let off = |t: &str| t.eq_ignore_ascii_case("off");
+    let off = gives_no_value;
     let digit_first = |name: &str| ParseErrorInner::DigitFirstModel {
         element,
         name: name.to_owned(),
@@ -611,6 +607,10 @@ fn split_model(
             }
             None => break tokens[k],
             Some((f, n, exact)) => {
+                if names.is_empty() && plain_word(t).is_none() {
+                    positional.push((tokens[k], ValueBuilder::Expr(tokens[k])));
+                    continue;
+                }
                 if n != t.len() {
                     first_not_number = Some(t);
                 }
@@ -622,10 +622,12 @@ fn split_model(
             }
         }
     };
-    if let Some(t) = if m >= full_nodes {
-        first_not_number
-    } else {
+    if let Some(t) = if m < full_nodes {
         first_inexact
+    } else if names.is_empty() {
+        None
+    } else {
+        first_not_number
     } {
         return Err(digit_first(t));
     }
@@ -646,61 +648,62 @@ fn split_model(
     })
 }
 
-/// Whether the value `v` is not in quotes and goes on on a `+` line: only a group
-/// in parentheses can.
-fn group_over_lines(src: &LocatedSpan<'_>, v: &ValueBuilder) -> bool {
-    let ValueBuilder::Expr(sp) = v else {
-        return false;
-    };
-    let before = sp.start - src.location_offset() - 1;
-    text_of(src, sp).contains('\n') && !src.fragment()[before..].starts_with(['\'', '"'])
-}
-
 /// `Mxxx nd ng ns [nb [n5 [n6 [n7]]]] mname [l [w [ad [as [pd [ps [nrd
 /// [nrs]]]]]]]] [OFF] params`: 3 to 7 nodes. Models with more than 4
 /// terminals (BSIM-SOI: `d g s e p b t`) put the nodes after the 4th in
 /// `extra_nodes`. See `split_model` for the model name. The numbers after
 /// it are `l w ad as pd ps nrd nrs`, in that order (golden
 /// `mos_positional`, `mos_positional_all`). HSPICE also runs a line with more
-/// values (deck `q_positional_numbers_9`). From the first value in quotes on,
-/// the values and the `key=value` parameters can mix.
+/// values (deck `q_positional_numbers_9`).
+///
+/// Values, `OFF` and `key=value` parameters can mix after the model name, and
+/// each takes a place. `M1 d g 0 0 n w=2u 1u 3u` has W=1u: `w=2u` takes the place
+/// of L and `1u` is at the place of W (decks `mx_*`). A place that a parameter
+/// takes holds an empty value (see [`crate::instance::is_key_place`]). This keeps
+/// the order of the line for its readers, which choose among the values of one
+/// name. The parser cannot choose, because a word before the first parameter can
+/// be a value (`M1 d g 0 0 a b w=2u 1u`, where `a` is the model).
+///
+/// `(`, `)` and `,` separate the values, also after `key=`: `w=(2u + 3u)` has W=2u,
+/// and `w=(2u+3u)` has W=5u, because a space ends a word (decks `g*`). So a value can
+/// start on a line and the next word can stand on a `+` line: `l=(1u` / `+ 2u)` has
+/// L=1u and W=2u. A comma ends the value of a parameter (`l=1u,3u` has W=3u), but not
+/// of `ic=` (decks `gx_*`, `hx_*`, `lt_*`). A lone `+` takes a place and gives no value
+/// (see [`crate::instance::gives_no_value`]).
 ///
 /// Only too few nodes are an error here. The parser does not know the models,
 /// so in `M1 d g s b nch pl pw` it has `nch` and `pl` in the place of nodes.
 /// The readers of the line, which know the models, count the nodes
 /// (`models::MosLine`, the lowering of the query layer).
-///
-/// A value in parentheses cannot go on on a `+` line here, although it can on
-/// `.param` and `X` lines. HSPICE reads `l=(1u` / `+ +2u)` as 1u, and it stops on
-/// `l=max(1u,` / `+ 2u)` (probes on P-2019.06).
 #[inline]
 fn _mosfet(i: LocatedSpan<'_>) -> CtxResult<'_> {
     let start = i;
-    let (i, (tokens, mut params)) = ports_params(i)?;
-    let (i, quoted) = if params.is_empty() {
-        opt((multiline_sep(quoted_value), args)).parse_complete(i)?
-    } else {
-        (i, None)
+    let (i, mut tokens) = many1(preceded(mos_sep, name)).parse_complete(i)?;
+    // (the last word is the first key when `=` comes after it)
+    let i = match (loss_sep, char('=')).parse_complete(i) {
+        Ok(_) => {
+            let key = tokens.pop().expect("one word at least");
+            start.take_from(key.start - start.location_offset())
+        }
+        Err(_) => i,
     };
     let Split {
         mut nodes,
         mname,
         mut positional,
     } = split_model(start, tokens, "a MOSFET", &[], 4)?;
-    if let Some((first, (values, more))) = quoted {
-        positional.push(first);
-        positional.extend(values);
-        params.extend(more);
-    }
+    let mut params = Vec::new();
+    let i = if no_continuation(i.fragment()) {
+        i
+    } else {
+        mixed_args(start, i, &mut positional, &mut params)
+    };
     if nodes.len() < 3 {
         return Err(ParseErrorInner::NodeCount {
             element: "a MOSFET",
             want: "3 to 7",
             found: nodes.len(),
         });
-    }
-    if params.iter().any(|kv| group_over_lines(&start, &kv.v)) {
-        return Err(ParseErrorInner::MosGroupLines);
     }
     let extra_nodes = if nodes.len() > 4 {
         nodes.split_off(4)
@@ -721,6 +724,104 @@ fn _mosfet(i: LocatedSpan<'_>) -> CtxResult<'_> {
         }),
     ))
 }
+
+/// A `key=value` of a MOSFET line: see [`_mosfet`]
+fn mos_key_value<'a>(
+    src: LocatedSpan<'a>,
+    i: LocatedSpan<'a>,
+) -> IResult<LocatedSpan<'a>, KeyValueBuilder> {
+    let (i, k) = name(i)?;
+    let (i, v) = if text_of(&src, &k).eq_ignore_ascii_case("ic") {
+        equal(assigned_value).parse_complete(i)?
+    } else {
+        equal(mos_value).parse_complete(i)?
+    };
+    Ok((i, KeyValueBuilder { k, v }))
+}
+
+/// The value after `key=` on a MOSFET line. `(` and `)` only separate words here, so
+/// the value is the first word in them: `w=(2u + 3u)` is 2u, `w=(2u+3u)` is 5u.
+fn mos_value(i: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
+    let i = if i.fragment().starts_with('(') {
+        mos_sep(i)?.0
+    } else {
+        i
+    };
+    group_value(i)
+}
+
+/// One item after the model name of a MOSFET line. A word can be no value at all,
+/// such as the `+` of `l=1u (2u + 3u)`, which HSPICE reads as AD.
+fn mos_arg<'a>(src: LocatedSpan<'a>, i: LocatedSpan<'a>) -> IResult<LocatedSpan<'a>, Arg> {
+    // (`mos_sep` stops at a `+` only when it is a word)
+    if i.fragment().starts_with('+') {
+        let (after, word) = i.take_split(1);
+        let word: Span = word.into();
+        return Ok((after, Arg::Pos((word, ValueBuilder::Expr(word)))));
+    }
+    if let Ok((after, kv)) = mos_key_value(src, i) {
+        return Ok((after, Arg::Kv(kv)));
+    }
+    if let Ok((after, value)) = spanned_value(i) {
+        return Ok((after, Arg::Pos(value)));
+    }
+    let (after, word) = name(i)?;
+    Ok((after, Arg::Pos((word, ValueBuilder::Expr(word)))))
+}
+
+/// A value without quotes that reads as one number (see [`plain_word`]) becomes
+/// that number.
+fn read_plain_word(src: &LocatedSpan<'_>, v: &mut ValueBuilder) {
+    if let ValueBuilder::Expr(sp) = *v
+        && !src.fragment()[..sp.start - src.location_offset()].ends_with(['\'', '"'])
+        && let Some(number) = plain_word(text_of(src, &sp))
+    {
+        *v = ValueBuilder::Num(number);
+    }
+}
+
+/// The rest of a MOSFET line at `i`, after the values `positional` from the
+/// words before the first parameter: see [`_mosfet`]
+fn mixed_args<'a>(
+    start: LocatedSpan<'a>,
+    i: LocatedSpan<'a>,
+    positional: &mut Vec<(Span, ValueBuilder)>,
+    params: &mut Vec<KeyValueBuilder>,
+) -> LocatedSpan<'a> {
+    let is_ic = |kv: &KeyValueBuilder| text_of(&start, &kv.k).eq_ignore_ascii_case("ic");
+    let mut place = positional.len();
+    // the values after `ic=` belong to it (decks `lt_ic_*`)
+    let mut after_ic = false;
+    let mut rest = mos_sep(i).map_or(i, |(j, ())| j);
+    let mut end = i;
+    while let Ok((after, item)) = mos_arg(start, rest) {
+        match item {
+            Arg::Kv(mut kv) => {
+                after_ic = is_ic(&kv);
+                read_plain_word(&start, &mut kv.v);
+                params.push(kv);
+                place += 1;
+            }
+            Arg::Pos(_) if after_ic => {}
+            Arg::Pos((sp, mut value)) => {
+                let hole: Span = rest.take(0).into();
+                positional.resize(place, (hole, ValueBuilder::Expr(hole)));
+                read_plain_word(&start, &mut value);
+                positional.push((sp, value));
+                place += 1;
+            }
+        }
+        end = after;
+        match mos_sep(after) {
+            Ok((j, ())) => rest = j,
+            Err(_) => break,
+        }
+    }
+    opt(trailing_delims)
+        .parse_complete(end)
+        .map_or(end, |(j, _)| j)
+}
+
 /// `Qxxx nc nb ne [ns] mname [area] [OFF] params`. See `split_model`
 /// for the model name.
 #[inline]
@@ -1852,9 +1953,11 @@ mod tests {
         // ... but it takes a place
         let x = inst("M1 d g s b nch off 1u 2u");
         assert_eq!(positional(mosfet(&x)), [("w", 1e-6), ("ad", 2e-6)]);
-        // a value in parentheses on a `+` line, but in quotes
-        assert!(instance(span("M1 d g 0 0 nch l=(1u\n+ +2u) w=1u", 0)).is_err());
-        assert!(instance(span("M1 d g 0 0 nch l=max(1u,\n+ 2u) w=1u", 0)).is_err());
+        // (`(` only separates words: the second word stands on the `+` line)
+        let x = inst("M1 d g 0 0 nch l=(1u\n+ +2u)");
+        let m = mosfet(&x);
+        assert_eq!(keys(&m.params), ["l"]);
+        assert_eq!(positional(m), [("w", 2e-6)]);
         assert!(instance(span("M1 d g 0 0 nch l='(1u\n+ +2u)' w=1u", 0)).is_ok());
         assert!(instance(span("M1 d g 0 0 nch\n+ l=(1u+2u)\n+ w=1u", 0)).is_ok());
     }

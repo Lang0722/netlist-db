@@ -31,7 +31,7 @@ Cases:
             edges through float noise, .option scale, local bins that hold L
             and W before global ones
  errors     a name defined in some contexts only, parameters defined by
-            each other, division by zero, an unknown function
+            each other, an unknown function; 1u/0 is a value (HSPICE: x*1e28)
  library    no top-level instance: each subckt with its defaults; a nested
             subckt hiding a top-level one, case, a subckt defined after use
 """
@@ -400,7 +400,7 @@ def errors_case(mode):
              "M1 d g 0 0 nv w='1u/(k-k)' l=1u", "M2 d g 0 0 nv w='foo(1)*1u' l=1u", ".end"]
     exp = {"X0.M0": (None, None, None, "error"), "X1.X0.M0": (um, 2 * um, 1, "nv"),
            "X2.X0.M0": (um, 3 * um, 1, "nv"), "X3.M0": (None, None, None, "error"),
-           "X4.M0": (um, um, 1, "nv"), "M1": (None, None, None, "error"), "M2": (None, None, None, "error")}
+           "X4.M0": (um, um, 1, "nv"), "M1": (um, F(10**22), 1, "nv"), "M2": (None, None, None, "error")}
     return "\n".join(lines) + "\n", exp
 
 

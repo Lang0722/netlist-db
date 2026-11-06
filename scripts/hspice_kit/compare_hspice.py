@@ -124,7 +124,7 @@ NO_ANSWER = re.compile(r"definition of model/subckt .* is not found|does not fit
 # - A value in parentheses over a `+` line of a MOSFET line: HSPICE reads a part
 #   of it, and netlist-db reports an error.
 KNOWN_GAPS = {"q_limits_s1_s2", "q_limits_s2_s1", "q_limits_s1_s3", "q_limits_bfs", "q_limits_nested_local",
-              "q_limits_same_scope", ("case7", "local"), "q_mos_group_lines"}
+              "q_limits_same_scope", ("case7", "local")}
 
 
 def bin_of(model):

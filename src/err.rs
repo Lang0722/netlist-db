@@ -44,6 +44,16 @@ pub enum ParseErrorInner {
     /// Nom Error
     #[error("Syntax error")]
     Nom(ErrorKind),
+    /// `.endif`, `.else` or `.elseif` with no open `.if`
+    #[error("`.{keyword}` with no open `.if`")]
+    StrayCond { keyword: &'static str },
+    /// `.else` or `.elseif` after the `.else` of a block
+    #[error("`.{keyword}` after the `.else` of the block")]
+    AfterElse { keyword: &'static str },
+    /// An `.if` block with no `.endif` at the end of its level, at `.alter`, or
+    /// at `.ends`
+    #[error("`.endif` is missing")]
+    MissingEndif,
     /// Unknown dot-command; it is kept as-is in [`crate::ast::Unknwon`]
     #[error("{0:?}")]
     Unknown(Span),
@@ -119,13 +129,6 @@ pub enum ParseErrorInner {
          HSPICE rejects the deck"
     )]
     LineInQuotes,
-    /// A value in parentheses on a MOSFET line goes on on a `+` line. HSPICE
-    /// reads only part of it, or stops. See `parser::instance::_mosfet`.
-    #[error(
-        "a value in parentheses goes on on a `+` line: \
-         HSPICE does not read it as one value on a MOSFET line"
-    )]
-    MosGroupLines,
     /// An element with the wrong number of nodes before its model name
     #[error("{element} needs {want} nodes before its model name, but this line has {found}")]
     NodeCount {
@@ -406,6 +409,18 @@ impl ParseError {
                         "SyntaxError",
                         format!("Can NOT parse this statement ({e:?}); it is skipped"),
                     ),
+                    ParseErrorInner::StrayCond { keyword } => (
+                        "SyntaxError",
+                        format!("`.{keyword}` with no open `.if`; the line is skipped"),
+                    ),
+                    ParseErrorInner::AfterElse { keyword } => (
+                        "SyntaxError",
+                        format!("`.{keyword}` after the `.else` of the block; the line is skipped"),
+                    ),
+                    ParseErrorInner::MissingEndif => (
+                        "SyntaxError",
+                        "An `.if` block has no `.endif` before this point; it ends here".to_owned(),
+                    ),
                     ParseErrorInner::Unknown(span) => (
                         "Warning",
                         format!("Unknown command `{}`, kept as-is", span.build(self.file)),
@@ -446,7 +461,6 @@ impl ParseError {
                     | ParseErrorInner::NestingTooDeep { .. }
                     | ParseErrorInner::PlusAfterTitle
                     | ParseErrorInner::LineInQuotes
-                    | ParseErrorInner::MosGroupLines
                     | ParseErrorInner::NodeCount { .. }
                     | ParseErrorInner::NoModel { .. }
                     | ParseErrorInner::NoSubcktName

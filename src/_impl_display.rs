@@ -476,15 +476,27 @@ pub trait SpiceFmt: Sized {
         // the nodes after the 4th node come before the model name
         display_inline(f, t.extra_nodes.iter(), |t, f| write!(f, "{t}"), ' ', false)?;
         write!(f, " {}", t.mname)?;
-        // the numbers after the model name: `l w ad as pd ps nrd nrs`
+        // the values after the model name, `l w ad as pd ps nrd nrs`, in the order
+        // of the line: an empty one stands for the next `key=value`
+        let mut keys = t.params.iter();
         display_inline(
             f,
             t.positional.iter(),
-            |(_, t), f| self.value(t, f),
+            |(_, t), f| {
+                if instance::is_key_place(t)
+                    && let Some(kv) = keys.next()
+                {
+                    self.key_value(kv, f)
+                } else if instance::is_off(t) {
+                    write!(f, "OFF")
+                } else {
+                    self.value(t, f)
+                }
+            },
             ' ',
             false,
         )?;
-        display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
+        display_inline(f, keys, |t, f| self.key_value(t, f), ' ', false)
     }
     fn bjt<W: fmt::Write>(&self, t: &instance::BJT<'_>, f: &mut W) -> fmt::Result {
         write!(
@@ -648,6 +660,18 @@ pub trait SpiceFmt: Sized {
         display_multiline(f, t.data.iter(), |t, f| self.data(t, f))?;
         display_multiline(f, t.general.iter(), |t, f| self.general(t, f))?;
         display_multiline(f, t.unknwon.iter(), |t, f| self.unknwon(t, f))?;
+        for block in &t.cond {
+            for (k, branch) in block.branches.iter().enumerate() {
+                match (k, &branch.cond) {
+                    (0, Some(cond)) => write!(f, "\n.if ({cond})")?,
+                    (_, Some(cond)) => write!(f, "\n.elseif ({cond})")?,
+                    (_, None) => write!(f, "\n.else")?,
+                }
+                writeln!(f)?;
+                self.ast(&branch.ast, f)?;
+            }
+            write!(f, "\n.endif")?;
+        }
         Ok(())
     }
 }

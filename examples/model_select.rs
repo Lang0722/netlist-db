@@ -17,8 +17,9 @@
 // shown subckt by subckt.
 //
 // An X line with no definition on its instance path gets an `error:` row, and
-// a note on stderr says that the count can be too low. The exit status does
-// not change, as for the other errors.
+// a note on stderr says that the count can be too low. So does a `.if` condition
+// that cannot be computed. The exit status does not change, as for the other
+// errors.
 //
 // The parameters follow the last `.option parhier` of the netlist. Without one
 // they follow HSPICE's default, `global`, and a note on stderr says so. A

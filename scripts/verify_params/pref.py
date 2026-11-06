@@ -272,7 +272,7 @@ def evaluate(tree, level, local=None):
     a = evaluate(tree[1], level, local)
     b = evaluate(tree[2], level, local)
     return {
-        "+": lambda: a + b, "-": lambda: a - b, "*": lambda: a * b, "/": lambda: a / b,
+        "+": lambda: a + b, "-": lambda: a - b, "*": lambda: a * b, "/": lambda: a / b if b != 0 else a * 1e28,
         "**": lambda: power(a, b), "<": lambda: float(a < b), ">": lambda: float(a > b),
         "<=": lambda: float(a <= b), ">=": lambda: float(a >= b), "==": lambda: float(a == b),
         "!=": lambda: float(a != b), "&&": lambda: float(a != 0 and b != 0),
@@ -588,7 +588,8 @@ def walk(d, lv, scopes, path, out):
                 nf = lv.eval(params["nf"]) if "nf" in params else 1.0
                 wnflag = lv.eval(params["wnflag"]) if "wnflag" in params else None
                 model = choose(mname, l, w, nf, scopes, wnflag)
-                out.append((".".join(p), l, w, nf, model))
+                # (an NF below 1 divides W for the bins, and it prints 1: decks `mx_nf_*`)
+                out.append((".".join(p), l, w, max(nf, 1.0), model))
             except Exception as e:  # noqa: BLE001
                 out.append((".".join(p), None, None, None, f"error: {e}"))
         else:

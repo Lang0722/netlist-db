@@ -216,9 +216,27 @@ impl LocalAST {
     }
 }
 
+/// A line of an `.if` block
+#[derive(Debug, Clone, Copy)]
+pub enum CondLine {
+    /// `.if (cond)`: the text in the parentheses
+    If(Span),
+    /// `.elseif (cond)`
+    ElseIf(Span),
+    Else,
+    EndIf,
+}
+
 #[derive(Debug)]
 pub enum Segment {
     Local(Box<LocalAST>),
+    /// An `.if`, `.elseif`, `.else` or `.endif` line, at `pos`. A block can open
+    /// in one file and close in another, so it is matched when the netlist is
+    /// built.
+    Cond {
+        line: CondLine,
+        pos: Option<Pos>,
+    },
     /// An `.include` or `.lib <file> <section>` line: the parse of that
     /// file or section, and the position of the line (at its end).
     Include {

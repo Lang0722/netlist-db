@@ -32,6 +32,12 @@
 //!   them and gives no value. More than 7 nodes before it make HSPICE stop
 //!   ([`SelectError::TooManyNodes`]), and so does a fifth word that starts with a
 //!   digit before it ([`SelectError::DigitFifthWord`]).
+//! - A level's `.if` blocks are evaluated for each instance (see [`crate::eval`]).
+//!   The statements of the active branch take their place in the level: a model
+//!   or subckt in it serves the whole level, also a line above the block, and
+//!   bins keep the order of the file. Other branches are not read. A condition
+//!   that cannot be computed is an error ([`SelectError::Condition`]): HSPICE
+//!   stops there.
 //! - The limits are evaluated where the model is defined: those of a model
 //!   of the top level with the top-level parameters (a subckt parameter of
 //!   the same name does not change them), those of a model inside a subckt
@@ -39,12 +45,21 @@
 //!   `LMIN='2.4e-7-(dxln+dlmisn)'` in a macro model).
 //! - L and W are the instance's `L=` and `W=` or the first two values after
 //!   its model name (else `.option DEFL`/`DEFW`, default 100u), times
-//!   `.option SCALE`; the limits are multiplied by `.option SCALM`. The width
+//!   `.option SCALE`; the limits are multiplied by `.option SCALM`. HSPICE
+//!   assigns the plain numbers of a line first and then its expressions, each in
+//!   the order of the line, and the last one stays: `1u k w=5u` has W=k, and
+//!   `1u 2u w=5u` has W=5u. So an expression wins over a number. The parentheses
+//!   of a line only separate words, also after a key: `w=(2u + 3u)` is 2u, and
+//!   `w=(2u+3u)` is 5u. A lone `+` takes a place and gives no value, as `OFF`
+//!   does. The values after `ic=` belong to it. The width
 //!   per finger (`W/NF`) is compared, unless `WNFLAG=0` on the instance line
 //!   or, without one, `.option WNFLAG=0`. A `WNFLAG` in a model is ignored.
 //! - A value at most 2e-15 (relative) below a limit counts as on it, so that
 //!   `L='0.1u*3'` and `LMAX=3e-7` compare equal. (Measured: 1e-15 below does,
 //!   3e-15 below does not, at limits from 1e-8 to 1e-4.)
+//! - A FinFET bin (level 72) reads `nfin*` and `wsheet*`, not `wmin` and `wmax`.
+//!   A line with no `nfin` reads 1. A bin with `wsheet*` needs a sheet width above
+//!   0 on the line.
 //!
 //! Known gap. HSPICE evaluates the limits of each bin differently for one
 //! MOSFET: the first one it makes (breadth first) that looks at the bin
@@ -55,12 +70,26 @@
 //! binds), so for at most one MOSFET per bin, and for none if the limits are
 //! numbers. It is not done here: a model is chosen for a transistor from its
 //! own line and the levels above it, in any order of the walk.
+//!
+//! Other known limits (`golden/NOTES.md`, "Comparison rounds with HSPICE as the
+//! reference", has the decks):
+//! - HSPICE takes the fourth word as the model when another active line uses that
+//!   word as a model. This crate looks at the definitions only.
+//! - After the first use of a FinFET bin, HSPICE multiplies its `nfin` limits by
+//!   `.option scalm`. So under `scalm` its choice can depend on the order of the
+//!   lines. This crate uses the limits as written.
+//! - HSPICE reads a parameter at most 31 levels above the reader, and a model at
+//!   most 99 levels above. This crate has no such limits.
+//! - Some `.if` conditions of one block give a branch in HSPICE that depends on
+//!   the order of the instances. This crate gives the logical branch.
 
 use crate::{
     AST, Subckt,
-    ast::{KeyValue, Model, Value},
-    eval::{Binding, EvalError, ParHier, Scope, expr_names, function_name},
-    instance::{Instance, InstanceCtx, MOSFET, is_off},
+    ast::{KeyValue, Model, ModelType, Value},
+    eval::{
+        Active, Binding, CondError, EvalError, ParHier, Scope, expr_names, function_name, in_order,
+    },
+    instance::{Instance, InstanceCtx, MOSFET, is_key_place, is_off, plain_word},
     utlis::MAX_HIERARCHY_DEPTH,
 };
 use core::fmt;
@@ -102,6 +131,42 @@ pub enum SelectError {
     /// the model name after it. HSPICE stops there: "Model name is missing"
     /// (deck `q_digit_word_5`). A sixth or seventh node can start with a digit.
     DigitFifthWord { name: String, word: String },
+    /// The condition of an `.if` or `.elseif` line could not be computed.
+    /// HSPICE stops there. This error does not concern a MOSFET: the block
+    /// counts no line.
+    Condition { cond: String, error: EvalError },
+    /// A size of a MOSFET that is not positive (L, M), or negative (W, NF).
+    /// HSPICE stops there (decks `m_l_neg`, `m_l_zero`, `m_w_neg`, `m_nf_neg`,
+    /// `m_m_zero`).
+    BadSize { what: &'static str, value: f64 },
+    /// An `X` line whose node count is not that of the subckt. HSPICE stops
+    /// there. The MOSFETs below the line are not counted.
+    NodeCount {
+        subckt: String,
+        ports: usize,
+        nodes: usize,
+    },
+    /// An `X` line inside the definition that it calls. HSPICE stops there. The
+    /// MOSFETs below the line are not counted.
+    Recursive(String),
+    /// An `X` line below [`MAX_HIERARCHY_DEPTH`] levels. HSPICE reads deeper
+    /// hierarchies. The MOSFETs below the line are not counted.
+    TooDeep(String),
+}
+
+impl SelectError {
+    /// Whether this row stands for a MOSFET: the other ones stand for a line
+    /// that holds an unknown number of them, or none
+    fn is_mosfet(&self) -> bool {
+        !matches!(
+            self,
+            Self::NoSubckt(_)
+                | Self::Condition { .. }
+                | Self::NodeCount { .. }
+                | Self::Recursive(_)
+                | Self::TooDeep(_)
+        )
+    }
 }
 
 impl fmt::Display for SelectError {
@@ -116,7 +181,8 @@ impl fmt::Display for SelectError {
             ),
             Self::MissingLimits(model) => write!(
                 f,
-                "model `{model}` has a `.` in its name: it must set LMIN, LMAX, WMIN and WMAX"
+                "model `{model}` has a `.` in its name: it must set LMIN, LMAX, WMIN and WMAX \
+                 (at level 72: LMIN, LMAX, and NFINMIN and NFINMAX, or WSHEETMIN and WSHEETMAX)"
             ),
             Self::Eval { what, error } => write!(f, "{what}: {error}"),
             Self::NoSubckt(name) => write!(
@@ -131,6 +197,32 @@ impl fmt::Display for SelectError {
                 f,
                 "the word `{word}` after the fourth node, before the model name `{name}`: \
                  HSPICE wants the model name there, and a model name starts with a letter"
+            ),
+            Self::Condition { cond, error } => write!(
+                f,
+                "the `.if` condition `{cond}` cannot be computed ({error}): the block is not counted"
+            ),
+            Self::BadSize { what, value } => {
+                write!(f, "{what}={}: HSPICE stops at this size", Short(*value))
+            }
+            Self::NodeCount {
+                subckt,
+                ports,
+                nodes,
+            } => write!(
+                f,
+                "X line with {nodes} nodes, and subckt `{subckt}` has {ports}: \
+                 the MOSFETs below it are not counted"
+            ),
+            Self::Recursive(name) => write!(
+                f,
+                "X line inside the definition of subckt `{name}`, which it calls: \
+                 the MOSFETs below it are not counted"
+            ),
+            Self::TooDeep(name) => write!(
+                f,
+                "X line of subckt `{name}` below {MAX_HIERARCHY_DEPTH} levels: \
+                 the MOSFETs below it are not counted"
             ),
         }
     }
@@ -199,23 +291,74 @@ struct Options {
     /// `.option wnflag`: whether bins compare the width per finger when the
     /// instance does not say (by default, they do)
     wnflag: bool,
+    /// `.option wl`: the first value after the model name is W, and the second
+    /// one L
+    wl: bool,
 }
 
 impl Options {
-    fn new(ast: &AST<'_>, scope: &Scope<'_>) -> Self {
-        let get = |name: &str, default: f64| {
-            ast.option_value(name)
-                .and_then(|v| scope.eval(v).ok())
+    /// The options of the top level and of its active branches `active`. Only
+    /// a plain number sets `scale`, `scalm`, `defl` and `defw`, and the last one
+    /// wins, wherever it is at that level. HSPICE ignores other values: `'7u'`,
+    /// a name, an expression (decks `opt_scale_*`, `opd_*`, `os_*`).
+    fn new<'a, 's>(ast: &'a AST<'s>, active: &[&'a AST<'s>]) -> Self {
+        let options = ast.top_options(active);
+        let values = |name: &'static str| {
+            options
+                .iter()
+                .rev()
+                .filter(move |(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_ref())
+        };
+        // (the last plain number. One of 0 or below gives the default back: decks
+        // `zd_*`, `zq_*`)
+        let number = |name: &'static str, default: f64| {
+            values(name)
+                .find_map(|v| match v {
+                    Some(Value::Num(x)) => Some(*x),
+                    _ => None,
+                })
+                .filter(|x| *x > 0.0)
                 .unwrap_or(default)
         };
+        // (a number in quotes counts here, an expression does not: decks `opw_*`)
+        let wnflag = values("wnflag")
+            .find_map(|v| match v {
+                None => Some(true),
+                Some(Value::Num(x)) => Some(*x != 0.0),
+                Some(Value::Expr(e)) => e.parse::<f64>().ok().map(|x| x != 0.0),
+            })
+            .unwrap_or(true);
         Self {
-            scale: get("scale", 1.0),
-            scalm: get("scalm", 1.0),
-            defl: get("defl", 1e-4),
-            defw: get("defw", 1e-4),
-            wnflag: get("wnflag", 1.0) != 0.0,
+            scale: number("scale", 1.0),
+            scalm: number("scalm", 1.0),
+            defl: number("defl", 1e-4),
+            defw: number("defw", 1e-4),
+            wnflag,
+            wl: option_wl(ast),
         }
     }
+}
+
+/// `.option wl`. It counts anywhere in the deck: in a subckt that is not used,
+/// and in a branch that is not active. Only `wl` and `wl=1` set it, and the last
+/// one wins (decks `opt_wl_*`, `wv_*`). The levels do not keep their order, so
+/// the top level reads as the last one.
+fn option_wl(ast: &AST<'_>) -> bool {
+    let mut levels = vec![ast];
+    let mut at = 0;
+    while let Some(&level) = levels.get(at) {
+        at += 1;
+        levels.extend(level.subckt.values().map(|def| &def.ast));
+        for block in &level.cond {
+            levels.extend(block.branches.iter().map(|branch| &branch.ast));
+        }
+    }
+    levels
+        .iter()
+        .flat_map(|level| level.option.iter().rev())
+        .find(|(k, _)| k.eq_ignore_ascii_case("wl"))
+        .is_some_and(|(_, v)| matches!(v, None | Some(Value::Num(1.0))))
 }
 
 /// How far below a limit (relative) a value counts as on it
@@ -227,18 +370,33 @@ fn within(x: f64, min: f64, max: f64) -> bool {
     x >= min - tol(min) && x < max - tol(max)
 }
 
+/// What a bin limits, besides the length
+#[derive(Debug, Clone, Copy)]
+struct Across {
+    /// the width: `wmin`, `wmax`
+    width: bool,
+    /// the fin count, at level 72: `nfinmin`, `nfinmax`
+    fins: bool,
+    /// the sheet width, at level 72: `wsheetmin`, `wsheetmax`
+    sheet: bool,
+}
+
 /// The ranges of a bin
 #[derive(Debug, Clone, Copy)]
 struct Limits {
     lmin: f64,
     lmax: f64,
-    wmin: f64,
-    wmax: f64,
+    width: Option<(f64, f64)>,
+    fins: Option<(f64, f64)>,
+    sheet: Option<(f64, f64)>,
 }
 
 impl Limits {
-    /// Whether these ranges hold a transistor of size `size`
+    /// Whether these ranges hold a transistor of size `size`. All the ranges of a
+    /// bin count, and the fin count and the sheet width must be above 0 (decks
+    /// `hb_*`).
     fn hold(&self, size: &Size, opts: &Options) -> bool {
+        let inside = |range: (f64, f64), x: f64| within(x, range.0, range.1);
         // the instance's WNFLAG, else `.option wnflag`
         let per_finger = size.wnflag.unwrap_or(opts.wnflag);
         let w = if per_finger && size.nf > 0.0 {
@@ -246,37 +404,85 @@ impl Limits {
         } else {
             size.w
         };
-        within(size.l, self.lmin, self.lmax) && within(w, self.wmin, self.wmax)
+        within(size.l, self.lmin, self.lmax)
+            && self.width.is_none_or(|range| inside(range, w))
+            && self
+                .fins
+                .is_none_or(|range| size.nfin > 0.0 && inside(range, size.nfin))
+            && self
+                .sheet
+                .is_none_or(|range| size.wsheet > 0.0 && inside(range, size.wsheet))
     }
 }
 
 /// The parameters of a bin that its ranges are made of
-const LIMITS: [&str; 4] = ["lmin", "lmax", "wmin", "wmax"];
+const LIMITS: [&str; 8] = [
+    "lmin",
+    "lmax",
+    "wmin",
+    "wmax",
+    "nfinmin",
+    "nfinmax",
+    "wsheetmin",
+    "wsheetmax",
+];
 
-/// The ranges of the bin `model`, evaluated in `scope`
+/// What the bin `model` limits, or `None` if it does not set the limits of its
+/// level. Level 72 reads no `wmin` and `wmax` (decks `k_lw`, `h_six_w_out`).
+fn bin_across(model: &Model<'_>) -> Option<Across> {
+    let param = |key: &str| {
+        model
+            .params
+            .iter()
+            .find(|kv| kv.k.eq_ignore_ascii_case(key))
+    };
+    let sets = |key: &str| param(key).is_some();
+    if !sets("lmin") || !sets("lmax") {
+        return None;
+    }
+    let finfet = param("level").is_some_and(|kv| matches!(kv.v, Value::Num(72.0)));
+    let across = Across {
+        width: !finfet && sets("wmin") && sets("wmax"),
+        fins: finfet && sets("nfinmin") && sets("nfinmax"),
+        sheet: finfet && sets("wsheetmin") && sets("wsheetmax"),
+    };
+    (across.width || across.fins || across.sheet).then_some(across)
+}
+
+/// The ranges of the bin `model`, evaluated in `scope`. Of a limit given twice,
+/// the first one counts (deck `mdl_dup_keys`).
 fn limits(model: &Model<'_>, scope: &Scope<'_>, scalm: f64) -> Result<Limits, SelectError> {
-    let param = |key: &str| -> Result<f64, SelectError> {
+    let across =
+        bin_across(model).ok_or_else(|| SelectError::MissingLimits(model.name.to_string()))?;
+    let param = |key: &str, factor: f64| -> Result<f64, SelectError> {
         let Some(kv) = model
             .params
             .iter()
-            .rev()
             .find(|kv| kv.k.eq_ignore_ascii_case(key))
         else {
             return Err(SelectError::MissingLimits(model.name.to_string()));
         };
         scope
             .eval(&kv.v)
-            .map(|v| v * scalm)
+            .map(|v| v * factor)
             .map_err(|error| SelectError::Eval {
                 what: format!("{} of model `{}`", key.to_ascii_uppercase(), model.name),
                 error,
             })
     };
+    let range = |set: bool, min: &str, max: &str, factor: f64| {
+        Ok::<_, SelectError>(if set {
+            Some((param(min, factor)?, param(max, factor)?))
+        } else {
+            None
+        })
+    };
     Ok(Limits {
-        lmin: param("lmin")?,
-        lmax: param("lmax")?,
-        wmin: param("wmin")?,
-        wmax: param("wmax")?,
+        lmin: param("lmin", scalm)?,
+        lmax: param("lmax", scalm)?,
+        width: range(across.width, "wmin", "wmax", scalm)?,
+        fins: range(across.fins, "nfinmin", "nfinmax", 1.0)?,
+        sheet: range(across.sheet, "wsheetmin", "wsheetmax", scalm)?,
     })
 }
 
@@ -289,10 +495,15 @@ struct Size {
     nf: f64,
     /// `WNFLAG` on the instance line, if given
     wnflag: Option<bool>,
+    /// the fin count, for a bin of level 72 (1 if not given)
+    nfin: f64,
+    /// the sheet width, for a bin of level 72 (if not given, no bin holds it:
+    /// deck `w_sheet_w`)
+    wsheet: f64,
 }
 
 /// The parameters of an instance line that the size of a MOSFET is made of
-const SIZES: [&str; 4] = ["l", "w", "nf", "wnflag"];
+const SIZES: [&str; 7] = ["l", "w", "nf", "wnflag", "nfin", "wsheet", "m"];
 
 /// The parameters that the first values after the model name give
 const POSITIONAL: [&str; 2] = ["l", "w"];
@@ -338,7 +549,10 @@ impl<'m, 's> MosLine<'m, 's> {
     /// takes a place and gives no value.
     fn value(self, position: usize) -> Option<Value<'s>> {
         match self.model.checked_sub(position + 1) {
-            Some(word) => name_words(self.m).nth(word).map(|w| Value::Expr(w.clone())),
+            Some(word) => name_words(self.m).nth(word).map(|w| match plain_word(w) {
+                Some(number) => Value::Num(number),
+                None => Value::Expr(w.clone()),
+            }),
             None => self
                 .m
                 .positional
@@ -352,24 +566,42 @@ impl<'m, 's> MosLine<'m, 's> {
     fn values(self) -> impl Iterator<Item = Value<'s>> {
         (0..self.model + self.m.positional.len()).filter_map(move |p| self.value(p))
     }
+
+    /// The value of the parameter `key`, which the place `position` can also give.
+    /// HSPICE assigns the plain numbers first and then the expressions, each in the
+    /// order of the line, and the last one stays. `1u 2u w=5u` has W=5u, and
+    /// `1u k w=5u` has W=k (decks `kx_*`, `ky_*`, `ma_*`, `mb_*`, `mc_*`).
+    fn param(self, key: &str, position: Option<usize>) -> Option<Cow<'m, Value<'s>>> {
+        let m = self.m;
+        let keys_before = position.map_or(0, |p| {
+            let places = m.positional.iter().take(p.saturating_sub(self.model));
+            let keys = places.filter(|(_, v)| is_key_place(v)).count();
+            keys.min(m.params.len())
+        });
+        let (before, after) = m.params.split_at(keys_before);
+        let named = |kvs: &'m [KeyValue<'s>]| {
+            let kvs = kvs.iter().filter(|kv| kv.k.eq_ignore_ascii_case(key));
+            kvs.map(|kv| Cow::Borrowed(&kv.v))
+        };
+        let placed = position.and_then(|p| self.value(p)).map(Cow::Owned);
+        let (mut number, mut expression) = (None, None);
+        for v in named(before).chain(placed).chain(named(after)) {
+            if matches!(*v, Value::Num(_)) {
+                number = Some(v);
+            } else {
+                expression = Some(v);
+            }
+        }
+        expression.or(number)
+    }
 }
 
 /// The size of the MOSFET `line`, evaluated in `scope`
 fn size(line: MosLine<'_, '_>, scope: &Scope<'_>, opts: &Options) -> Result<Size, SelectError> {
-    let m = line.m;
     let value = |key: &str| {
-        // (a keyword wins over a number after the model name)
-        let v = m
-            .params
-            .iter()
-            .rev()
-            .find(|kv| kv.k.eq_ignore_ascii_case(key))
-            .map(|kv| Cow::Borrowed(&kv.v))
-            .or_else(|| {
-                let position = POSITIONAL.iter().position(|k| *k == key)?;
-                line.value(position).map(Cow::Owned)
-            });
-        match v {
+        let position = POSITIONAL.iter().position(|k| *k == key);
+        let position = position.map(|p| if opts.wl { 1 - p } else { p });
+        match line.param(key, position) {
             Some(v) => scope.eval(&v).map(Some).map_err(|error| SelectError::Eval {
                 what: key.to_ascii_uppercase(),
                 error,
@@ -377,12 +609,28 @@ fn size(line: MosLine<'_, '_>, scope: &Scope<'_>, opts: &Options) -> Result<Size
             None => Ok(None),
         }
     };
-    Ok(Size {
+    let size = Size {
         l: value("l")?.unwrap_or(opts.defl) * opts.scale,
         w: value("w")?.unwrap_or(opts.defw) * opts.scale,
         nf: value("nf")?.unwrap_or(1.0),
         wnflag: value("wnflag")?.map(|flag| flag != 0.0),
-    })
+        nfin: value("nfin")?.unwrap_or(1.0),
+        wsheet: value("wsheet")?.unwrap_or(0.0) * opts.scale,
+    };
+    let bad = |what, value| Err(SelectError::BadSize { what, value });
+    if size.l <= 0.0 {
+        return bad("L", size.l);
+    }
+    if size.w < 0.0 {
+        return bad("W", size.w);
+    }
+    if size.nf < 0.0 {
+        return bad("NF", size.nf);
+    }
+    match value("m")? {
+        Some(m) if m <= 0.0 => bad("M", m),
+        _ => Ok(size),
+    }
 }
 
 /// The models of one level (the top level, or a subckt), by lowercase name
@@ -396,7 +644,7 @@ struct ModelIndex<'a, 's> {
 
 struct Bin<'a, 's> {
     model: &'a Model<'s>,
-    /// whether it sets its four limits
+    /// whether it sets the limits of its level
     complete: bool,
     /// its ranges if they read no parameter (they are the same everywhere),
     /// once computed
@@ -404,12 +652,17 @@ struct Bin<'a, 's> {
 }
 
 impl<'a, 's> ModelIndex<'a, 's> {
-    fn new(models: &'a [Model<'s>]) -> Self {
+    fn new(models: impl IntoIterator<Item = &'a Model<'s>>) -> Self {
         let mut index = Self {
             exact: HashMap::new(),
             bins: HashMap::new(),
         };
         for model in models {
+            // (no other type serves an M line, and it hides nothing: decks
+            // `mt_*`, `mdl_diode_on_m`)
+            if !matches!(model.model_type, ModelType::NMOS | ModelType::PMOS) {
+                continue;
+            }
             let name = model.name.to_ascii_lowercase();
             match name.split_once('.') {
                 None => {
@@ -419,11 +672,9 @@ impl<'a, 's> ModelIndex<'a, 's> {
                 Some((base, suffix))
                     if !base.is_empty() && !suffix.is_empty() && !suffix.contains('.') =>
                 {
-                    let sets =
-                        |key: &str| model.params.iter().any(|kv| kv.k.eq_ignore_ascii_case(key));
                     index.bins.entry(base.to_owned()).or_default().push(Bin {
                         model,
-                        complete: LIMITS.iter().all(|key| sets(key)),
+                        complete: bin_across(model).is_some(),
                         fixed: OnceCell::new(),
                     });
                 }
@@ -445,6 +696,9 @@ fn function_names(ast: &AST<'_>) -> HashSet<String> {
             names.extend(def.params.iter().filter_map(|kv| function_name(&kv.k)));
             stack.push(&def.ast);
         }
+        for block in &a.cond {
+            stack.extend(block.branches.iter().map(|branch| &branch.ast));
+        }
     }
     names
 }
@@ -457,6 +711,9 @@ struct Selector<'a, 's> {
     functions: HashSet<String>,
     /// the models of a level (by address)
     index: HashMap<usize, Rc<ModelIndex<'a, 's>>>,
+    /// the models of a level with active `.if` branches (by the addresses of
+    /// the level and the branches), in netlist order
+    merged: HashMap<Vec<usize>, Rc<ModelIndex<'a, 's>>>,
     /// the parameters that an expression reads (`None`: not known)
     names: HashMap<String, Option<Rc<[String]>>>,
     /// the parameters that the ranges of a bin (by address) read
@@ -466,11 +723,12 @@ struct Selector<'a, 's> {
 }
 
 impl<'a, 's> Selector<'a, 's> {
-    fn new(ast: &AST<'_>, scope: &Scope<'_>) -> Self {
+    fn new(ast: &'a AST<'s>, active: &[&'a AST<'s>]) -> Self {
         Self {
-            opts: Options::new(ast, scope),
+            opts: Options::new(ast, active),
             functions: function_names(ast),
             index: HashMap::new(),
+            merged: HashMap::new(),
             names: HashMap::new(),
             limit_names: HashMap::new(),
             limits: HashMap::new(),
@@ -484,12 +742,36 @@ impl<'a, 's> Selector<'a, 's> {
             .clone()
     }
 
+    /// The models of one level: `group` is its definition, then its active
+    /// branches
+    fn group_index(&mut self, group: &[&'a AST<'s>]) -> Rc<ModelIndex<'a, 's>> {
+        let [ast, branches @ ..] = group else {
+            unreachable!("a level has a definition");
+        };
+        if branches.is_empty() {
+            return self.index(ast);
+        }
+        let key: Vec<usize> = group.iter().map(|a| ptr::from_ref(*a) as usize).collect();
+        self.merged
+            .entry(key)
+            .or_insert_with(|| {
+                let models = in_order(ast, branches, &|a| &a.model, &|b| b.model_at);
+                Rc::new(ModelIndex::new(models))
+            })
+            .clone()
+    }
+
     /// The parameters that the value `v` reads (`None`: not known)
     fn names(&mut self, v: &Value<'_>) -> Option<Rc<[String]>> {
-        let Value::Expr(e) = v else {
-            return Some(Rc::from([]));
-        };
-        if let Some(names) = self.names.get(&**e) {
+        match v {
+            Value::Expr(e) => self.text_names(e),
+            Value::Num(_) => Some(Rc::from([])),
+        }
+    }
+
+    /// The parameters that the expression `e` reads (`None`: not known)
+    fn text_names(&mut self, e: &str) -> Option<Rc<[String]>> {
+        if let Some(names) = self.names.get(e) {
             return names.clone();
         }
         let names: Option<Rc<[String]>> = expr_names(e, &self.functions).map(Rc::from);
@@ -539,8 +821,9 @@ impl<'a, 's> Selector<'a, 's> {
     }
 
     /// The model named `name` for a transistor of size `size`. `on_path`: the
-    /// definitions on its instance path, from the top level to its own;
-    /// `scopes`: the parameters of each, the top level and the instances. The
+    /// definitions on its instance path, from the top level to its own, each
+    /// with its active `.if` branches after it; `scopes`: the parameters of each,
+    /// the top level and the instances (the same one for a level's entries). The
     /// ranges of a bin are evaluated at the level that defines it.
     fn choose(
         &mut self,
@@ -550,10 +833,20 @@ impl<'a, 's> Selector<'a, 's> {
         on_path: &[&'a AST<'s>],
     ) -> Result<Selection<'a, 's>, SelectError> {
         let Size { l, w, nf, .. } = size;
+        // (a bin divides W by a smaller NF, and the circuit has one finger:
+        // decks `mx_nf_*`)
+        let nf = nf.max(1.0);
         let key = name.to_ascii_lowercase();
         let mut seen = 0;
-        for (&ast, &scope) in on_path.iter().zip(scopes).rev() {
-            let index = self.index(ast);
+        let mut end = on_path.len();
+        while end > 0 {
+            let scope = scopes[end - 1];
+            let start = scopes[..end]
+                .iter()
+                .rposition(|s| !ptr::eq(*s, scope))
+                .map_or(0, |k| k + 1);
+            let index = self.group_index(&on_path[start..end]);
+            end = start;
             // a model of this very name
             if let Some(&model) = index.exact.get(&key) {
                 return Ok(Selection { model, l, w, nf });
@@ -671,10 +964,14 @@ fn resolve<'a, 's>(name: &str, on_path: &[&'a AST<'s>]) -> Option<&'a Subckt<'s>
 }
 
 /// The parameters of an instance of `def` whose line passes `line`: its
-/// `.subckt` defaults and `.param` statements, and the values passed. Each
-/// value passed is computed now, so that a value passed down a deep hierarchy
-/// is not a deep recursion later.
-fn instance_scope<'p>(scope: &'p Scope<'p>, def: &Subckt<'_>, line: &[KeyValue<'_>]) -> Scope<'p> {
+/// `.subckt` defaults, `.param` statements and active `.if` branches, and the
+/// values passed. Each value passed is computed now, so that a value passed
+/// down a deep hierarchy is not a deep recursion later.
+fn instance_scope<'p, 'a, 's>(
+    scope: &'p Scope<'p>,
+    def: &'a Subckt<'s>,
+    line: &[KeyValue<'_>],
+) -> (Scope<'p>, Active<'a, 's>) {
     let mut child = scope.child();
     for kv in def.params.iter().chain(&def.ast.param) {
         child.define(kv);
@@ -682,13 +979,77 @@ fn instance_scope<'p>(scope: &'p Scope<'p>, def: &Subckt<'_>, line: &[KeyValue<'
     for f in &def.ast.param_func {
         child.define_func(f);
     }
-    for kv in line {
+    let line = || line.iter().filter(|kv| !is_multiplier(kv));
+    for kv in line() {
         child.pass(kv);
     }
-    for kv in line {
+    let mut active = Active::default();
+    child.activate(&def.ast, &mut active);
+    for kv in line() {
         _ = child.get(&kv.k);
     }
-    child
+    (child, active)
+}
+
+/// Whether `kv`, of an `X` line, is the `m` of the line: it multiplies the
+/// instance, and the subckt does not see it (decks `x_m_*`)
+fn is_multiplier(kv: &KeyValue<'_>) -> bool {
+    kv.k.eq_ignore_ascii_case("m")
+}
+
+/// Why the line `x`, which calls `def`, cannot be expanded below the
+/// definitions `expanding`
+fn expansion_error<'s>(
+    x: &crate::instance::Subckt<'_>,
+    def: &Subckt<'s>,
+    expanding: &[&Subckt<'s>],
+) -> Option<SelectError> {
+    if x.nodes.len() != def.ports.len() {
+        Some(SelectError::NodeCount {
+            subckt: def.name.to_string(),
+            ports: def.ports.len(),
+            nodes: x.nodes.len(),
+        })
+    } else if expanding.iter().any(|s| ptr::eq(*s, def)) {
+        Some(SelectError::Recursive(def.name.to_string()))
+    } else if expanding.len() >= MAX_HIERARCHY_DEPTH {
+        Some(SelectError::TooDeep(def.name.to_string()))
+    } else {
+        None
+    }
+}
+
+/// The error of a condition that could not be computed
+fn condition_error(e: &CondError<'_, '_>) -> SelectError {
+    SelectError::Condition {
+        cond: e.cond.to_owned(),
+        error: e.error.clone(),
+    }
+}
+
+/// The definitions of a level for its lines: `def.ast`, its active branches
+fn with_branches<'a, 's>(
+    above: &[&'a AST<'s>],
+    ast: &'a AST<'s>,
+    active: &Active<'a, 's>,
+) -> Vec<&'a AST<'s>> {
+    let mut all = Vec::with_capacity(above.len() + 1 + active.branches.len());
+    all.extend_from_slice(above);
+    all.push(ast);
+    all.extend_from_slice(&active.branches);
+    all
+}
+
+/// The parameters of each entry of [`with_branches`]
+fn with_scope<'q, 'p>(
+    above: &[&'q Scope<'p>],
+    scope: &'q Scope<'p>,
+    active: &Active<'_, '_>,
+) -> Vec<&'q Scope<'p>> {
+    let mut all = Vec::with_capacity(above.len() + 1 + active.branches.len());
+    all.extend_from_slice(above);
+    all.resize(above.len() + 1 + active.branches.len(), scope);
+    all
 }
 
 impl<'s> AST<'s> {
@@ -696,15 +1057,19 @@ impl<'s> AST<'s> {
     /// is `name`, of length `l` and width `w` (in meters) and one finger:
     /// the model named `name`, or the bin `name.N` that holds `l` and `w`
     pub fn select_model(&self, name: &str, l: f64, w: f64) -> Result<&Model<'s>, SelectError> {
-        let scope = self.scope();
-        let mut sel = Selector::new(self, &scope);
+        let (scope, active) = self.top_level();
+        let mut sel = Selector::new(self, &active.branches);
         let size = Size {
             l,
             w,
             nf: 1.0,
             wnflag: None,
+            nfin: 1.0,
+            wsheet: 0.0,
         };
-        sel.choose(name, size, &[&scope], &[self]).map(|s| s.model)
+        let on_path = with_branches(&[], self, &active);
+        let scopes = with_scope(&[], &scope, &active);
+        sel.choose(name, size, &scopes, &on_path).map(|s| s.model)
     }
 
     /// Every MOSFET of the circuit, in netlist order: the MOSFETs at the top
@@ -734,14 +1099,16 @@ impl<'s> AST<'s> {
     /// order, without keeping them: for circuits whose hierarchy holds too
     /// many transistors to list in memory
     pub fn for_each_mosfet_model<'a>(&'a self, f: impl FnMut(MosfetModel<'a, 's>)) {
-        let scope = self.scope();
+        let (scope, active) = self.top_level();
         let mut walk = Walk {
-            sel: Selector::new(self, &scope),
+            sel: Selector::new(self, &active.branches),
             f,
             path: Vec::new(),
             expanding: Vec::new(),
         };
-        walk.ast(self, &[&scope], &[self]);
+        let on_path = with_branches(&[], self, &active);
+        let scopes = with_scope(&[], &scope, &active);
+        walk.ast(self, &active, &scopes, &on_path);
     }
 
     /// [`AST::for_each_mosfet_model`] for the subckt `name`, as in
@@ -751,18 +1118,22 @@ impl<'s> AST<'s> {
         name: &str,
         f: impl FnMut(MosfetModel<'a, 's>),
     ) -> bool {
-        let Some(def) = self.subckt.get(&name.to_lowercase()) else {
+        let (scope, top) = self.top_level();
+        let on_top = with_branches(&[], self, &top);
+        let Some(def) = resolve(name, &on_top) else {
             return false;
         };
-        let scope = self.scope();
-        let child = instance_scope(&scope, def, &[]);
+        let (child, active) = instance_scope(&scope, def, &[]);
         let mut walk = Walk {
-            sel: Selector::new(self, &scope),
+            sel: Selector::new(self, &top.branches),
             f,
             path: Vec::new(),
             expanding: vec![def],
         };
-        walk.ast(&def.ast, &[&scope, &child], &[self, &def.ast]);
+        let on_path = with_branches(&on_top, &def.ast, &active);
+        let top_scopes = with_scope(&[], &scope, &top);
+        let scopes = with_scope(&top_scopes, &child, &active);
+        walk.ast(&def.ast, &active, &scopes, &on_path);
         true
     }
 }
@@ -775,8 +1146,10 @@ impl<'s> AST<'s> {
 /// once; its counts are multiplied by the number of such instances.
 #[derive(Debug, Clone, Default)]
 pub struct ModelUsage<'a, 's> {
-    /// the MOSFETs of the circuit. This count is too low if `errors` holds a
-    /// [`SelectError::NoSubckt`] for a line whose definition holds MOSFETs.
+    /// the MOSFETs of the circuit. This count is too low if `errors` holds an
+    /// error for an `X` line or a condition (not for one MOSFET) that hides
+    /// MOSFETs, for example [`SelectError::NoSubckt`] for a line whose definition
+    /// holds MOSFETs.
     pub mosfets: u64,
     /// each model chosen, and how many MOSFETs use it: the most used first
     pub models: Vec<(&'a Model<'s>, u64)>,
@@ -790,9 +1163,11 @@ impl<'s> AST<'s> {
     /// How many MOSFETs of the circuit (the top level, and the subckt
     /// instances under it) use each model
     pub fn model_usage(&self) -> ModelUsage<'_, 's> {
-        let scope = self.scope();
-        let mut usage = Usage::new(self, &scope);
-        let counts = usage.level(self, &[&scope], &[self], 0, 0);
+        let (scope, active) = self.top_level();
+        let mut usage = Usage::new(self, &active.branches, &scope);
+        let on_path = with_branches(&[], self, &active);
+        let scopes = with_scope(&[], &scope, &active);
+        let counts = usage.level(self, &active, &scopes, &on_path, 0, 0);
         usage.finish(&counts)
     }
 
@@ -800,13 +1175,17 @@ impl<'s> AST<'s> {
     /// the top level) with its default parameters. `None` if there is no
     /// such subckt.
     pub fn model_usage_of(&self, name: &str) -> Option<ModelUsage<'_, 's>> {
-        let def = self.subckt.get(&name.to_lowercase())?;
-        let scope = self.scope();
-        let child = instance_scope(&scope, def, &[]);
-        let mut usage = Usage::new(self, &scope);
+        let (scope, top) = self.top_level();
+        let on_top = with_branches(&[], self, &top);
+        let def = resolve(name, &on_top)?;
+        let (child, active) = instance_scope(&scope, def, &[]);
+        let mut usage = Usage::new(self, &top.branches, &scope);
         usage.expanding.push(def);
-        let visible = usage.visible_below(0, def);
-        let counts = usage.level(&def.ast, &[&scope, &child], &[self, &def.ast], 1, visible);
+        let visible = usage.visible_with(0, &def.ast, &active);
+        let on_path = with_branches(&on_top, &def.ast, &active);
+        let top_scopes = with_scope(&[], &scope, &top);
+        let scopes = with_scope(&top_scopes, &child, &active);
+        let counts = usage.level(&def.ast, &active, &scopes, &on_path, 1, visible);
         Some(usage.finish(&counts))
     }
 }
@@ -835,6 +1214,7 @@ fn passed_values(
         return Passed::new();
     };
     line.iter()
+        .filter(|kv| !is_multiplier(kv))
         .map(|kv| kv.k.to_ascii_lowercase())
         .filter(|k| only.is_none_or(|only| only.contains(k)))
         .map(|k| {
@@ -906,9 +1286,9 @@ struct Usage<'a, 's> {
 }
 
 impl<'a, 's> Usage<'a, 's> {
-    fn new(ast: &AST<'_>, scope: &Scope<'_>) -> Self {
+    fn new(ast: &'a AST<'s>, active: &[&'a AST<'s>], scope: &Scope<'_>) -> Self {
         Self {
-            sel: Selector::new(ast, scope),
+            sel: Selector::new(ast, active),
             parhier: scope.parhier(),
             models: HashMap::new(),
             errors: Vec::new(),
@@ -936,8 +1316,7 @@ impl<'a, 's> Usage<'a, 's> {
                 Use::Model(addr) => usage.models.push((self.models[&addr], n)),
                 Use::Error(number) => {
                     let (e, path) = errors[number].take().expect("each error is counted once");
-                    // (an `X` line is not a MOSFET)
-                    if matches!(e, SelectError::NoSubckt(_)) {
+                    if !e.is_mosfet() {
                         usage.mosfets -= n;
                     }
                     usage.errors.push((e, n, path));
@@ -955,17 +1334,27 @@ impl<'a, 's> Usage<'a, 's> {
 
     /// What the lines of a level see, as a number: the definitions on its
     /// instance path that hold models or subckts. `visible`: the number of
-    /// the level above; `def`: this level's definition. Two levels with the
-    /// same number find the same definition for each name.
-    fn visible_below(&mut self, visible: usize, def: &Subckt<'_>) -> usize {
-        if def.ast.model.is_empty() && def.ast.subckt.is_empty() {
+    /// the level above; `ast`: this level's definition, or a branch active in
+    /// it. Two levels with the same number find the same definition for each
+    /// name.
+    fn visible_below(&mut self, visible: usize, ast: &AST<'_>) -> usize {
+        if ast.model.is_empty() && ast.subckt.is_empty() {
             return visible;
         }
         let next = self.visible.len() + 1;
         *self
             .visible
-            .entry((visible, ptr::from_ref(def) as usize))
+            .entry((visible, ptr::from_ref(ast) as usize))
             .or_insert(next)
+    }
+
+    /// [`Usage::visible_below`] for a level with its active branches
+    fn visible_with(&mut self, visible: usize, ast: &AST<'_>, active: &Active<'_, '_>) -> usize {
+        let mut visible = self.visible_below(visible, ast);
+        for branch in &active.branches {
+            visible = self.visible_below(visible, branch);
+        }
+        visible
     }
 
     /// What the contents of `def` read, for an instance of it under a level
@@ -1009,48 +1398,8 @@ impl<'a, 's> Usage<'a, 's> {
             extend(&mut all, &self.sel.names(&kv.v)?);
         }
         let inner: Vec<_> = on_path.iter().copied().chain(once(&def.ast)).collect();
-        let inner_visible = self.visible_below(visible, def);
-        for inst in &def.ast.instance {
-            match &inst.ctx {
-                InstanceCtx::MOSFET(m) => {
-                    for kv in &m.params {
-                        if SIZES.iter().any(|k| kv.k.eq_ignore_ascii_case(k)) {
-                            extend(&mut all, &self.sel.names(&kv.v)?);
-                        }
-                    }
-                    let line = self.sel.read_line(m, &inner);
-                    for v in line.values() {
-                        extend(&mut all, &self.sel.names(&v)?);
-                    }
-                    // the ranges of the bins it may use, read where each is
-                    // defined: those of the top level read the top level's
-                    // parameters (the same everywhere), those of this subckt
-                    // its own; those of an instance above it the parameters
-                    // of that instance, which are not followed: unknown
-                    let name = line.name().to_ascii_lowercase();
-                    let last = inner.len() - 1;
-                    for (depth, &ast) in inner.iter().enumerate().skip(1) {
-                        let index = self.sel.index(ast);
-                        for bin in index.bins.get(&name).into_iter().flatten() {
-                            let names = self.sel.limit_names(bin.model)?;
-                            if depth < last && !names.is_empty() {
-                                return None;
-                            }
-                            extend(&mut all, &names);
-                        }
-                    }
-                }
-                InstanceCtx::Subckt(x) => {
-                    for kv in &x.params {
-                        extend(&mut all, &self.sel.names(&kv.v)?);
-                    }
-                    if let Some(child) = resolve(&x.cktname, &inner) {
-                        extend(&mut all, &self.reads(child, &inner, inner_visible)?.outside);
-                    }
-                }
-                _ => {}
-            }
-        }
+        let inner_visible = self.visible_below(visible, &def.ast);
+        self.lines_read(&def.ast, &inner, inner_visible, &mut all)?;
         let mut outside: Vec<String> = all.iter().cloned().collect();
         if self.parhier == ParHier::Local {
             // the closest definition is used: one of this level hides those
@@ -1064,12 +1413,88 @@ impl<'a, 's> Usage<'a, 's> {
         })
     }
 
+    /// Adds to `all` what the lines of `ast` read, and what its `.if` blocks read
+    /// in all their branches (any of them can be active). `None` if not known:
+    /// so also for a branch with models or subckts, as what the lines of the
+    /// level see then depends on the branch. `inner`: the definitions that the
+    /// lines of the level see.
+    fn lines_read(
+        &mut self,
+        ast: &'a AST<'s>,
+        inner: &[&'a AST<'s>],
+        inner_visible: usize,
+        all: &mut IndexSet<String>,
+    ) -> Option<()> {
+        for inst in &ast.instance {
+            match &inst.ctx {
+                InstanceCtx::MOSFET(m) => {
+                    for kv in &m.params {
+                        if SIZES.iter().any(|k| kv.k.eq_ignore_ascii_case(k)) {
+                            extend(all, &self.sel.names(&kv.v)?);
+                        }
+                    }
+                    let line = self.sel.read_line(m, inner);
+                    for v in line.values() {
+                        extend(all, &self.sel.names(&v)?);
+                    }
+                    // the ranges of the bins it may use, read where each is
+                    // defined: those of the top level read the top level's
+                    // parameters (the same everywhere), those of this subckt
+                    // its own; those of an instance above it the parameters
+                    // of that instance, which are not followed: unknown
+                    let name = line.name().to_ascii_lowercase();
+                    let last = inner.len() - 1;
+                    for (depth, &level) in inner.iter().enumerate().skip(1) {
+                        let index = self.sel.index(level);
+                        for bin in index.bins.get(&name).into_iter().flatten() {
+                            let names = self.sel.limit_names(bin.model)?;
+                            if depth < last && !names.is_empty() {
+                                return None;
+                            }
+                            extend(all, &names);
+                        }
+                    }
+                }
+                InstanceCtx::Subckt(x) => {
+                    for kv in &x.params {
+                        extend(all, &self.sel.names(&kv.v)?);
+                    }
+                    if let Some(child) = resolve(&x.cktname, inner) {
+                        extend(all, &self.reads(child, inner, inner_visible)?.outside);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for block in &ast.cond {
+            for branch in &block.branches {
+                let inside = &branch.ast;
+                if !inside.model.is_empty() || !inside.subckt.is_empty() {
+                    return None;
+                }
+                if let Some(cond) = &branch.cond {
+                    extend(all, &self.sel.text_names(cond)?);
+                }
+                for kv in inside
+                    .param
+                    .iter()
+                    .filter(|kv| function_name(&kv.k).is_none())
+                {
+                    extend(all, &self.sel.names(&kv.v)?);
+                }
+                self.lines_read(inside, inner, inner_visible, all)?;
+            }
+        }
+        Some(())
+    }
+
     /// The counts of the instances of `ast` (context `context`, seeing the
-    /// definitions numbered `visible`); `scopes` and `on_path` as in
+    /// definitions numbered `visible`); `active`, `scopes` and `on_path` as in
     /// [`Walk::ast`]
     fn level(
         &mut self,
         ast: &'a AST<'s>,
+        active: &Active<'a, 's>,
         scopes: &[&Scope<'_>],
         on_path: &[&'a AST<'s>],
         context: usize,
@@ -1077,7 +1502,36 @@ impl<'a, 's> Usage<'a, 's> {
     ) -> Counts {
         let scope = *scopes.last().expect("the top level at least");
         let mut counts = Counts::new();
-        for inst in &ast.instance {
+        for e in &active.errors {
+            let used = Use::Error(self.error_number(condition_error(e), &e.block.line.name));
+            *counts.entry(used).or_default() += 1;
+        }
+        if ast.cond.is_empty() {
+            for inst in &ast.instance {
+                self.line(inst, scope, scopes, on_path, context, visible, &mut counts);
+            }
+        } else {
+            let lines = in_order(ast, &active.branches, &|a| &a.instance, &|b| b.instance_at);
+            for inst in lines {
+                self.line(inst, scope, scopes, on_path, context, visible, &mut counts);
+            }
+        }
+        counts
+    }
+
+    /// Adds the counts of the line `inst` of a level to `counts`
+    #[allow(clippy::too_many_arguments)]
+    fn line(
+        &mut self,
+        inst: &'a Instance<'s>,
+        scope: &Scope<'_>,
+        scopes: &[&Scope<'_>],
+        on_path: &[&'a AST<'s>],
+        context: usize,
+        visible: usize,
+        counts: &mut Counts,
+    ) {
+        {
             match &inst.ctx {
                 InstanceCtx::MOSFET(m) => {
                     let used = match self.sel.select(m, scopes, on_path) {
@@ -1095,18 +1549,18 @@ impl<'a, 's> Usage<'a, 's> {
                         let e = SelectError::NoSubckt(x.cktname.to_string());
                         let used = Use::Error(self.error_number(e, &inst.name));
                         *counts.entry(used).or_default() += 1;
-                        continue;
+                        return;
                     };
-                    if self.expanding.iter().any(|s| ptr::eq(*s, def))
-                        || self.expanding.len() >= MAX_HIERARCHY_DEPTH
-                    {
-                        continue;
+                    if let Some(e) = expansion_error(x, def, &self.expanding) {
+                        let used = Use::Error(self.error_number(e, &inst.name));
+                        *counts.entry(used).or_default() += 1;
+                        return;
                     }
                     let addr = ptr::from_ref(def) as usize;
                     // (a line that passes nothing needs no new instance to
                     // look in the memo)
-                    let child =
-                        (!x.params.is_empty()).then(|| instance_scope(scope, def, &x.params));
+                    let child = (!x.params.is_empty() || !def.ast.cond.is_empty())
+                        .then(|| instance_scope(scope, def, &x.params));
                     let key = if self.unkept.contains(&addr) {
                         None
                     } else {
@@ -1114,19 +1568,23 @@ impl<'a, 's> Usage<'a, 's> {
                             Some(reads) => MemoKey::Reads(
                                 addr,
                                 visible,
-                                passed_values(child.as_ref(), &x.params, Some(&reads.all)),
+                                passed_values(
+                                    child.as_ref().map(|c| &c.0),
+                                    &x.params,
+                                    Some(&reads.all),
+                                ),
                                 reads.outside.iter().map(|n| scope.binding(n)).collect(),
                             ),
                             None => MemoKey::Context(
                                 addr,
-                                passed_values(child.as_ref(), &x.params, None),
+                                passed_values(child.as_ref().map(|c| &c.0), &x.params, None),
                                 context,
                             ),
                         };
                         if let Some(c) = self.memo.get(&key) {
-                            add(&mut counts, c);
+                            add(counts, c);
                             self.memo_use.entry(addr).or_default().0 += 1;
-                            continue;
+                            return;
                         }
                         Some(key)
                     };
@@ -1135,21 +1593,23 @@ impl<'a, 's> Usage<'a, 's> {
                         || !def.ast.param.is_empty()
                         || !def.ast.param_func.is_empty()
                         || !def.ast.model.is_empty()
-                        || !def.ast.subckt.is_empty();
+                        || !def.ast.subckt.is_empty()
+                        || !def.ast.cond.is_empty();
                     let inner_context = if binds {
                         self.next_context += 1;
                         self.next_context
                     } else {
                         context
                     };
-                    let inner_visible = self.visible_below(visible, def);
-                    let child = child.unwrap_or_else(|| instance_scope(scope, def, &[]));
-                    let inner_scopes: Vec<_> = scopes.iter().copied().chain(once(&child)).collect();
-                    let inner: Vec<_> = on_path.iter().copied().chain(once(&def.ast)).collect();
+                    let (child, active) = child.unwrap_or_else(|| instance_scope(scope, def, &[]));
+                    let inner_visible = self.visible_with(visible, &def.ast, &active);
+                    let inner_scopes = with_scope(scopes, &child, &active);
+                    let inner = with_branches(on_path, &def.ast, &active);
                     self.path.push(&inst.name);
                     self.expanding.push(def);
                     let c = self.level(
                         &def.ast,
+                        &active,
                         &inner_scopes,
                         &inner,
                         inner_context,
@@ -1158,7 +1618,7 @@ impl<'a, 's> Usage<'a, 's> {
                     self.expanding.pop();
                     self.path.pop();
                     let c: Rc<[(Use, u64)]> = c.into_iter().collect();
-                    add(&mut counts, &c);
+                    add(counts, &c);
                     if let Some(key) = key {
                         self.keep(addr, key, c);
                     }
@@ -1166,7 +1626,6 @@ impl<'a, 's> Usage<'a, 's> {
                 _ => {}
             }
         }
-        counts
     }
 
     /// Keeps the counts `c` of an instance of the definition `addr`, unless
@@ -1222,49 +1681,88 @@ struct Walk<'a, 's, F> {
 
 impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
     /// `on_path`: the definitions on the instance path of `ast`, from the top
-    /// level to `ast` itself (where its models and subckts are looked up);
-    /// `scopes`: their parameters, the top level's and those of the instances
-    /// (`ast`'s last)
-    fn ast(&mut self, ast: &'a AST<'s>, scopes: &[&Scope<'_>], on_path: &[&'a AST<'s>]) {
-        let scope = *scopes.last().expect("the top level at least");
-        for inst in &ast.instance {
-            match &inst.ctx {
-                InstanceCtx::MOSFET(m) => {
-                    let selection = self.sel.select(m, scopes, on_path);
-                    let mname = self.sel.read_line(m, on_path).name();
-                    (self.f)(MosfetModel {
-                        path: self.path.iter().copied().chain(once(&*inst.name)).join("."),
-                        instance: inst,
-                        mname,
-                        selection,
-                    });
-                }
-                InstanceCtx::Subckt(x) => {
-                    let Some(def) = resolve(&x.cktname, on_path) else {
-                        (self.f)(MosfetModel {
-                            path: self.path.iter().copied().chain(once(&*inst.name)).join("."),
-                            instance: inst,
-                            mname: &x.cktname,
-                            selection: Err(SelectError::NoSubckt(x.cktname.to_string())),
-                        });
-                        continue;
-                    };
-                    if self.expanding.iter().any(|s| ptr::eq(*s, def))
-                        || self.expanding.len() >= MAX_HIERARCHY_DEPTH
-                    {
-                        continue;
-                    }
-                    let child = instance_scope(scope, def, &x.params);
-                    let inner_scopes: Vec<_> = scopes.iter().copied().chain(once(&child)).collect();
-                    let inner: Vec<_> = on_path.iter().copied().chain(once(&def.ast)).collect();
-                    self.path.push(&inst.name);
-                    self.expanding.push(def);
-                    self.ast(&def.ast, &inner_scopes, &inner);
-                    self.expanding.pop();
-                    self.path.pop();
-                }
-                _ => {}
+    /// level to `ast` itself (where its models and subckts are looked up), each
+    /// with its active `.if` branches after it; `scopes`: their parameters, the
+    /// top level's and those of the instances (`ast`'s last); `active`: what
+    /// the `.if` blocks of `ast` give for this instance
+    fn ast(
+        &mut self,
+        ast: &'a AST<'s>,
+        active: &Active<'a, 's>,
+        scopes: &[&Scope<'_>],
+        on_path: &[&'a AST<'s>],
+    ) {
+        for e in &active.errors {
+            let path = self.path_of(&e.block.line.name);
+            (self.f)(MosfetModel {
+                path,
+                instance: &e.block.line,
+                mname: "",
+                selection: Err(condition_error(e)),
+            });
+        }
+        if ast.cond.is_empty() {
+            for inst in &ast.instance {
+                self.line(inst, scopes, on_path);
             }
+        } else {
+            let lines = in_order(ast, &active.branches, &|a| &a.instance, &|b| b.instance_at);
+            for inst in lines {
+                self.line(inst, scopes, on_path);
+            }
+        }
+    }
+
+    /// The path of the line `name` of the current level
+    fn path_of(&self, name: &str) -> String {
+        self.path.iter().copied().chain(once(name)).join(".")
+    }
+
+    fn line(&mut self, inst: &'a Instance<'s>, scopes: &[&Scope<'_>], on_path: &[&'a AST<'s>]) {
+        let scope = *scopes.last().expect("the top level at least");
+        match &inst.ctx {
+            InstanceCtx::MOSFET(m) => {
+                let selection = self.sel.select(m, scopes, on_path);
+                let mname = self.sel.read_line(m, on_path).name();
+                let path = self.path_of(&inst.name);
+                (self.f)(MosfetModel {
+                    path,
+                    instance: inst,
+                    mname,
+                    selection,
+                });
+            }
+            InstanceCtx::Subckt(x) => {
+                let Some(def) = resolve(&x.cktname, on_path) else {
+                    let path = self.path_of(&inst.name);
+                    (self.f)(MosfetModel {
+                        path,
+                        instance: inst,
+                        mname: &x.cktname,
+                        selection: Err(SelectError::NoSubckt(x.cktname.to_string())),
+                    });
+                    return;
+                };
+                if let Some(e) = expansion_error(x, def, &self.expanding) {
+                    let path = self.path_of(&inst.name);
+                    (self.f)(MosfetModel {
+                        path,
+                        instance: inst,
+                        mname: &x.cktname,
+                        selection: Err(e),
+                    });
+                    return;
+                }
+                let (child, active) = instance_scope(scope, def, &x.params);
+                let inner_scopes = with_scope(scopes, &child, &active);
+                let inner = with_branches(on_path, &def.ast, &active);
+                self.path.push(&inst.name);
+                self.expanding.push(def);
+                self.ast(&def.ast, &active, &inner_scopes, &inner);
+                self.expanding.pop();
+                self.path.pop();
+            }
+            _ => {}
         }
     }
 }

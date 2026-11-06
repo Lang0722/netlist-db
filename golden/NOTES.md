@@ -427,6 +427,153 @@ Other forms:
   `e1 2 0 1 0 2 max=g`, `e1 2 0 vcvs 1 0 2`, `e1 2 0 poly(1) 1 0 0 2`, a `.lib`
   section with `.endlx` (a warning, and the next lines stay in the section).
 
+## Comparison rounds with HSPICE as the reference
+
+These rounds ran on HSPICE P-2019.06-SP1-1 on 2026-11-05 and 2026-11-06.
+`scripts/hspice_kit/rounds/` holds the generators, and deck names below come from
+them.
+
+Method: a deck with `.option list nomod post=0` and no analysis line makes HSPICE
+elaborate the circuit with no solve. The listing still holds the table of MOSFETs
+(`**** mosfets`), with the model, `w drawn` and `l drawn` of each row. That gives
+one row per MOSFET at low cost. A killed job can still be read: the table is complete
+when `**** subcircuit calls` comes after it. For a value with `temper` or under
+`.alter`, the table does not show the first run, so `.meas` gives the value.
+
+Verdicts on 5,319 decks. Most decks aim at edge forms, so these counts do not
+estimate an error rate on real decks. The baseline is commit f14c43e.
+
+| Verdict | f14c43e | now |
+|---|---|---|
+| Same L, W and model | 1,209 | 4,022 |
+| Both stop | 576 | 541 |
+| Different values | 1,151 | 200 |
+| HSPICE stops, netlist-db reads | 373 | 408 |
+| HSPICE reads, netlist-db error row, also with other rows | 1,881 | 35 |
+| HSPICE reads, netlist-db error only | 16 | 0 |
+| Not comparable (no or empty listing, `.alter`, `temper`) | 113 | 113 |
+
+### Rules that the code now follows
+
+The tests in `src/tests.rs` and `src/eval.rs` name the decks.
+
+- A MOSFET line. `(`, `)` and `,` only separate words, also after a key and over `+`
+  lines. `w=(2u + 3u)` is 2u, and `w=(2u+3u)` is 5u. On `.param` and `X` lines a group
+  with spaces is one expression. A lone `+` takes a place and gives no value (`1u + 2u`
+  has no W). In `+2u` it is a sign.
+- A word that starts with a number is an expression only with `*`, `/`, `+` or `-`
+  right after the number. Otherwise HSPICE reads the number and ignores the rest
+  (`2n7002` is 2n, and `2^2` is 2).
+- HSPICE assigns the plain numbers first and then the expressions, each in the order
+  of the line, and the last one stays: `1u k w=5u` has W=k, and `1u 2u w=5u` has W=5u.
+- A comma ends the value of a key. `ic=` keeps its list, and values after it belong
+  to it.
+- `.if`, `.elseif`, `.else` and `.endif` are evaluated per instance, after the values
+  passed.
+- FinFET bins (level 72) read `nfin*` and `wsheet*`, not `wmin` and `wmax`.
+- `DEFL`, `DEFW`, `SCALE`, `SCALM`: the last plain number wins. A value of 0 or less
+  gives the default back.
+- Math: see the header of `src/eval.rs`.
+- A chain of parameters can have any length. netlist-db stopped at 100 before.
+
+### Differences that stay: HSPICE and netlist-db give different values
+
+- `.if` order. The branch depends on the order of the instances in HSPICE when the
+  first condition is one comparison in quotes or extra parentheses (`.if ('ll<4u')`,
+  `.if ((ll<4u))`) and the second one is plain. netlist-db gives the logical branch.
+  Decks `q_FIE_quoted`, s1218, s3216 and rounds f13 to f16, f20, f23. The form with `&&`
+  does not show this.
+
+  ```
+  .subckt mac d g s b ll=1u ww=1u
+  .if ('ll<4u')
+  M0 d g s b n l=ll w=ww
+  .elseif (ww>4u)
+  M0 d g s b n l='ll*1.5' w=ww
+  .else
+  M0 d g s b n l='ll*2' w='ww/2'
+  .endif
+  .ends
+  X0 d g s 0 mac ll=5u ww=5u
+  X1 d g s 0 mac ll=3u ww=1u
+  X2 d g s 0 mac ll=5u ww=1u    $ the logic says .else, HSPICE takes .if
+  ```
+
+- `.if` truth. `.if (2**-3^2<0.01)` is true in HSPICE, while `.meas` shows 0.015625.
+  `.if (!(log(-8)))` is true in HSPICE, and false here. Decks `a00`, `t08`, `i0058`,
+  `i0072`.
+- The fourth word. On `M1 d g 0 a b ...` where `a` and `b` both name models, HSPICE
+  takes `a` when another active line uses `a` as a model, and it reads `b` as L. Deck
+  `t_param_b` gives a different value. Other forms stop in HSPICE only.
+- A group right after the model. HSPICE stops on most forms. With one quoted value
+  after the group and another active line that uses the model, W is only the first
+  number of the quoted text (`(1u*1) '2u+1u'` has W=2u). Deck s2148.
+- FinFET under `.option scalm`. After the first use of a bin, HSPICE multiplies its
+  `nfin` limits by `scalm`, once per bin. So the choice depends on the order of the
+  lines. Decks of round f36, r4.
+- Depth under `parhier=global`. HSPICE reads a parameter at most 31 levels above the
+  reader, in both `parhier` modes. Past that, a top-level name is undefined and HSPICE
+  stops (`g_read_32`, `l_read_32`), and under `global` a nearer value wins (`g_top_32`,
+  `g_self_33`). netlist-db reads through any depth.
+- `.alter` in an include (`inc_alter_inside`, `al_inside_inc`). Line 1 is always a title
+  in HSPICE (`o_title_option`). `.param f=1u` with `.param f(x)=...` (`p_func_same_as_param`).
+
+### Differences that stay: netlist-db gives an error row
+
+- A loop of two or more top-level `.param` lines. HSPICE runs it, with no warning, and
+  reads 0 where the loop closes (`.param a='b+1u' b='a+1u'` gives a=1u, b=2u, with the
+  lines in the order of the file). A loop in a subckt and `.param a='a+1u'` stop in both.
+- `.option macmod=1` or `3`: an M line may name a `.subckt` (`mc_macmod*`).
+- `l=0` with `xl>0` (`z_l0_xl`), strings (`x_value_string`, `if2_str`), nesting over 256
+  (`if2_nested_300`, `dp_if_1000`, `dp_loc_*`), an overflow (`f_pow_big`, `10**400`),
+  an include that splits a statement (`inc_ends_split`, `inc_plus_*`, `inc_subckt_open`).
+- A digit-first word with the model at the fourth place (`M1 d g 0 n 1u 2n7002`). Golden
+  `mos_digit_model` needs this error.
+- `1u 2&&3`, `1u 2?3:4`, `w=2<3`, `w=2?3:4`, `1u 2u;3`, `1u 2u&3`.
+
+### Differences that stay: HSPICE stops and netlist-db reads a value
+
+- Duplicate names (`m_name_dup*`, `x_dup_name`, `model_redefined*`, `subckt_redefined*`,
+  `inc_twice*`, `lib_twice`), unread undefined names (`unread_undefined_*`, `w=2u + c`).
+- A dot line on line 1 (`o_title_*`), `pi`, `min` and `max` with other than two values,
+  two signs in front of a value (`--2`, `!-2`), nested parentheses after a key
+  (`l=(1u+(2u))`, `l=(max(1u,2u))`), operators as words (`w=(k / 1)`, `l=(k)*(j)`),
+  bare `max(...)` on an M line, `1u k^2`, `w=k^2`.
+- A model more than 99 levels above the MOSFET (`d_100`, `rch_100`, `deep200`).
+- Level-specific stops (`mdl_lv49_bins`, `ff_73_*`, `z_w0_lv1`).
+
+### Listings of 0 bytes
+
+HSPICE writes an empty `.lis` on some decks, and the cause is unknown. It may be a crash.
+Of the 27 decks with an empty listing in the table above, 17 stay empty when they run
+alone. The other 10 gave a listing when they ran alone, so their empty listings came
+from the job and not from the deck. One deck (`nf_78_sub`) was empty once and normal on
+the next run, so one empty listing proves nothing. All the decks that were reduced hold
+`.if`. `c5_gl` is a short example: with `.option parhier=local` it runs and L=2u, and
+netlist-db gives L=2u in both.
+
+### Value limits
+
+`int`, `ceil`, `floor`, `trunc`, `nint` and `round` convert through 32 bits in HSPICE
+(`int(3e9)` is -2147483648). `.meas` prints `*.` from 1e100 on and `0.` below 1e-28, but the
+values are still there. The evaluator in `expr/` (query crate) does not follow the math
+rules of this section. `src/eval.rs` (model selector) does.
+
+### Large decks
+
+| Deck | HSPICE | Compared with netlist-db |
+|---|---|---|
+| 11k, 100k | concluded in 31 s and 53 s | L and W equal on 111,176 rows |
+| 250k | killed at 175 s, table complete, peak 1.75 GB | equal on 249,992 rows |
+| 500k | killed at 170 s, table complete, peak 2.97 GB | equal on 499,992 rows |
+| 1M | killed at 175 s, table cut, peak 3.86 GB | equal on 645,936 rows |
+| 1M to 300M with no table | killed at the cap of about 4.5 GB | no compare |
+| `mods.py`: 2,000 bins, 50k parameter chain, 20k subckts, 100k fan-out, 64 `.if` blocks, global | concluded | equal on 219,000 rows |
+| `bust.py`: 10k leaves with their own L, plain and `.if` | concluded | equal on 20,000 rows |
+
+The machine was a VM with 6.4 GB. HSPICE cannot flatten 1M MOSFETs or more under the cap,
+so the larger decks were checked against the closed-form counts of their generators.
+
 ## Known differences
 
 HSPICE rejects each deck below, and the loader gives no Error for it

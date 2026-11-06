@@ -274,7 +274,35 @@ pub const MOS_POSITIONAL: [&str; 8] = ["l", "w", "ad", "as", "pd", "ps", "nrd", 
 /// a place and gives no value: `M1 d g 0 0 nch OFF 1u` has the default L and
 /// W=1u (probes on P-2019.06).
 pub fn is_off(value: &Value<'_>) -> bool {
-    matches!(value, Value::Expr(e) if e.eq_ignore_ascii_case("off"))
+    is_key_place(value) || matches!(value, Value::Expr(e) if gives_no_value(e))
+}
+/// A word of a MOSFET line that takes a place and gives no value: `OFF`, or a lone `+`
+/// (`1u + 2u` has no W, decks `w*`).
+pub fn gives_no_value(word: &str) -> bool {
+    word.eq_ignore_ascii_case("off") || word == "+"
+}
+
+/// Whether a place after the model name of a MOSFET holds a `key=value` parameter.
+/// Each such parameter takes a place and leaves an empty value there, so the empty
+/// values tell the order of the line: the first one stands for the first parameter.
+pub fn is_key_place(value: &Value<'_>) -> bool {
+    matches!(value, Value::Expr(e) if e.is_empty())
+}
+
+/// The number that `word`, a value without quotes on a MOSFET line, reads as. A
+/// number with an operator right after it starts an expression (`2u*1`). HSPICE
+/// reads any other word that starts with a number as that number: `2n7002` is 2n,
+/// `2^2` is 2 and `2u.5` is 2u. `(2u)` is a number too (decks `gx_*`, `hx_*`, `ma_*`).
+pub(crate) fn plain_word(word: &str) -> Option<f64> {
+    let word = word
+        .strip_prefix('(')
+        .and_then(|w| w.strip_suffix(')'))
+        .map_or(word, str::trim);
+    if word.contains(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | ',')) {
+        return None;
+    }
+    let (value, end, _) = netlist_expr::scan_number_exact(word)?;
+    (!word[end..].starts_with(['*', '/', '+', '-'])).then_some(value)
 }
 
 impl MOSFETBuilder {

@@ -26,9 +26,9 @@ use crate::{
 };
 use crate::{
     ast::{
-        DataBuilder, DataFileBuilder, DataFilesBuilder, DataValuesBuilder, KeyValueBuilder,
-        ModelBuilder, ParamFuncBuilder, PnameColNumBuilder, TokenBuilder, UnknwonBuilder,
-        ValueBuilder,
+        CondLine, DataBuilder, DataFileBuilder, DataFilesBuilder, DataValuesBuilder,
+        KeyValueBuilder, ModelBuilder, ParamFuncBuilder, PnameColNumBuilder, TokenBuilder,
+        UnknwonBuilder, ValueBuilder,
     },
     span::{LocatedSpan, Pos, Span},
 };
@@ -200,19 +200,39 @@ fn is_name(c: char) -> bool {
 }
 
 /// A name: [`is_name`] characters, but not starting with `*`, which starts an
-/// inline comment (`cload out gnd 1000f *output loading`)
+/// inline comment (`cload out gnd 1000f *output loading`). A `$` is a character
+/// of a name, but it starts a comment at the start of a word and after a word
+/// that starts with a digit: `M$1`, `q$a`, and `1u$ note` (decks `cm_dollar_*`).
 #[inline]
 fn name_span(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
-    if i.fragment().starts_with('*') {
+    let s = i.fragment();
+    let dollar = !s.starts_with(|c: char| c.is_ascii_digit());
+    let end = if s.starts_with(['*', '$']) {
+        0
+    } else {
+        s.find(|c: char| !(is_name(c) || (dollar && c == '$')))
+            .unwrap_or(s.len())
+    };
+    if end == 0 {
         return Err(nom::Err::Error(nom::error::Error::new(
             i,
             ErrorKind::TakeWhile1,
         )));
     }
-    take_while1(is_name).parse_complete(i)
+    let (rest, taken) = i.take_split(end);
+    Ok((rest, taken))
 }
 fn is_formula(c: char) -> bool {
     c.is_alphanumeric() || "/_.+-*^:".contains(c) || c == '\u{FFFD}'
+}
+
+/// Whether a `$` after `text`, an expression without quotes, is in a name: the
+/// last word of `text` starts with a letter. After a number, a `$` starts a
+/// comment (`l=1u$ w=9u`, `l=a$b*2`: decks `cm_dollar_*`).
+fn dollar_in_name(text: &str) -> bool {
+    text.rsplit(|c: char| !(c.is_alphanumeric() || "_.$".contains(c)))
+        .next()
+        .is_some_and(|word| word.starts_with(|c: char| c.is_alphabetic() || c == '_'))
 }
 
 /// A file path in `'…'` or `"…"`: the text between the quotes.
@@ -302,6 +322,35 @@ pub(super) fn name_str(i: LocatedSpan) -> IResult<LocatedSpan, (&str, Span)> {
 /// `(`, `)` and `,`, which HSPICE also reads as delimiters:
 /// `X1 (a b) sub`, `X2 a b sub (w=1 l=2)`, `E1 o 0 (p,n) 1`, `.SUBCKT (via) a b`.
 pub(super) fn node_sep(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    separator::<true, false>(i)
+}
+
+/// [`node_sep`] for the words of a MOSFET line. It stops at a `+` with no word right
+/// after it, because such a `+` is a word there (decks `w*`): `1u + 2u`.
+pub(super) fn mos_sep(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    separator::<true, true>(i)
+}
+
+/// Between the items of a `.param` or `.option` statement: white space, a
+/// continuation line, or `,`. HSPICE reads `.param a=1u,b=2u` (decks `pc_*`).
+fn list_sep(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    separator::<false, false>(i)
+}
+
+/// The `,` that can end a `.param` or `.option` statement (decks `cc_*`)
+fn trailing_commas(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
+    let (j, ()) = list_sep(i)?;
+    if i.fragment()[..j.location_offset() - i.location_offset()].contains(',') {
+        Ok((j, ()))
+    } else {
+        Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Char)))
+    }
+}
+
+#[inline]
+fn separator<const PARENS: bool, const LONE_PLUS: bool>(
+    i: LocatedSpan,
+) -> IResult<LocatedSpan, ()> {
     let mut j = i;
     loop {
         let s = j.fragment().as_bytes();
@@ -313,7 +362,16 @@ pub(super) fn node_sep(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
                     .unwrap_or(s.len());
                 j = j.take_from(n);
             }
-            Some(b'(' | b')' | b',') => j = j.take_from(1),
+            Some(b',') => j = j.take_from(1),
+            Some(b'(' | b')') if PARENS => j = j.take_from(1),
+            Some(b'+')
+                if LONE_PLUS
+                    && s.get(1).is_none_or(|c| {
+                        matches!(c, b' ' | b'\t' | b'\r' | b'\n' | b'(' | b')' | b',')
+                    }) =>
+            {
+                break;
+            }
             // (a continuation can only start with one of these)
             Some(b'\n' | b'$' | b'*' | b'+') => match continuation(j) {
                 Ok((k, ())) => j = k,
@@ -380,6 +438,10 @@ pub(super) fn formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
         end = s[end..]
             .find(|c: char| !is_formula(c))
             .map_or(s.len(), |n| end + n);
+        if s[end..].starts_with('$') && dollar_in_name(&s[..end]) {
+            end += 1;
+            continue;
+        }
         match paren_group_len(&s[end..]) {
             Some(n) => end += n,
             None => break,
@@ -413,7 +475,7 @@ pub(super) fn assigned_formula(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     }
     let mut end = 0;
     while let Some(c) = s[end..].chars().next() {
-        if is_formula(c) {
+        if is_formula(c) || (c == '$' && dollar_in_name(&s[..end])) {
             end += c.len_utf8();
         } else if c == '(' {
             match balanced_group(&s[end..]) {
@@ -648,11 +710,11 @@ impl<'a, T, P> MyParser<'a, T> for P where
 {
 }
 
-/// `=` and the value of `f` after it. The value can be on the next `+`
-/// line (see [`eq_sep`]).
+/// `=` and the value of `f` after it. The `=` and the value can be on the next
+/// `+` line (see [`eq_sep`], deck `m_eq_split`).
 #[inline]
 pub(super) fn equal<'a, T, F: MyParser<'a, T>>(f: F) -> impl MyParser<'a, T> {
-    map((space, char('='), eq_sep, f), |(_, _, _, v)| v)
+    map((loss_sep, char('='), eq_sep, f), |(_, _, _, v)| v)
 }
 
 /// The separator after the `=` of `key=value`: spaces, or, when only
@@ -714,7 +776,7 @@ fn group_with_quotes(s: &str) -> Option<usize> {
 /// The value of a `key=value` parameter: see [`group_value`]. A list of numbers
 /// (`TC=0,0`) is kept as one expression.
 #[inline]
-fn assigned_value(start: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
+pub(super) fn assigned_value(start: LocatedSpan) -> IResult<LocatedSpan, ValueBuilder> {
     let (mut i, mut v) = group_value(start)?;
     if matches!(v, ValueBuilder::Num(_)) {
         let mut list = false;
@@ -769,7 +831,7 @@ pub(super) fn group_value(start: LocatedSpan) -> IResult<LocatedSpan, ValueBuild
 
 #[inline]
 pub(super) fn key_value(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
-    let (i, (k, _, _, _)) = (name, space, char('='), eq_sep).parse_complete(i)?;
+    let (i, (k, _, _, _)) = (name, loss_sep, char('='), eq_sep).parse_complete(i)?;
     let (i, v) = assigned_value(i)?;
     Ok((i, KeyValueBuilder { k, v }))
 }
@@ -785,7 +847,7 @@ fn param_assignment(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
             i = i.take_from(len);
         }
     }
-    let (i, _) = (space, char('='), eq_sep).parse_complete(i)?;
+    let (i, _) = (loss_sep, char('='), eq_sep).parse_complete(i)?;
     let (mut rest, mut v) = assigned_value(i)?;
     if let ValueBuilder::Expr(e) = v
         && !i.fragment().starts_with(['\'', '"'])
@@ -1019,15 +1081,15 @@ type DataSep = for<'a> fn(LocatedSpan<'a>) -> IResult<LocatedSpan<'a>, ()>;
 /// Whether `.enddata` closes the `.data` block at `i` (before any other `.data`)
 fn has_enddata(i: LocatedSpan) -> bool {
     static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?im)^[ \t+]*\.(enddata|data)\b").unwrap());
+        LazyLock::new(|| Regex::new(r"(?im)^[ \t+]*\.(endd(?:ata|at|a)?|dat?a?)\b").unwrap());
     RE.captures(i.fragment())
-        .is_some_and(|caps| caps[1].eq_ignore_ascii_case("enddata"))
+        .is_some_and(|caps| caps[1].to_ascii_lowercase().starts_with("end"))
 }
 
 #[inline]
 fn enddata(i: LocatedSpan) -> IResult<LocatedSpan, ()> {
     map_res((char('.'), key_str), |(_, (key, _))| {
-        if key.eq_ignore_ascii_case("ENDDATA") {
+        if canonical_cmd(&key.to_ascii_lowercase()) == "enddata" {
             Ok(())
         } else {
             Err(())
@@ -1219,7 +1281,7 @@ pub(super) fn lib(i: LocatedSpan) -> IResult<LocatedSpan, Option<(&str, String)>
     alt((
         // include lib section (`.lib "file"tt` needs no space after the quote)
         map(
-            (path_str, space, key_str),
+            (path_str, loss_sep, key_str),
             |(path_str, _, (section_str, _))| Some((path_str, section_str.to_lowercase())),
         ),
         // skip to `.endl`
@@ -1249,13 +1311,10 @@ const KNOWN_COMMANDS: &[&str] = &[
     "dout",
     "ebd",
     "element_variation",
-    "else",
-    "elseif",
     "end_element_variation",
     "end_global_variation",
     "end_local_variation",
     "end_variation",
-    "endif",
     "envelope",
     "fft",
     "four",
@@ -1329,6 +1388,37 @@ const KNOWN_COMMANDS: &[&str] = &[
     "width",
 ];
 
+/// The commands whose short forms HSPICE reads: the word, the shortest start of
+/// it that names it, and the end of its form (a longer word is another word).
+/// (Measured, decks `ab_*`: `.subc` is `.subckt`, `.subckts` is an unknown
+/// command.)
+const SHORT_FORMS: &[(&str, usize, &str)] = &[
+    ("alter", 3, "alter"),
+    ("data", 2, "data"),
+    ("else", 3, "else"),
+    ("elseif", 5, "elseif"),
+    ("enddata", 4, "enddata"),
+    ("endif", 4, "endif"),
+    ("include", 2, "include"),
+    ("lib", 2, "lib"),
+    ("macro", 2, "macro"),
+    ("model", 2, "model"),
+    ("option", 3, "options"),
+    ("param", 2, "parameters"),
+    ("protect", 4, "protect"),
+    ("subckt", 2, "subckt"),
+    ("temp", 2, "temperatures"),
+    ("unprot", 2, "unprotects"),
+];
+
+/// The command that `cmd`, a lowercase dot-command, stands for
+pub fn canonical_cmd(cmd: &str) -> &str {
+    SHORT_FORMS
+        .iter()
+        .find(|(_, shortest, longest)| cmd.len() >= *shortest && longest.starts_with(cmd))
+        .map_or(cmd, |(word, ..)| word)
+}
+
 /// The `.subckt` body that a statement is in.
 #[derive(Debug, Clone, Copy)]
 pub struct Body<'a> {
@@ -1389,6 +1479,8 @@ pub(super) enum Step<'a> {
     /// An `.end` line (at `pos`). HSPICE does not read the lines after the
     /// `.end` of the top file (golden `after_end`).
     End { pos: Option<Pos> },
+    /// An `.if`, `.elseif`, `.else` or `.endif` line (at `pos`)
+    Cond { line: CondLine, pos: Option<Pos> },
     /// The end of the input.
     Eof,
 }
@@ -1717,10 +1809,11 @@ fn statement<'a>(
             let cmd_str;
             (i, (cmd_str, cmd)) = key_str(i)?;
             let cmd_lower = cmd_str.to_lowercase();
-            match cmd_lower.as_str() {
+            let cmd_lower = canonical_cmd(&cmd_lower);
+            match cmd_lower {
                 "lib" => {
                     let lib_info;
-                    (i, (_, lib_info)) = (space1, lib).parse_complete(i)?;
+                    (i, (_, lib_info)) = (loss_sep, lib).parse_complete(i)?;
                     let next = statement_end(i)?;
                     if let Some((file_name_str, section_str)) = lib_info {
                         return Ok((
@@ -1733,9 +1826,9 @@ fn statement<'a>(
                     }
                     i = next;
                 }
-                "inc" | "include" => {
+                "include" => {
                     let file_name;
-                    (i, (_, file_name)) = (space1, path_str).parse_complete(i)?;
+                    (i, (_, file_name)) = (loss_sep, path_str).parse_complete(i)?;
                     statement_end(i)?;
                     return Ok((
                         i,
@@ -1776,15 +1869,17 @@ fn statement<'a>(
                     i = statement_end(i)?;
                     ast.data.push(_data);
                 }
-                "option" | "options" => {
+                "option" => {
                     let options;
-                    (i, options) = many0(multiline_sep(option)).parse_complete(i)?;
+                    (i, options) = many0(preceded(list_sep, option)).parse_complete(i)?;
+                    i = opt(trailing_commas).parse_complete(i)?.0;
                     i = statement_end(i)?;
                     ast.option.extend(options);
                 }
-                "param" | "parameter" | "parameters" => {
+                "param" => {
                     let items;
-                    (i, items) = many0(multiline_sep(param_item)).parse_complete(i)?;
+                    (i, items) = many0(preceded(list_sep, param_item)).parse_complete(i)?;
+                    i = opt(trailing_commas).parse_complete(i)?.0;
                     i = statement_end(i)?;
                     for item in items {
                         match item {
@@ -1800,7 +1895,7 @@ fn statement<'a>(
                     i = statement_end(i)?;
                     ast.global.extend(names);
                 }
-                "prot" | "protect" if !skip_prot => {
+                "protect" if !skip_prot => {
                     i = match encrypted_block(i) {
                         Some((rest, e)) => {
                             ast.errors.push(e);
@@ -1809,7 +1904,7 @@ fn statement<'a>(
                         None => keep_verbatim(i, cmd, true, ast),
                     };
                 }
-                "prot" | "protect" => {
+                "protect" => {
                     // The region ends at the `.unprot` line. Its text,
                     // including the rest of the `.prot` line, is not parsed.
                     let first = start.location_line();
@@ -1883,6 +1978,28 @@ fn statement<'a>(
                     };
                     i = skip_blank(end);
                     ast.unknwon.push(UnknwonBuilder { cmd, tokens, raw });
+                }
+                "if" | "elseif" => {
+                    let cond;
+                    (i, cond) = condition(i)?;
+                    let next = statement_end(i)?;
+                    let line = if cmd_lower == "if" {
+                        CondLine::If(cond)
+                    } else {
+                        CondLine::ElseIf(cond)
+                    };
+                    let pos = Pos::new(start);
+                    return Ok((next, Some(Step::Cond { line, pos })));
+                }
+                kw @ ("else" | "endif") => {
+                    let next = statement_end(i)?;
+                    let line = if kw == "else" {
+                        CondLine::Else
+                    } else {
+                        CondLine::EndIf
+                    };
+                    let pos = Pos::new(start);
+                    return Ok((next, Some(Step::Cond { line, pos })));
                 }
                 "ic" => {
                     let _init_condition;
@@ -1980,8 +2097,8 @@ fn unprot(i: LocatedSpan<'_>) -> Option<(LocatedSpan<'_>, u32)> {
         let text = rest.trim_start_matches([' ', '\t']);
         if let Some(cmd) = text.strip_prefix('.') {
             let end = cmd.find(|c: char| !is_key(c)).unwrap_or(cmd.len());
-            let cmd = &cmd[..end];
-            if cmd.eq_ignore_ascii_case("unprot") || cmd.eq_ignore_ascii_case("unprotect") {
+            let cmd = cmd[..end].to_ascii_lowercase();
+            if canonical_cmd(&cmd) == "unprot" {
                 let at = i.take_from(line + rest.len() - text.len());
                 let last = at.location_line();
                 return Some((skip_blank(skip_statement(at)), last));
@@ -2010,6 +2127,51 @@ fn group_outside_quotes(s: &str) -> bool {
         .split(['\'', '"'])
         .step_by(2)
         .any(|outside| outside.contains('('))
+}
+
+/// The condition of an `.if` or `.elseif` line: the text in its parentheses,
+/// on the one line. HSPICE reads nothing else here: no braces, no group after
+/// the group, no `+` line (decks `if2_brace`, `if2_paren_then_more`,
+/// `if2_plus_*`).
+fn condition(i: LocatedSpan<'_>) -> Result<(LocatedSpan<'_>, Span), ParseErrorInner> {
+    let (i, _) = space(i)?;
+    let text: &str = i.fragment();
+    let line = &text[..text.find('\n').unwrap_or(text.len())];
+    let bad = || ParseErrorInner::Nom(ErrorKind::Char);
+    if !line.starts_with('(') {
+        return Err(bad());
+    }
+    let mut depth = 0_usize;
+    let mut quote = None;
+    let end = line
+        .char_indices()
+        .find_map(|(k, c)| {
+            match (quote, c) {
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), _) => {}
+                (None, '\'' | '"') => quote = Some(c),
+                (None, '(') => depth += 1,
+                (None, ')') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(k);
+                    }
+                }
+                _ => {}
+            }
+            None
+        })
+        .ok_or_else(bad)?;
+    if line[1..end].trim().is_empty() {
+        return Err(bad());
+    }
+    let inner = i.take_from(1);
+    let cond = Span {
+        start: inner.location_offset(),
+        end: inner.location_offset() + end - 1,
+        line_num: i.location_line(),
+    };
+    Ok((i.take_from(end + 1), cond))
 }
 
 /// Skips spaces, comments and empty lines (never fails).
@@ -2080,15 +2242,12 @@ enum Block {
 impl Block {
     /// The block statement that starts at `i`, if any.
     fn at(i: LocatedSpan<'_>) -> Option<Self> {
-        let cmd = dot_cmd(i)?;
-        if cmd.eq_ignore_ascii_case("subckt") || cmd.eq_ignore_ascii_case("macro") {
-            Some(Self::Subckt)
-        } else if cmd.eq_ignore_ascii_case("data") {
-            Some(Self::Data)
-        } else if cmd.eq_ignore_ascii_case("lib") && lib_section(i) {
-            Some(Self::Lib)
-        } else {
-            None
+        let cmd = dot_cmd(i)?.to_ascii_lowercase();
+        match canonical_cmd(&cmd) {
+            "subckt" | "macro" => Some(Self::Subckt),
+            "data" => Some(Self::Data),
+            "lib" if lib_section(i) => Some(Self::Lib),
+            _ => None,
         }
     }
 
@@ -2096,7 +2255,7 @@ impl Block {
     fn closes(self, cmd: &str) -> bool {
         match self {
             Self::Subckt => cmd.eq_ignore_ascii_case("ends") || cmd.eq_ignore_ascii_case("eom"),
-            Self::Data => cmd.eq_ignore_ascii_case("enddata"),
+            Self::Data => canonical_cmd(&cmd.to_ascii_lowercase()) == "enddata",
             Self::Lib => cmd.eq_ignore_ascii_case("endl"),
         }
     }
@@ -2110,14 +2269,15 @@ impl Block {
 /// `BlockLines::scan` reads the file as the main parse does: a `.end`,
 /// `.subckt` or `.ends` line in such text is not a statement.
 fn unparsed<'a>(i: LocatedSpan<'a>, cmd: &str, skip_prot: bool) -> Option<LocatedSpan<'a>> {
-    if cmd.eq_ignore_ascii_case("prot") || cmd.eq_ignore_ascii_case("protect") {
+    let lower = cmd.to_ascii_lowercase();
+    if canonical_cmd(&lower) == "protect" {
         let (after, _) = (char('.'), key).parse_complete(i).ok()?;
         if !skip_prot {
             return encrypted_block(after).map(|(rest, _)| rest);
         }
         return Some(unprot(after).map_or_else(|| i.take_from(i.len()), |(next, _)| next));
     }
-    if cmd.eq_ignore_ascii_case("lib")
+    if canonical_cmd(&lower) == "lib"
         && let Ok((rest, (_, _, _, None))) = (char('.'), key, space1, lib).parse_complete(i)
     {
         return statement_end(rest).ok();

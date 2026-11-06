@@ -28,18 +28,22 @@ use crate::{
 use netlist_db::{
     FileId, Files, ParseError, ParseErrorInner, ParseOptions, Parsed, Pos, Span,
     ast::{
-        ASTBuilder, DataValuesBuilder, KeyValueBuilder, LocalAST, ModelBuilder, ModelTypeBuilder,
-        ParamFuncBuilder, Segment, SubcktBuilder, TokenBuilder, UnknwonBuilder, ValueBuilder,
+        ASTBuilder, CondLine, DataValuesBuilder, KeyValueBuilder, LocalAST, ModelBuilder,
+        ModelTypeBuilder, ParamFuncBuilder, Segment, SubcktBuilder, TokenBuilder, UnknwonBuilder,
+        ValueBuilder,
     },
     instance::{
         BJT_POSITIONAL, ControlledKind, CurrentBuilder, DIODE_POSITIONAL, InstanceBuilder,
-        InstanceCtxBuilder, MOS_POSITIONAL, RCL_POSITIONAL, SourceBuilder, VoltageBuilder,
+        InstanceCtxBuilder, MOS_POSITIONAL, MOSFETBuilder, RCL_POSITIONAL, SourceBuilder,
+        VoltageBuilder, gives_no_value,
     },
     parser::{MAX_NESTING, parse_top_multi_with},
 };
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet, hash_map::Entry},
+    iter::once,
+    slice,
 };
 
 /// The analysis and output commands that the parser keeps without an
@@ -667,7 +671,24 @@ impl<'p> Lower<'p> {
                     );
                     self.diag(Level::Info, "alter_block", message, Some(loc));
                 }
+                Segment::Cond { line, pos } => self.cond_line(line, *pos, pid, report),
             }
+        }
+    }
+
+    /// The query layer does not evaluate `.if` blocks: it reads all branches.
+    /// One note for each block says so.
+    fn cond_line(&mut self, line: &CondLine, pos: Option<Pos>, pid: usize, report: bool) {
+        if report && matches!(line, CondLine::If(_)) {
+            let loc = LocIdx {
+                file: pid as u32,
+                line: pos.map_or(0, |p| p.line_num),
+            };
+            let message =
+                ".if block: the query layer does not evaluate conditions, so its answers \
+                           hold the statements of all branches"
+                    .to_owned();
+            self.diag(Level::Warning, "if_block", message, Some(loc));
         }
     }
 
@@ -1386,8 +1407,7 @@ impl<'p> Lower<'p> {
                     cx.pin(n);
                 }
                 model = Some(cx.sym(&m.mname));
-                cx.positional(m.positional_params());
-                cx.kvs(&m.params);
+                cx.mosfet_values(m);
                 ElemKind::Mosfet
             }
             InstanceCtxBuilder::BJT(b) => {
@@ -1736,7 +1756,10 @@ fn describe(err: &ParseErrorInner, text: &str, line: Option<&str>) -> (&'static 
         E::Encrypted { .. } => ("encrypted_block", err.to_string()),
         E::Encoding(what) => ("non_utf8", what.clone()),
         E::LineInQuotes => ("quoted_comment_line", err.to_string()),
-        E::MosGroupLines => ("mos_group_lines", format!("{err}. {SKIPPED}")),
+        E::StrayCond { .. } | E::AfterElse { .. } => {
+            ("if_block_form", format!("{err}. The line was skipped"))
+        }
+        E::MissingEndif => ("if_block_form", format!("{err}. The block ends here")),
         E::TitleIsElement => ("title_is_element", err.to_string()),
         E::Unknown(cmd) => (
             "unknown_command",
@@ -2488,12 +2511,53 @@ impl ElemCx<'_> {
         values: impl Iterator<Item = (&'static str, &'v Span, &'v ValueBuilder)>,
     ) {
         for (name, sp, v) in values {
-            // (`OFF` on a MOSFET line takes a place and gives no value)
-            if self.text[sp.start..sp.end].eq_ignore_ascii_case("off") {
+            // (`OFF` or a lone `+` on a MOSFET line takes a place and gives no value.
+            // So does a parameter between the values: its place holds an empty span.)
+            if sp.start == sp.end || gives_no_value(&self.text[sp.start..sp.end]) {
                 continue;
             }
             let name = self.syms.builtin(name);
             self.token(name, sp, v);
+        }
+    }
+
+    /// The values of a MOSFET line, in its order: an empty place stands for the
+    /// next `key=value`. HSPICE assigns the plain numbers first and then the
+    /// expressions, each in the order of the line, and the last one stays. So a
+    /// plain number gives way to an expression of its name, and a later value of
+    /// one name replaces an earlier one here.
+    fn mosfet_values(&mut self, m: &MOSFETBuilder) {
+        let is_expr = |v: &ValueBuilder| matches!(v, ValueBuilder::Expr(_));
+        let text = self.text;
+        let key_text = |kv: &KeyValueBuilder| &text[kv.k.start..kv.k.end];
+        let has_expr = |name: &str| {
+            let placed = m.positional_params().any(|(n, sp, v)| {
+                n.eq_ignore_ascii_case(name)
+                    && is_expr(v)
+                    && sp.start != sp.end
+                    && !gives_no_value(&text[sp.start..sp.end])
+            });
+            placed
+                || m.params
+                    .iter()
+                    .any(|kv| is_expr(&kv.v) && key_text(kv).eq_ignore_ascii_case(name))
+        };
+        let mut keys = m.params.iter();
+        for (name, sp, v) in m.positional_params() {
+            if sp.start == sp.end {
+                if let Some(kv) = keys.next()
+                    && (is_expr(&kv.v) || !has_expr(key_text(kv)))
+                {
+                    self.kvs(slice::from_ref(kv));
+                }
+            } else if is_expr(v) || !has_expr(name) {
+                self.positional(once((name, sp, v)));
+            }
+        }
+        for kv in keys {
+            if is_expr(&kv.v) || !has_expr(key_text(kv)) {
+                self.kvs(slice::from_ref(kv));
+            }
         }
     }
 
@@ -3557,6 +3621,11 @@ mod tests {
                  R20 a 0 1k 0.004 r=2k\n\
                  M6 d g s b nch off 2u\n\
                  + 1u\n\
+                 M7 d g s b nch w=2u 1u\n\
+                 M8 d g s b nch 1u w=2u 3u\n\
+                 M9 d g s b nch 1u 'k' w=5u\n\
+                 M10 d g s b nch 1u 2u w=5u\n\
+                 M11 d g s b nch w=k w=5u\n\
                  D1 a 0 dmod 2 1e-6\n",
             )],
         );
@@ -3566,6 +3635,12 @@ mod tests {
         assert_eq!(p("r9"), [s("r", "1k"), s("tc1", "4m"), s("tc2", "1e-5")]);
         assert_eq!(p("r20"), [s("r", "2k"), s("tc1", "0.004")]);
         assert_eq!(p("m6"), [s("w", "2u"), s("ad", "1u")]);
+        assert_eq!(p("m7"), [s("w", "1u")]);
+        assert_eq!(p("m8"), [s("l", "1u"), s("w", "2u"), s("ad", "3u")]);
+        // the plain numbers come first and then the expressions, and the last stays
+        assert_eq!(p("m9"), [s("l", "1u"), s("w", "k")]);
+        assert_eq!(p("m10"), [s("l", "1u"), s("w", "5u")]);
+        assert_eq!(p("m11"), [s("w", "k")]);
         assert_eq!(p("d1"), [s("area", "2"), s("pj", "1e-6")]);
         let tc2 = &top.element_params(element(&net, top, "r9"))[2];
         assert_eq!((tc2.num, tc2.loc.line), (Some(1e-5), 4));

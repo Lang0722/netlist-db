@@ -22,10 +22,36 @@
 //!   (`w='w*k'`: `w` from above, `k` as usual).
 //! - A value passed whose text leads back to it through other names
 //!   (`a='c*k'` with `.param c='a*3'`) is evaluated, as a whole, at the level
-//!   above. Any other loop is an error.
+//!   above. Any other loop is an error. (HSPICE runs a loop of two or more
+//!   top-level `.param` lines, and it reads 0 where the loop closes. It stops at
+//!   the other loops.)
+//! - A chain of parameters can have any length, in any order of the file (decks
+//!   `c_*`, `r_*`, `params50k`).
 //! - The same order chooses among functions defined with `.param f(x)=...`.
 //!   The names and the calls in a function's body are resolved at the level
 //!   that holds the function, not where it is called.
+//! - A level's `.if` blocks are evaluated for each instance, in the order of the
+//!   file. A condition sees the level's plain `.param` statements (also later
+//!   ones), the values passed, and the active branches of earlier blocks. The
+//!   statements of the active branch take their place in the file, so a later
+//!   plain `.param` wins over a branch, and a branch over an earlier one. A value
+//!   passed hides them all. (See [`Scope::activate`].)
+//!
+//! Comparisons and truth, as measured (decks `cmp_*`, `eq_edge`, `tr_*`, `xo_*`):
+//! - Two values within a relative 1e-13 are equal, for all six comparisons.
+//!   There is no absolute margin: `1e-300==0` is false.
+//! - A value is true from an absolute 1e-28. `!x` is true only for 0.
+//! - The condition of an `.if` line differs, also in the parameters it reads:
+//!   `<` and `>` compare exactly, and any value that is not 0 is true.
+//! - `x/0` is `x*1e28`.
+//!
+//! Functions and operators at their limits, as measured (deck lists `e*`, `x*`):
+//! - The argument of `exp` stops at 80 at both ends. `sinh` and `cosh` are computed
+//!   from that `exp`.
+//! - `log`, `log10` and `db` read `|x|` from 1e-28 on, and give the negative of the
+//!   result for `x<0`.
+//! - `asin` and `acos` out of range give 0. `pow(0,y)` and `pwr(0,y)` give 0.
+//! - `a--b` and `a++b` are an operator and the sign of `b`. Three signs stop.
 //!
 //! ```
 //! use netlist_db::eval::{ParHier, Scope};
@@ -35,12 +61,13 @@
 //! ```
 
 use crate::{
-    AST,
+    AST, CondBlock,
     ast::{KeyValue, ParamFunc, Value},
 };
 use core::fmt;
 use std::{
-    cell::RefCell,
+    borrow::Cow,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     f64::consts::PI,
     sync::Arc,
@@ -67,13 +94,35 @@ pub enum EvalError {
     NotStatic(String),
     /// A result that is not a finite number (a division by zero, ...)
     NotFinite(String),
-    /// A parameter defined through a chain of more than [`MAX_DEPTH`] others
+    /// A parameter out of reach of the stack: a chain of more than [`MAX_DEPTH`]
+    /// others leads to it. [`Scope::settle`] resolves this, so it stays inside this
+    /// module.
     TooDeep(String),
 }
 
-/// How many parameters a value may depend on in a chain (`a='b'`, `b='c'`,
-/// ...), and how deeply an expression may nest
+/// How many parameters one evaluation can follow in a chain (`a='b'`, `b='c'`,
+/// ...) before it starts again from the far name, and how deeply an expression
+/// may nest
 pub const MAX_DEPTH: usize = 100;
+
+/// Two values within this relative distance are equal
+const EQUAL_TOLERANCE: f64 = 1e-13;
+
+/// In an expression, a value is true from this absolute size
+const TRUE_FROM: f64 = 1e-28;
+
+/// What a division by zero multiplies by
+const DIVIDE_BY_ZERO: f64 = 1e28;
+
+/// A logarithm reads a smaller size as this one
+const LOG_FROM: f64 = 1e-28;
+/// `exp`, `sinh` and `cosh` read their argument up to this size, as measured
+const EXP_LIMIT: f64 = 80.0;
+
+/// Whether two values count as equal in a comparison
+fn near(x: f64, y: f64) -> bool {
+    (x - y).abs() <= EQUAL_TOLERANCE * x.abs().max(y.abs())
+}
 
 impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -171,6 +220,11 @@ pub struct Scope<'p> {
     active: RefCell<Vec<String>>,
     /// parsed expressions (kept by the top level for every level below it)
     parsed: RefCell<HashMap<String, Arc<Expr>>>,
+    /// a condition of an `.if` line is being evaluated: see the module's
+    /// documentation
+    in_condition: Cell<bool>,
+    /// what `cache` holds, for a condition
+    condition_cache: RefCell<HashMap<String, Result<f64, EvalError>>>,
 }
 
 impl Scope<'static> {
@@ -185,6 +239,8 @@ impl Scope<'static> {
             cache: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
             parsed: RefCell::new(HashMap::new()),
+            in_condition: Cell::new(false),
+            condition_cache: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -201,7 +257,15 @@ impl<'p> Scope<'p> {
             cache: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
             parsed: RefCell::new(HashMap::new()),
+            in_condition: Cell::new(false),
+            condition_cache: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Forgets the values computed at this level
+    fn clear_values(&mut self) {
+        self.cache.get_mut().clear();
+        self.condition_cache.get_mut().clear();
     }
 
     pub fn parhier(&self) -> ParHier {
@@ -218,7 +282,7 @@ impl<'p> Scope<'p> {
         } else {
             self.defs.insert(kv.k.to_ascii_lowercase(), body);
         }
-        self.cache.get_mut().clear();
+        self.clear_values();
     }
 
     /// Define a function, as `.param f(x)='...'` does
@@ -227,14 +291,14 @@ impl<'p> Scope<'p> {
         let body = Def::from(&Value::Expr(f.body.clone()));
         self.funcs
             .insert(f.name.to_ascii_lowercase(), Func { args, body });
-        self.cache.get_mut().clear();
+        self.clear_values();
     }
 
     /// Define a parameter with a value (or the error that computing it gave),
     /// as a `.param` statement of this level would
     pub fn set(&mut self, name: &str, value: Result<f64, EvalError>) {
         self.defs.insert(name.to_ascii_lowercase(), value.into());
-        self.cache.get_mut().clear();
+        self.clear_values();
     }
 
     /// Pass a value to this level, as the line of a subckt instance does
@@ -243,7 +307,78 @@ impl<'p> Scope<'p> {
     pub fn pass(&mut self, kv: &KeyValue<'_>) {
         self.passed
             .insert(kv.k.to_ascii_lowercase(), (&kv.v).into());
-        self.cache.get_mut().clear();
+        self.clear_values();
+    }
+
+    /// Defines the plain `.param` statements of a level, from a list and its
+    /// function definitions
+    fn define_all(&mut self, params: &[KeyValue<'_>], funcs: &[ParamFunc<'_>]) {
+        for kv in params {
+            self.define(kv);
+        }
+        for f in funcs {
+            self.define_func(f);
+        }
+    }
+
+    /// Finds the active branch of each `.if` block of `ast`, whose plain
+    /// statements this level has defined, and defines what the branches set.
+    /// The branches are added to `active` in netlist order. A condition that
+    /// cannot be computed leaves its block with no active branch: HSPICE stops
+    /// there, and `active.errors` holds it.
+    pub(crate) fn activate<'a, 's>(&mut self, ast: &'a AST<'s>, active: &mut Active<'a, 's>) {
+        for block in &ast.cond {
+            for branch in &block.branches {
+                let holds = match branch.cond.as_deref() {
+                    Some(text) => self.condition(text),
+                    None => Ok(true),
+                };
+                match holds {
+                    Ok(false) => continue,
+                    Ok(true) => {
+                        let inner = &branch.ast;
+                        active.branches.push(inner);
+                        self.define_all(&inner.param, &inner.param_func);
+                        self.activate(inner, active);
+                        let sets = !inner.param.is_empty()
+                            || !inner.param_func.is_empty()
+                            || !inner.cond.is_empty();
+                        if sets {
+                            // (the plain statements after the block win)
+                            self.define_all(
+                                &ast.param[block.param_at..],
+                                &ast.param_func[block.func_at..],
+                            );
+                        }
+                    }
+                    Err(error) => active.errors.push(CondError {
+                        block,
+                        cond: branch.cond.as_deref().unwrap_or_default(),
+                        error,
+                    }),
+                }
+                break;
+            }
+        }
+    }
+
+    /// The truth of the condition of an `.if` or `.elseif` line. Any value that
+    /// is not 0 is true. HSPICE stops at a condition that reads `temper` or
+    /// `time`, also through a parameter (decks `tq_cond_temper`, `tc_*`).
+    fn condition(&self, text: &str) -> Result<bool, EvalError> {
+        let tree = self.parse(text)?;
+        for level in self.levels() {
+            level.in_condition.set(true);
+        }
+        let v = self.eval_tree(&tree, &[], 0);
+        for level in self.levels() {
+            level.in_condition.set(false);
+        }
+        let v = v?;
+        if v.is_nan() {
+            return Err(EvalError::NotFinite(text.to_owned()));
+        }
+        Ok(v != 0.0)
     }
 
     /// Whether this level (not one above) binds `key`, a lowercase name
@@ -274,7 +409,9 @@ impl<'p> Scope<'p> {
             },
             None => match key.as_str() {
                 "pi" => Ok(PI),
-                // simulation variables
+                // simulation variables: they read 0 in a value, and a condition
+                // cannot read them, as measured (decks `p_time_in_expr`, `sv_hertz*`)
+                "time" | "hertz" if !self.in_condition.get() => Ok(0.0),
                 "time" | "hertz" => Err(EvalError::NotStatic(key)),
                 _ => Err(EvalError::Undefined(name.to_owned())),
             },
@@ -344,7 +481,50 @@ impl<'p> Scope<'p> {
 
     /// The value of `key`, which this level binds
     fn value_here(&self, key: &str) -> Result<f64, EvalError> {
-        if let Some(v) = self.cache.borrow().get(key) {
+        let outermost = self.active.borrow().is_empty();
+        match self.follow(key) {
+            Err(EvalError::TooDeep(far)) if outermost => self.settle(key, far),
+            v => v,
+        }
+    }
+
+    /// The value of `key` at the start of a chain that is too long for the stack.
+    /// `far` is the name that the evaluation could not reach. Its value comes first,
+    /// with an empty stack, and the cache keeps it. So the next evaluation of `key`
+    /// gets further. HSPICE reads a chain of any length (decks `c_*`, `r_*`).
+    fn settle(&self, key: &str, far: String) -> Result<f64, EvalError> {
+        let mut pending = vec![key.to_owned(), far];
+        loop {
+            let name = pending.last().expect("`key` stays until the end");
+            match self.follow(name) {
+                // (a name comes again only in a loop)
+                Err(EvalError::TooDeep(far)) if pending.contains(&far) => {
+                    return Err(EvalError::Recursive(far));
+                }
+                Err(EvalError::TooDeep(far)) => pending.push(far),
+                // (the cache does not keep a loop, so this name would come again)
+                Err(EvalError::Recursive(looped)) => return Err(EvalError::Recursive(looped)),
+                v => {
+                    pending.pop();
+                    if pending.is_empty() {
+                        return v;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The value of `key`, with the stack as it is, or [`EvalError::TooDeep`]
+    fn follow(&self, key: &str) -> Result<f64, EvalError> {
+        if key == "temper" && self.in_condition.get() {
+            return Err(EvalError::NotStatic("temper".to_owned()));
+        }
+        let cache = if self.in_condition.get() {
+            &self.condition_cache
+        } else {
+            &self.cache
+        };
+        if let Some(v) = cache.borrow().get(key) {
             return v.clone();
         }
         if self.active.borrow().iter().any(|k| k == key) {
@@ -366,9 +546,9 @@ impl<'p> Scope<'p> {
                 .map_err(|_| EvalError::Recursive(key.to_owned()));
         }
         // (a cycle depends on the name where the evaluation started: read
-        // later, this name may have a value)
-        if !matches!(v, Err(EvalError::Recursive(_))) {
-            self.cache.borrow_mut().insert(key.to_owned(), v.clone());
+        // later, this name may have a value. A chain gets further next time.)
+        if !matches!(v, Err(EvalError::Recursive(_) | EvalError::TooDeep(_))) {
+            cache.borrow_mut().insert(key.to_owned(), v.clone());
         }
         v
     }
@@ -414,7 +594,14 @@ impl<'p> Scope<'p> {
         depth: usize,
     ) -> Result<f64, EvalError> {
         let eval = |e: &Expr| self.eval_tree(e, locals, depth);
-        let truth = |v: f64| v != 0.0;
+        let exact = self.in_condition.get();
+        let truth = |v: f64| {
+            if exact {
+                v != 0.0
+            } else {
+                v.abs() >= TRUE_FROM
+            }
+        };
         let flag = |b: bool| if b { 1.0 } else { 0.0 };
         Ok(match e {
             Expr::Num(n) => *n,
@@ -423,7 +610,7 @@ impl<'p> Scope<'p> {
                 None => self.get(name)?,
             },
             Expr::Neg(a) => -eval(a)?,
-            Expr::Not(a) => flag(!truth(eval(a)?)),
+            Expr::Not(a) => flag(eval(a)? == 0.0),
             Expr::Cond(c, a, b) => {
                 if truth(eval(c)?) {
                     eval(a)?
@@ -439,14 +626,15 @@ impl<'p> Scope<'p> {
                     Op::Add => x + y,
                     Op::Sub => x - y,
                     Op::Mul => x * y,
+                    Op::Div if y == 0.0 => x * DIVIDE_BY_ZERO,
                     Op::Div => x / y,
                     Op::Pow => power(x, y),
-                    Op::Lt => flag(x < y),
-                    Op::Le => flag(x <= y),
-                    Op::Gt => flag(x > y),
-                    Op::Ge => flag(x >= y),
-                    Op::Eq => flag(x == y),
-                    Op::Ne => flag(x != y),
+                    Op::Lt => flag(x < y && (exact || !near(x, y))),
+                    Op::Le => flag(x < y || near(x, y)),
+                    Op::Gt => flag(x > y && (exact || !near(x, y))),
+                    Op::Ge => flag(x > y || near(x, y)),
+                    Op::Eq => flag(near(x, y)),
+                    Op::Ne => flag(!near(x, y)),
                     Op::And | Op::Or => unreachable!(),
                 }
             }
@@ -499,31 +687,139 @@ impl<'p> Scope<'p> {
     }
 }
 
+/// A condition of an `.if` or `.elseif` line that could not be computed
+#[derive(Debug)]
+pub(crate) struct CondError<'a, 's> {
+    pub(crate) block: &'a CondBlock<'s>,
+    pub(crate) cond: &'a str,
+    pub(crate) error: EvalError,
+}
+
+/// What the `.if` blocks of one level give, for one instance of it
+#[derive(Debug, Default)]
+pub(crate) struct Active<'a, 's> {
+    /// the active branches, in netlist order: a branch before those nested in it
+    pub(crate) branches: Vec<&'a AST<'s>>,
+    pub(crate) errors: Vec<CondError<'a, 's>>,
+}
+
+/// The items of a list of `ast`, and of its active branches `active`, in
+/// netlist order. `items` chooses the list, `at` the place of a block in it.
+pub(crate) fn in_order<'a, 's, T>(
+    ast: &'a AST<'s>,
+    active: &[&'a AST<'s>],
+    items: &impl Fn(&'a AST<'s>) -> &'a [T],
+    at: &impl Fn(&CondBlock<'s>) -> usize,
+) -> Vec<&'a T> {
+    fn walk<'a, 's, T>(
+        ast: &'a AST<'s>,
+        active: &[&'a AST<'s>],
+        next: &mut usize,
+        items: &impl Fn(&'a AST<'s>) -> &'a [T],
+        at: &impl Fn(&CondBlock<'s>) -> usize,
+        out: &mut Vec<&'a T>,
+    ) {
+        let list = items(ast);
+        let mut from = 0;
+        for block in &ast.cond {
+            let to = at(block);
+            out.extend(&list[from..to]);
+            from = to;
+            for branch in &block.branches {
+                // (`active` is in the order of this walk)
+                if active
+                    .get(*next)
+                    .is_some_and(|a| core::ptr::eq(*a, &branch.ast))
+                {
+                    *next += 1;
+                    walk(&branch.ast, active, next, items, at, out);
+                }
+            }
+        }
+        out.extend(&list[from..]);
+    }
+    let mut out = Vec::new();
+    walk(ast, active, &mut 0, items, at, &mut out);
+    out
+}
+
+/// Whether `cmd`, a dot-command as written, is `.temp`
+fn is_temp(cmd: &str) -> bool {
+    crate::parser::canonical_cmd(&cmd.to_ascii_lowercase()) == "temp"
+}
+
+/// The first value of the text after a `.temp`: `75`, `=75`, `'50+25'`, `t`
+fn first_temp(raw: &str) -> &str {
+    let text = raw.trim_start().trim_start_matches('=').trim_start();
+    match text.chars().next() {
+        Some(q @ ('\'' | '"')) => {
+            let close = text[1..].find(q).map_or(text.len(), |n| n + 2);
+            &text[..close]
+        }
+        _ => text.split_whitespace().next().unwrap_or_default(),
+    }
+}
+
 impl<'s> AST<'s> {
-    /// The parameters of the top level: its `.param` statements, with the
-    /// `.option parhier` rule. `temper` is the first `.temp` value (or 25).
+    /// The parameters of the top level: its `.param` statements and the active
+    /// branches of its `.if` blocks, with the `.option parhier` rule. `temper`
+    /// is the first `.temp` value, else the last `.option tnom` number, else 25.
     pub fn scope(&self) -> Scope<'static> {
-        let parhier = match self.option_value("parhier") {
-            Some(Value::Expr(e)) if e.eq_ignore_ascii_case("local") => ParHier::Local,
-            _ => ParHier::Global,
+        self.top_level().0
+    }
+
+    /// The parameters of the top level, and what its `.if` blocks give
+    pub(crate) fn top_level(&self) -> (Scope<'static>, Active<'_, 's>) {
+        let mut scope = Scope::new(ParHier::Global);
+        scope.set("temper", Ok(25.0));
+        scope.define_all(&self.param, &self.param_func);
+        // (the top level has nothing above it: its conditions do not depend on
+        // `parhier`)
+        let mut active = Active::default();
+        scope.activate(self, &mut active);
+        let options = self.top_options(&active.branches);
+        let last = |name: &str| {
+            options
+                .iter()
+                .rev()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_ref())
         };
-        let mut scope = Scope::new(parhier);
-        let temper = self
-            .unknwon
+        // (`.option parhier` alone means `local`, as measured: deck `oph_flag`)
+        let local = match last("parhier") {
+            Some(None) => true,
+            Some(Some(Value::Expr(e))) => e.eq_ignore_ascii_case("local"),
+            _ => false,
+        };
+        scope.parhier = if local {
+            ParHier::Local
+        } else {
+            ParHier::Global
+        };
+        let commands = in_order(self, &active.branches, &|a| &a.unknwon, &|b| b.unknwon_at);
+        let temp = commands.iter().find(|u| is_temp(&u.cmd));
+        let tnom = options
             .iter()
-            .find(|u| {
-                u.cmd.eq_ignore_ascii_case("temp") || u.cmd.eq_ignore_ascii_case("temperature")
-            })
-            .and_then(|u| crate::parser::number_prefix(u.raw.trim()))
-            .map_or(25.0, |(t, _)| t);
-        scope.set("temper", Ok(temper));
-        for kv in &self.param {
-            scope.define(kv);
+            .rev()
+            .find(|(k, v)| k.eq_ignore_ascii_case("tnom") && matches!(v, Some(Value::Num(_))));
+        let temper = match (temp, tnom) {
+            (Some(u), _) => scope.eval_str(first_temp(&u.raw)).ok(),
+            (None, Some((_, Some(Value::Num(t))))) => Some(*t),
+            _ => None,
+        };
+        if let Some(temper) = temper {
+            scope.set("temper", Ok(temper));
         }
-        for f in &self.param_func {
-            scope.define_func(f);
-        }
-        scope
+        (scope, active)
+    }
+
+    /// The `.option` items of the top level and its active branches `active`,
+    /// in netlist order
+    pub(crate) fn top_options<'a>(
+        &'a self,
+        active: &[&'a AST<'s>],
+    ) -> Vec<&'a (Cow<'s, str>, Option<Value<'s>>)> {
+        in_order(self, active, &|a| &a.option, &|b| b.option_at)
     }
 
     /// The value of the `.option` named `name` (the last one, if it is set
@@ -635,6 +931,18 @@ fn power(x: f64, y: f64) -> f64 {
     }
 }
 
+/// `exp`, as HSPICE computes it: its argument stops at [`EXP_LIMIT`] at both ends
+fn limited_exp(x: f64) -> f64 {
+    x.clamp(-EXP_LIMIT, EXP_LIMIT).exp()
+}
+
+/// A logarithm of `|x|`, from [`LOG_FROM`] on, with the negative of the result
+/// for `x < 0`
+fn signed_log(x: f64, log: fn(f64) -> f64) -> f64 {
+    let y = log(x.abs().max(LOG_FROM));
+    if x < 0.0 { -y } else { y }
+}
+
 /// HSPICE's built-in functions; `None` if `name` is not one
 fn builtin(name: &str, a: &[f64]) -> Option<Result<f64, EvalError>> {
     let arity = |expected: &'static str| EvalError::Arguments {
@@ -663,30 +971,44 @@ fn builtin(name: &str, a: &[f64]) -> Option<Result<f64, EvalError>> {
         "sin" => one(f64::sin),
         "cos" => one(f64::cos),
         "tan" => one(f64::tan),
-        "asin" => one(f64::asin),
-        "acos" => one(f64::acos),
+        // (out of range: 0, as measured)
+        "asin" => one(|x| if x.abs() > 1.0 { 0.0 } else { x.asin() }),
+        "acos" => one(|x| if x.abs() > 1.0 { 0.0 } else { x.acos() }),
         "atan" => one(f64::atan),
-        "sinh" => one(f64::sinh),
-        "cosh" => one(f64::cosh),
+        "sinh" => one(|x| (limited_exp(x) - limited_exp(-x)) / 2.0),
+        "cosh" => one(|x| (limited_exp(x) + limited_exp(-x)) / 2.0),
         "tanh" => one(f64::tanh),
+        "asinh" => one(f64::asinh),
+        "acosh" => one(f64::acosh),
+        "atanh" => one(f64::atanh),
         // (a negative argument gives the negative of the result for `|x|`)
         "sqrt" => one(|x| x.signum() * x.abs().sqrt()),
-        "exp" => one(f64::exp),
+        // (its argument stops at 80 at both ends, as measured: deck `f_exp_big`)
+        "exp" => one(limited_exp),
         // natural logarithm, as in HSPICE
-        "log" | "ln" => one(|x| x.signum() * x.abs().ln()),
-        "log10" => one(|x| x.signum() * x.abs().log10()),
+        // (`log(0)` is the logarithm of 1e-28, as measured: decks `g_log*`)
+        "log" | "ln" => one(|x| signed_log(x, f64::ln)),
+        "log10" => one(|x| signed_log(x, f64::log10)),
         "abs" => one(f64::abs),
         "floor" => one(f64::floor),
         "ceil" => one(f64::ceil),
         "int" => one(f64::trunc),
-        "nint" => one(f64::round),
+        "trunc" => one(f64::trunc),
+        "nint" | "round" => one(f64::round),
         "sgn" => one(sgn),
-        "db" => one(|x| 20.0 * x.abs().log10()),
+        "db" => one(|x| 20.0 * signed_log(x, f64::log10)),
         // `pow`: the power with the integer part of the exponent;
-        // `pwr`: the sign of `x` times `|x|^y`
-        "pow" => two(|x, y| x.powf(y.trunc())),
-        "pwr" => two(|x, y| x.signum() * x.abs().powf(y)),
+        // `pwr`: the sign of `x` times `|x|^y`; both 0 for a zero base, as measured
+        "pow" => two(|x, y| if x == 0.0 { 0.0 } else { x.powf(y.trunc()) }),
+        "pwr" => two(|x, y| {
+            if x == 0.0 {
+                0.0
+            } else {
+                x.signum() * x.abs().powf(y)
+            }
+        }),
         "sign" => two(|x, y| if y >= 0.0 { x.abs() } else { -x.abs() }),
+        "fmod" => two(|x, y| x % y),
         "atan2" => two(f64::atan2),
         "hypot" => two(f64::hypot),
         "min" | "max" if a.is_empty() => Err(arity("1 or more")),
@@ -867,8 +1189,9 @@ impl<'e> Parser<'e> {
         )
     }
     fn additive(&mut self) -> Result<Expr, EvalError> {
+        // (`a--b` is a binary sign and the sign of `b`, as measured; three signs stop)
         self.binary(
-            &[("+", "++", Op::Add), ("-", "--", Op::Sub)],
+            &[("+", "+++", Op::Add), ("-", "---", Op::Sub)],
             Self::multiplicative,
         )
     }
@@ -940,7 +1263,7 @@ impl<'e> Parser<'e> {
         }
         if c.is_alphabetic() || c == '_' {
             let len = rest
-                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .find(|c: char| !(c.is_alphanumeric() || "_.$".contains(c)))
                 .unwrap_or(rest.len());
             let name = rest[..len].to_ascii_lowercase();
             self.pos += len;
@@ -981,6 +1304,13 @@ mod tests {
         (a - b).abs() <= 1e-12 * b.abs().max(1e-30)
     }
 
+    fn kv(k: &'static str, text: &'static str) -> KeyValue<'static> {
+        KeyValue {
+            k: Cow::Borrowed(k),
+            v: Value::Expr(Cow::Borrowed(text)),
+        }
+    }
+
     #[test]
     fn numbers_and_operators() {
         let s = top(&[("w", 2e-6), ("l", 1e-7)]);
@@ -1014,6 +1344,218 @@ mod tests {
         assert!(close(e("1 != 1"), 0.0));
         // a continuation line inside a quoted expression
         assert!(close(e("1+\n+ 2"), 3.0));
+    }
+
+    /// Comparisons in an expression, as measured (decks `cmp_ternary`): two
+    /// values within a relative 1e-13 are equal; `<` and `>` need more
+    #[test]
+    fn comparisons_have_a_tolerance() {
+        for base in [1.0, 1e-6, 1e3, 1e-12, -1.0, 1e-30] {
+            let sign: f64 = if base < 0.0 { -1.0 } else { 1.0 };
+            let lo = |delta: f64| {
+                // (a and b, with a<b)
+                let (a, b): (f64, f64) = (base, base * (1.0 + delta));
+                if sign > 0.0 { (a, b) } else { (b, a) }
+            };
+            let s = |delta: f64| {
+                let (a, b) = lo(delta);
+                top(&[("a", a), ("b", b)])
+            };
+            for (delta, equal) in [
+                (0.0, true),
+                (1e-15, true),
+                (1e-13, true),
+                (2e-13, false),
+                (1e-9, false),
+            ] {
+                let s = s(delta);
+                let e = |x: &str| s.eval_str(x).unwrap() != 0.0;
+                assert_eq!(e("a==b"), equal, "{base} {delta}");
+                assert_eq!(e("b==a"), equal, "{base} {delta}");
+                assert_eq!(e("a!=b"), !equal, "{base} {delta}");
+                assert_eq!(e("a<b"), !equal, "{base} {delta}");
+                assert_eq!(e("b>a"), !equal, "{base} {delta}");
+                assert!(e("a<=b"), "{base} {delta}");
+                assert!(e("b>=a"), "{base} {delta}");
+                assert_eq!(e("b<=a"), equal, "{base} {delta}");
+                assert_eq!(e("a>=b"), equal, "{base} {delta}");
+                assert!(!e("b<a"), "{base} {delta}");
+                assert!(!e("a>b"), "{base} {delta}");
+            }
+        }
+        let s = top(&[]);
+        let e = |x: &str| s.eval_str(x).unwrap() != 0.0;
+        assert!(e("0.1*3==0.3"));
+        assert!(e("1/3*3==1"));
+        assert!(!e("1e-300==0"));
+        assert!(e("0==0"));
+    }
+
+    /// In the condition of an `.if` line, `<` and `>` compare exactly; the other
+    /// comparisons are those of an expression (decks `cmp_if`)
+    #[test]
+    fn condition_order_is_exact() {
+        let s = top(&[("a", 1.0), ("b", 1.0 + 1e-15), ("c", 1.0 + 1e-13)]);
+        let c = |x: &str| s.condition(x).unwrap();
+        assert!(c("a<b"));
+        assert!(c("b>a"));
+        assert!(!c("b<a"));
+        assert!(!c("a<a"));
+        assert!(c("a==b"));
+        assert!(c("a==c"));
+        assert!(c("c<=a"));
+        assert!(c("a>=c"));
+        assert!(!c("a!=c"));
+        // (in a call too)
+        assert!(c("max(a<b,0)"));
+        // the same text in an expression keeps the tolerance
+        assert_eq!(s.eval_str("a<b"), Ok(0.0));
+    }
+
+    /// A condition reads a parameter by its rule: the parameter's text compares
+    /// exactly there, and with the tolerance on an element line (decks
+    /// `xo_param_body`, `v_param_lt`)
+    #[test]
+    fn condition_rule_reaches_the_parameters_it_reads() {
+        let mut s = top(&[("a", 1.0), ("b", 1.0 + 1e-15), ("t", 1e-30)]);
+        s.define(&kv("c", "a<b"));
+        s.define(&kv("d", "t&&1"));
+        assert_eq!(s.get("c"), Ok(0.0));
+        assert_eq!(s.condition("c"), Ok(true));
+        assert_eq!(s.get("c"), Ok(0.0));
+        assert_eq!(s.get("d"), Ok(0.0));
+        assert_eq!(s.condition("d"), Ok(true));
+        assert_eq!(s.condition("!t"), Ok(false));
+        assert_eq!(s.condition("t?1:0"), Ok(true));
+        assert_eq!(s.eval_str("t?1:0"), Ok(0.0));
+    }
+
+    /// As measured (decks `tr_ternary`)
+    #[test]
+    fn truth_of_a_value_starts_at_1e_28() {
+        let e = |v: f64| {
+            let s = top(&[("t", v)]);
+            (
+                s.eval_str("t?1:0").unwrap(),
+                s.eval_str("t&&1").unwrap(),
+                s.eval_str("t||0").unwrap(),
+                s.eval_str("!t").unwrap(),
+            )
+        };
+        assert_eq!(e(5e-29), (0.0, 0.0, 0.0, 0.0));
+        assert_eq!(e(-5e-29), (0.0, 0.0, 0.0, 0.0));
+        assert_eq!(e(1e-28), (1.0, 1.0, 1.0, 0.0));
+        assert_eq!(e(-1e-28), (1.0, 1.0, 1.0, 0.0));
+        assert_eq!(e(0.0), (0.0, 0.0, 0.0, 1.0));
+    }
+
+    /// As measured (decks `d_*`, `f_exp_big`)
+    #[test]
+    fn division_by_zero_and_large_exponentials() {
+        let s = top(&[]);
+        let e = |x: &str| s.eval_str(x).unwrap();
+        assert!(close(e("1/0"), 1e28));
+        assert!(close(e("2/0"), 2e28));
+        assert!(close(e("-1/0"), -1e28));
+        assert_eq!(e("0/0"), 0.0);
+        assert!(close(e("1/1e-30"), 1e30));
+        assert!(close(e("exp(1000)"), 80f64.exp()));
+        assert!(close(e("exp(80)"), 80f64.exp()));
+        assert!(close(e("exp(1)"), 1f64.exp()));
+    }
+
+    /// Two signs read as a binary sign and the sign of the value. Three stop.
+    #[test]
+    fn two_signs_between_values() {
+        let s = top(&[]);
+        let e = |x: &str| s.eval_str(x);
+        assert_eq!(e("1.5--10").unwrap(), 11.5);
+        assert_eq!(e("1.5++10").unwrap(), 11.5);
+        assert_eq!(e("1 -- 2").unwrap(), 3.0);
+        assert_eq!(e("(1)--(2)").unwrap(), 3.0);
+        assert_eq!(e("max(1,2)--1").unwrap(), 3.0);
+        assert!(e("1.5---10").is_err());
+        assert!(e("1.5----10").is_err());
+    }
+
+    /// As measured: rounds of random expressions through `.meas`
+    #[test]
+    fn functions_at_their_limits() {
+        let s = top(&[]);
+        let e = |x: &str| s.eval_str(x).unwrap();
+        // the exponentials stop at 80 at both ends
+        assert!(close(e("exp(-100)"), (-80f64).exp()));
+        assert!(close(e("exp(-300)*1e130"), (-80f64).exp() * 1e130));
+        assert!(close(e("sinh(81)"), 80f64.sinh()));
+        assert!(close(e("sinh(-100)"), -(80f64.sinh())));
+        assert!(close(e("sinh(1000)"), 80f64.sinh()));
+        assert!(close(e("cosh(-100)"), 80f64.cosh()));
+        assert!(close(e("cosh(1000)"), 80f64.cosh()));
+        // (HSPICE computes these from `exp`, which shows at a small size)
+        assert!(close(e("sinh(2e-12)"), 1.999955756559757e-12));
+        // `db`: as `log10`, with the negative of the result below 0
+        assert!(close(e("db(100)"), 40.0));
+        assert!(close(e("db(-100)"), -40.0));
+        assert!(close(e("db(0)"), -560.0));
+        assert!(close(e("db(-0)"), -560.0));
+        assert!(close(e("db(1e-30)"), -560.0));
+        assert!(close(e("db(-1e-30)"), 560.0));
+        assert!(close(e("db(-1e-27)"), 540.0));
+        // zero with a sign is zero
+        assert!(close(e("log(-0)"), 1e-28f64.ln()));
+        assert!(close(e("log10(-0)"), -28.0));
+        // out of range: 0
+        for x in [
+            "asin(2)",
+            "asin(-2)",
+            "asin(1.0000001)",
+            "acos(2)",
+            "acos(-2)",
+        ] {
+            assert_eq!(e(x), 0.0, "{x}");
+        }
+        assert!(close(e("acos(2)+1"), 1.0));
+        assert!(close(e("asin(1)"), 1f64.asin()));
+        assert!(close(e("acos(-1)"), (-1f64).acos()));
+        // zero to any power: 0
+        for x in [
+            "pow(0,0)",
+            "pow(0,-1)",
+            "pow(0,.5)",
+            "pow(-0,0)",
+            "pwr(0,0)",
+            "pwr(0,-1)",
+        ] {
+            assert_eq!(e(x), 0.0, "{x}");
+        }
+        assert!(close(e("pow(2,1.5)"), 2.0));
+        assert!(close(e("pwr(-2,2)"), -4.0));
+    }
+
+    /// As measured: rounds of function names through `.meas`
+    #[test]
+    fn rounding_remainder_and_inverse_hyperbolic_functions() {
+        let s = top(&[]);
+        let e = |x: &str| s.eval_str(x).unwrap();
+        assert_eq!(e("round(2.5)"), 3.0);
+        assert_eq!(e("round(-2.5)"), -3.0);
+        assert_eq!(e("round(0.5)"), 1.0);
+        assert_eq!(e("round(2.4)"), 2.0);
+        assert_eq!(e("trunc(2.9)"), 2.0);
+        assert_eq!(e("trunc(-2.9)"), -2.0);
+        assert_eq!(e("fmod(5,3)"), 2.0);
+        assert_eq!(e("fmod(-5,3)"), -2.0);
+        assert_eq!(e("fmod(5,-3)"), 2.0);
+        assert_eq!(e("fmod(5.5,3)"), 2.5);
+        assert_eq!(e("fmod(5,1e30)"), 5.0);
+        assert!(close(e("asinh(2)"), 2f64.asinh()));
+        assert!(close(e("asinh(-2)"), -(2f64.asinh())));
+        assert!(close(e("acosh(2)"), 2f64.acosh()));
+        assert_eq!(e("acosh(1)"), 0.0);
+        assert!(close(e("atanh(.5)"), 0.5f64.atanh()));
+        assert!(s.eval_str("fmod(5,0)").is_err());
+        assert!(s.eval_str("acosh(.5)").is_err());
+        assert!(s.eval_str("atanh(2)").is_err());
     }
 
     #[test]
@@ -1090,8 +1632,8 @@ mod tests {
         ));
     }
 
-    /// Deep nesting and long chains of parameters are errors, not stack
-    /// overflows
+    /// Deep nesting is an error, not a stack overflow, and a long chain of
+    /// parameters has a value
     #[test]
     fn depth_limits() {
         let mut s = top(&[]);
@@ -1112,7 +1654,7 @@ mod tests {
             s.define(&kv);
         }
         s.set("p10000", Ok(0.0));
-        assert!(matches!(s.get("p0"), Err(EvalError::TooDeep(_))));
+        assert_eq!(s.get("p0"), Ok(10000.0));
         assert_eq!(s.get("p9950"), Ok(50.0));
     }
 
@@ -1130,8 +1672,8 @@ mod tests {
         let e = s.eval_str("1\n+ x y").unwrap_err().to_string();
         assert!(!e.contains('\n'), "{e}");
         assert_eq!(
-            s.eval_str("1/0"),
-            Err(EvalError::NotFinite("1/0".to_owned()))
+            s.eval_str("1e308*10"),
+            Err(EvalError::NotFinite("1e308*10".to_owned()))
         );
         s.set("a", Err(EvalError::Undefined("q".to_owned())));
         assert_eq!(s.get("a"), Err(EvalError::Undefined("q".to_owned())));

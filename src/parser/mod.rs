@@ -11,17 +11,18 @@ mod measure;
 mod utils;
 
 use alloc::sync::Arc;
-use manager::ParseManager;
+use manager::{Include, ParseManager};
 use nom::Input as _;
 #[cfg(test)]
 use regex::Regex;
 use std::{
+    collections::HashSet,
     mem,
     path::{Path, PathBuf},
     sync::OnceLock,
 };
-pub use utils::MAX_NESTING;
 use utils::{Blocks, Open, Step, local_ast, skip_statement};
+pub use utils::{MAX_NESTING, canonical_cmd};
 pub(crate) use utils::{is_formula_text, is_number_list, number_prefix};
 
 use super::{
@@ -29,7 +30,7 @@ use super::{
     err::{ParseError, ParseErrorInner},
 };
 use crate::{
-    ast::{ASTBuilder, AfterEnd, LocalAST, Segment, SubcktBuilder, TitleLineInfo},
+    ast::{ASTBuilder, AfterEnd, LocalAST, Segment, SubcktBuilder, TitleLineInfo, ValueBuilder},
     span::{FileId, FileStorage, LocatedSpan, ParsedId, Pos, Span, span},
 };
 
@@ -137,7 +138,7 @@ fn title_line(text: &str, mode: TitleLine) -> Option<TitleLineInfo> {
                         .unwrap_or(s.len());
                     s[..end].to_ascii_lowercase()
                 })
-                .filter(|cmd| LIBRARY_CMDS.contains(&cmd.as_str()));
+                .filter(|cmd| LIBRARY_CMDS.contains(&canonical_cmd(cmd)));
             match cmd {
                 Some(cmd) => (
                     false,
@@ -258,11 +259,18 @@ pub fn ast<'a>(
                     res: res.clone(),
                     pos: include_pos,
                 });
-                let manager_clone = manager.clone();
-                let file_path = include_path(&work_dir, file_name);
-                manager.spawn_parse(async move {
-                    include(manager_clone, file_path, section, include_pos, res).await;
-                });
+                let include = Include {
+                    file_name: file_name.to_path_buf(),
+                    path: include_path(&manager.roots, &work_dir, file_name),
+                    section,
+                    pos: include_pos,
+                    res,
+                };
+                if include.path.exists() {
+                    spawn_include(&manager, include);
+                } else {
+                    manager.defer(include);
+                }
             }
             Step::Alter { pos, stmt } => {
                 level.flush();
@@ -272,6 +280,10 @@ pub fn ast<'a>(
                     pos,
                     stmt,
                 });
+            }
+            Step::Cond { line, pos } => {
+                level.flush();
+                level.ast.segments.push(Segment::Cond { line, pos });
             }
             // HSPICE ignores `.end` in an included file, with a warning,
             // and reads on (golden `end_in_include`)
@@ -291,9 +303,130 @@ pub fn ast<'a>(
     }
 }
 
-/// The path of an included file. A Windows path (`.\\models\\nmos.sp`) that is
-/// not found as written is also tried with `/`.
-fn include_path(work_dir: &Path, file_name: &Path) -> PathBuf {
+/// Starts the parse of a file that `include` reads
+fn spawn_include(manager: &Arc<ParseManager>, include_line: Include) {
+    let manager_clone = manager.clone();
+    manager.spawn_parse(async move {
+        let Include {
+            path,
+            section,
+            pos,
+            res,
+            ..
+        } = include_line;
+        include(manager_clone, path, section, pos, res).await;
+    });
+}
+
+/// The path of an included file: in `work_dir`, the folder of the file that
+/// includes it, else in the first of `roots` that has it, else in `work_dir`
+/// (the error names that path). HSPICE looks in the folder of the file and then in
+/// its working folder (decks `inc_nested_rel_cwd`, `cwd_probe`). Here the folders
+/// of the top files stand first for that folder, so the result does not depend
+/// on where this program runs.
+fn include_path(roots: &[PathBuf], work_dir: &Path, file_name: &Path) -> PathBuf {
+    let path = path_in(work_dir, file_name);
+    if path.exists() || file_name.is_absolute() {
+        return path;
+    }
+    roots
+        .iter()
+        .map(|root| path_in(root, file_name))
+        .find(|p| p.exists())
+        .unwrap_or(path)
+}
+
+/// The folders of the `.option search` items of the files parsed so far, from
+/// the files `tops` down, in the order of the deck. HSPICE takes them in that
+/// order, the first one that has the file wins, and an item counts in any
+/// file and in a subckt. They do not depend on the order in which the
+/// files were read, because this list is made after the parse of all of them.
+fn search_folders(storage: &FileStorage<ASTBuilder>, tops: &[ParsedId]) -> Vec<PathBuf> {
+    let mut folders = Vec::new();
+    let mut seen = HashSet::new();
+    let of = |id: &ParsedId| {
+        (
+            storage.parsed[id.0].1.segments.iter(),
+            storage.file[id.0].as_str(),
+        )
+    };
+    let mut stack: Vec<_> = tops.iter().rev().map(of).collect();
+    seen.extend(tops.iter().map(|id| id.0));
+    while let Some((segments, text)) = stack.last_mut() {
+        let text: &str = text;
+        let Some(segment) = segments.next() else {
+            stack.pop();
+            continue;
+        };
+        match segment {
+            Segment::Local(local) => {
+                for (k, v) in &local.option {
+                    if text[k.start..k.end].eq_ignore_ascii_case("search")
+                        && let Some(ValueBuilder::Expr(folder)) = v
+                    {
+                        folders.push(PathBuf::from(&text[folder.start..folder.end]));
+                    }
+                }
+                for subckt in local.subckt.iter().rev() {
+                    stack.push((subckt.ast.segments.iter(), text));
+                }
+            }
+            Segment::Include { res, .. } => {
+                if let Some(Ok(id)) = res.get()
+                    && seen.insert(id.0)
+                {
+                    stack.push(of(id));
+                }
+            }
+            Segment::Alter { .. } | Segment::Cond { .. } => {}
+        }
+    }
+    folders
+}
+
+/// Reads the includes that were not found from the folders of [`include_path`],
+/// in the folders of `.option search`. A file so found can set more of them, and
+/// have such includes of its own. The others read as written, which gives their
+/// errors.
+async fn search_includes(manager: &Arc<ParseManager>, tops: &[ParsedId]) {
+    loop {
+        let waiting = manager.take_deferred();
+        if waiting.is_empty() {
+            return;
+        }
+        let folders = search_folders(&*manager.file_storage.lock().await, tops);
+        let guard = manager.task_guard();
+        let done_rx = manager.rearm();
+        let mut found = false;
+        let mut others = Vec::new();
+        for mut include in waiting {
+            let path = folders.iter().find_map(|folder| {
+                let in_root = |root: &PathBuf| path_in(&root.join(folder), &include.file_name);
+                manager.roots.iter().map(in_root).find(|p| p.exists())
+            });
+            if let Some(path) = path {
+                include.path = path;
+                found = true;
+                spawn_include(manager, include);
+            } else {
+                others.push(include);
+            }
+        }
+        for include in others {
+            if found {
+                manager.defer(include);
+            } else {
+                spawn_include(manager, include);
+            }
+        }
+        drop(guard);
+        manager.wait(done_rx).await;
+    }
+}
+
+/// The path of the file `file_name` in `work_dir`. A Windows path
+/// (`.\\models\\nmos.sp`) that is not found as written is also tried with `/`.
+fn path_in(work_dir: &Path, file_name: &Path) -> PathBuf {
     let join = |name: &Path| {
         if name.is_absolute() {
             name.to_path_buf()
@@ -327,6 +460,13 @@ fn decode(bytes: Vec<u8>) -> (String, Option<u32>) {
     if text.contains('\u{feff}') {
         text = text.replace('\u{feff}', "");
     }
+    // (white space, as measured: deck `e_formfeed`)
+    if text.contains('\u{c}') {
+        text = text.replace('\u{c}', " ");
+    }
+    if text.contains("//") {
+        text = slash_comments(text);
+    }
     let bytes = text.as_bytes();
     if text
         .match_indices('\r')
@@ -348,6 +488,54 @@ fn decode(bytes: Vec<u8>) -> (String, Option<u32>) {
         u32::try_from(text[..at].matches('\n').count() + 1).unwrap_or(u32::MAX)
     });
     (text, line)
+}
+
+/// HSPICE reads a word that starts with `//` as the start of a comment, on every
+/// kind of line, and a following `+` line goes on with the statement (decks
+/// `cm_slash_*`, `o_slash_*`). This turns `//` into `$ `: the length of the text
+/// stays, so the positions in it do too. Inside quotes, and on a line that names
+/// a file, `//` stays.
+fn slash_comments(text: String) -> String {
+    let mut bytes = text.into_bytes();
+    for line in bytes.split_mut(|b| *b == b'\n') {
+        let first = line.trim_ascii_start();
+        if first.starts_with(b"*") || names_a_file(first) {
+            continue;
+        }
+        let mut quote = None;
+        let mut word_start = true;
+        for k in 0..line.len() {
+            let c = line[k];
+            match quote {
+                Some(q) if c == q => quote = None,
+                Some(_) => {}
+                None if matches!(c, b'\'' | b'"') => quote = Some(c),
+                None if c == b'$' && word_start => break,
+                None if c == b'/' && word_start && line.get(k + 1) == Some(&b'/') => {
+                    line[k] = b'$';
+                    line[k + 1] = b' ';
+                    break;
+                }
+                None => {}
+            }
+            word_start = quote.is_none() && matches!(c, b' ' | b'\t' | b',' | b'(' | b')');
+        }
+    }
+    // (only ASCII characters changed)
+    String::from_utf8(bytes).expect("the text was UTF-8")
+}
+
+/// Whether `line`, with no spaces before it, is a command with a file name
+fn names_a_file(line: &[u8]) -> bool {
+    let Some(word) = line.strip_prefix(b".") else {
+        return false;
+    };
+    let len = word
+        .iter()
+        .position(|b| !b.is_ascii_alphabetic())
+        .unwrap_or(word.len());
+    let word = String::from_utf8_lossy(&word[..len]).to_ascii_lowercase();
+    matches!(canonical_cmd(&word), "include" | "lib" | "hdl" | "vec")
 }
 
 /// The text of a file read (and its first line that is not UTF-8, if any):
@@ -514,7 +702,7 @@ async fn _include(
     let non_utf8 = text.non_utf8();
     let (line_off_set, file_ctx) = if let FileId::Section { path: _, section } = file_id.clone() {
         if let Some((file_ctx, line_off_set)) = match_lib(text.text(), &section) {
-            (line_off_set, file_ctx)
+            (line_off_set, without_section_lines(file_ctx))
         } else {
             release(&file_id).await;
             return Err((
@@ -757,7 +945,14 @@ pub async fn parse_top_multi_with<I: Iterator<Item = FileId>>(
     file_ids: I,
     opts: &ParseOptions,
 ) -> (Parsed, Files) {
-    let (manager, done_rx) = ParseManager::with_options(opts);
+    let file_ids: Vec<FileId> = file_ids.collect();
+    let mut roots: Vec<PathBuf> = file_ids
+        .iter()
+        .filter_map(|id| id.path().parent().map(Path::to_path_buf))
+        .collect();
+    roots.dedup();
+    roots.extend(std::env::current_dir());
+    let (manager, done_rx) = ParseManager::with_options(opts, roots);
     let title = opts.title_line;
     // Hold a guard while the top-level files are parsed: the includes of one
     // file may all finish while another top-level file has not spawned its
@@ -765,6 +960,7 @@ pub async fn parse_top_multi_with<I: Iterator<Item = FileId>>(
     // before every top-level file has been parsed.
     let top_guard = manager.task_guard();
     let handles: Vec<_> = file_ids
+        .into_iter()
         .map(|file_id| {
             let handle = crate::spawn({
                 let manager = manager.clone();
@@ -786,6 +982,11 @@ pub async fn parse_top_multi_with<I: Iterator<Item = FileId>>(
     }
     drop(top_guard);
     manager.wait(done_rx).await;
+    let top_files: Vec<ParsedId> = tops
+        .iter()
+        .filter_map(|top| top.as_ref().ok().copied())
+        .collect();
+    search_includes(&manager, &top_files).await;
     let mut guard = manager.file_storage.lock().await;
     let FileStorage {
         file: mut files,
@@ -900,6 +1101,31 @@ async fn test_top() {
     println!("{parsed:?}");
     println!("{files:?}");
 }
+/// The text `body` of a section, with its `.lib <name>` lines blank: HSPICE reads
+/// on over such a line (the first `.endl` line ended the section), so the text
+/// of an inner section is a part of the outer one (decks `ln_*`).
+fn without_section_lines(mut body: String) -> String {
+    let mut lines = Vec::new();
+    let mut end = 0;
+    for line in body.split_inclusive('\n') {
+        let start = end;
+        end += line.len();
+        let t = line.trim_start();
+        let is_lib = t.get(..4).is_some_and(|k| k.eq_ignore_ascii_case(".lib"));
+        if is_lib && t[4..].starts_with([' ', '\t']) {
+            let words = t[4..].split('$').next().unwrap_or_default();
+            if words.split_whitespace().count() == 1 {
+                lines.push(start..start + line.trim_end().len());
+            }
+        }
+    }
+    for line in lines {
+        let blank = " ".repeat(line.len());
+        body.replace_range(line, &blank);
+    }
+    body
+}
+
 /// `match_lib` as it was written with a regex: the regex of `section`
 #[cfg(test)]
 fn match_lib_regex(section: &str) -> impl Fn(&str) -> Option<(String, u32)> {
@@ -1129,7 +1355,7 @@ mod recover_tests {
         // error is at the start of the statement, and neither the partial
         // record nor a record made from the `+` lines is kept.
         for text in [
-            "M1 d g s b nch W=1u\n+ L=(bad\n+ M=2\nR2 a b 1\n",
+            "M1 d g s b nch W=1u\n+ =bad\n+ M=2\nR2 a b 1\n",
             "X1 a b sub\n+ w=max(1,'2')\n+ l=2\nR2 a b 1\n",
         ] {
             let (parsed, files) = parse_text("continuation_fail", text).await;
@@ -1771,6 +1997,7 @@ R4 a b 4
                     format!("alter#{index}@{}", pos.map_or(0, |p| p.line_num))
                 }
                 Segment::Include { .. } => "include".to_owned(),
+                Segment::Cond { .. } => "cond".to_owned(),
             })
             .collect();
         assert_eq!(

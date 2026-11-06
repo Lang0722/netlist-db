@@ -24,6 +24,7 @@ impl TempDir {
     }
     fn write_bytes(&self, name: &str, content: &[u8]) -> PathBuf {
         let path = self.0.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, content).unwrap();
         path
     }
@@ -112,6 +113,9 @@ fn kind(e: &ParseErrorInner) -> &'static str {
         ParseErrorInner::OrphanContinuation => "OrphanContinuation",
         ParseErrorInner::StrayEnds { .. } => "StrayEnds",
         ParseErrorInner::MissingEnds { .. } => "UnterminatedSubckt",
+        ParseErrorInner::StrayCond { .. } => "StrayCond",
+        ParseErrorInner::AfterElse { .. } => "AfterElse",
+        ParseErrorInner::MissingEndif => "MissingEndif",
         ParseErrorInner::DuplicateSubckt(_) => "DuplicateSubckt",
         ParseErrorInner::Unsupported(_) => "Unsupported",
         ParseErrorInner::NonHspice(_) => "NonHspice",
@@ -125,7 +129,6 @@ fn kind(e: &ParseErrorInner) -> &'static str {
         ParseErrorInner::PlusAfterTitle => "PlusAfterTitle",
         ParseErrorInner::NodeCount { .. } => "NodeCount",
         ParseErrorInner::LineInQuotes => "LineInQuotes",
-        ParseErrorInner::MosGroupLines => "MosGroupLines",
         ParseErrorInner::NoModel { .. } => "NoModel",
         ParseErrorInner::NoSubcktName => "NoSubcktName",
         ParseErrorInner::TooManyValues { .. } => "TooManyValues",
@@ -155,7 +158,7 @@ fn diagnostics(parsed: &Parsed) -> Vec<Diag> {
                         walk(&subckt.ast, out);
                     }
                 }
-                Segment::Alter { .. } => {}
+                Segment::Alter { .. } | Segment::Cond { .. } => {}
                 Segment::Include { res, .. } => {
                     if let Some(Err(e)) = res.get() {
                         out.push(Diag {
@@ -287,7 +290,7 @@ async fn bad_statement_keeps_rest_of_file() {
 async fn leftover_text_is_reported_not_reparsed() {
     let (_dir, parsed, files) = parse_text(&[(
         "top.sp",
-        "M1 d g s b nch W=1u L=0.1u extra junk\n\
+        "M1 d g s b nch W=1u L=0.1u =junk\n\
          + W2=2u\n\
          M2 d g s b nch W=1u L=0.1u\n\
          X1\n\
@@ -2057,7 +2060,8 @@ async fn bins_need_their_four_limits() {
             pairs(&[
                 (
                     "M1",
-                    "error: model `nm.mc` has a `.` in its name: it must set LMIN, LMAX, WMIN and WMAX"
+                    "error: model `nm.mc` has a `.` in its name: it must set LMIN, LMAX, WMIN and WMAX \
+                     (at level 72: LMIN, LMAX, and NFINMIN and NFINMAX, or WSHEETMIN and WSHEETMAX)"
                 ),
                 ("M2", "ok"),
             ])
@@ -2294,7 +2298,8 @@ async fn mosfet_line_with_many_words() {
         ("M2", 2.0, 1.0),
         ("M3", 2.0, 1.0),
         ("M4", 2.0, 1.0),
-        ("M5", 2.0, 3.0),
+        // (`pw` is an expression, so it wins over the plain `w=3u`: deck `mb_*`)
+        ("M5", 2.0, 1.0),
         ("M6", 2.0, 1.0),
     ];
     assert_sizes(&ast, &expected, "many words");
@@ -2372,15 +2377,12 @@ async fn mosfet_digit_first_fifth_word() {
     assert_sizes(&files.build(parsed).0, &expected, "digit-first nodes");
 }
 
-/// A value in parentheses on a MOSFET line cannot go on on a `+` line (see
-/// `parser::instance::_mosfet`). On `.param` and `X` lines it can. A comma can
-/// follow `.ends` and its name (probes on P-2019.06).
+/// A value in parentheses on a `.param` or `X` line can go on on a `+` line. On a
+/// MOSFET line, the parentheses only separate words: see
+/// `parentheses_after_a_key_on_a_mosfet_line`. A comma can follow `.ends` and its
+/// name (probes on P-2019.06).
 #[tokio::test]
 async fn group_on_plus_lines_and_ends_commas() {
-    let text = ".model a nmos level=54\nM1 d g 0 0 a l=(1u\n+ +2u) w=1u\nM2 d g 0 0 a l=1u w=1u\n";
-    let (_dir, parsed, files) = parse_text(&[("top.sp", text)]).await;
-    assert_eq!(diagnostics(&parsed), [diag("MosGroupLines", 2)]);
-    assert_sizes(&files.build(parsed).0, &[("M2", 1.0, 1.0)], "the next line");
     let text = ".model a nmos level=54\n.subckt c d g w=1u\nM1 d g 0 0 a l=1u w=w\n.ends\n\
         .param p=(1u+\n+ 2u)\n.param q=max(1u,\n+ 2u)\nM1 d g 0 0 a l=p w=q\n\
         M2 d g 0 0 a l='(1u\n+ +2u)' w=1u\nX1 d g c w=(1u\n+ +2u)\n";
@@ -2443,8 +2445,9 @@ async fn positional_expressions() {
     let (ast2, _) = files2.build(parsed2);
     assert_sizes(&ast2, &expected, "printed");
 
+    // (a value after a keyword takes the next place: deck `rk_key_quoted_name`)
     let (_dir, parsed, _) = parse_text(&[("top.sp", "M1 d g 0 0 a l=1u 'pl'\n")]).await;
-    assert_ne!(diagnostics(&parsed), []);
+    assert_eq!(diagnostics(&parsed), []);
 }
 
 /// Texts that lead back to themselves, as measured on HSPICE (decks
@@ -2685,7 +2688,8 @@ async fn model_usage_of_instances_that_never_repeat() {
     assert_eq!(counted["nw.3"], of(4) + of(5) + of(6));
 }
 
-/// A subckt that instantiates itself does not make the walk loop forever.
+/// A subckt that instantiates itself does not make the walk loop forever, and
+/// the line gets an error row: HSPICE stops there (decks `x_self`, `x_mutual`).
 #[tokio::test]
 async fn model_selection_stops_at_recursive_subckts() {
     let (_dir, parsed, files) = parse_text(&[(
@@ -2694,7 +2698,14 @@ async fn model_selection_stops_at_recursive_subckts() {
     )])
     .await;
     let (ast, _) = files.build(parsed);
-    assert_eq!(chosen(&ast), pairs(&[("X0.M1", "nmod")]));
+    let recursive = format!(
+        "error: {}",
+        crate::models::SelectError::Recursive("a".to_owned())
+    );
+    assert_eq!(
+        chosen(&ast),
+        pairs(&[("X0.M1", "nmod"), ("X0.X1", &recursive)])
+    );
 }
 
 /// HSPICE stops at an `X` line with no definition on its instance path (golden
@@ -3020,5 +3031,2005 @@ async fn model_usage_counts_like_the_list() {
             assert!(expected.1.len() > 1 || option.is_empty(), "{text}");
             assert_eq!(usage(&ast), expected, "{text}");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `.if` blocks (each result as measured on HSPICE P-2019.06, decks `if_*`,
+// `if2_*` and `ord_*` of `scripts/hspice_kit/forms*.py`)
+
+/// Whether the deck `text` has errors (not warnings), with its MOSFETs as
+/// `(path, chosen model or error)`
+async fn if_deck(text: &str) -> (bool, Vec<(String, String)>) {
+    let (_dir, parsed, files) = parse_deck(&[("deck.sp", text)]).await;
+    let (ast, has_err) = files.build(parsed);
+    let rows = chosen(&ast);
+    (has_err, rows)
+}
+
+/// `(path, L in um)` of every MOSFET of the deck `text`
+async fn if_lengths(text: &str) -> Vec<(String, f64)> {
+    let (_dir, parsed, files) = parse_deck(&[("deck.sp", text)]).await;
+    let (ast, _) = files.build(parsed);
+    ast.mosfet_models()
+        .into_iter()
+        .map(|m| match &m.selection {
+            Ok(s) => (m.path, (s.l * 1e12).round() / 1e6),
+            Err(e) => panic!("{}: {e}\n{text}", m.path),
+        })
+        .collect()
+}
+
+const IF_N: &str = "* t\n.model n nmos level=54\n";
+const IF_M1: &str = "M1 d g 0 0 n l=1u w=1u\n";
+const IF_M2: &str = "M2 d g 0 0 n l=2u w=2u\n";
+const IF_M3: &str = "M3 d g 0 0 n l=3u w=3u\n";
+
+fn if_paths(rows: &[(String, String)]) -> Vec<&str> {
+    rows.iter().map(|(p, _)| p.as_str()).collect()
+}
+
+#[tokio::test]
+async fn if_counts_only_the_active_branch() {
+    for (head, want) in [
+        (
+            ".if (1)\nM1 d g 0 0 n l=1u w=1u\n.else\nM2 d g 0 0 n l=2u w=2u\n.endif\n",
+            "M1",
+        ),
+        (
+            ".if (0)\nM1 d g 0 0 n l=1u w=1u\n.else\nM2 d g 0 0 n l=2u w=2u\n.endif\n",
+            "M2",
+        ),
+        (
+            ".IF(1)\nM1 d g 0 0 n l=1u w=1u\n.ELSE\nM2 d g 0 0 n l=2u w=2u\n.ENDIF\n",
+            "M1",
+        ),
+        (".if ('1>0')\nM1 d g 0 0 n l=1u w=1u\n.endif\n", "M1"),
+        (".if (\"1>0\")\nM1 d g 0 0 n l=1u w=1u\n.endif\n", "M1"),
+        (
+            ".if ((1>0)&&(2>1)) $ note\nM1 d g 0 0 n l=1u w=1u\n.endif $ note\n",
+            "M1",
+        ),
+        (
+            ".if (0)\nM1 d g 0 0 n l=1u w=1u\n.elseif(1)\nM2 d g 0 0 n l=2u w=2u\n.else\nM3 d g 0 0 n l=3u w=3u\n.endif\n",
+            "M2",
+        ),
+        (
+            ".if (1)\nM1 d g 0 0 n l=1u w=1u\n.elseif (1)\nM2 d g 0 0 n l=2u w=2u\n.else\nM3 d g 0 0 n l=3u w=3u\n.endif\n",
+            "M1",
+        ),
+        (
+            ".if (0)\nM1 d g 0 0 n l=1u w=1u\n.elseif (0)\nM2 d g 0 0 n l=2u w=2u\n.else\nM3 d g 0 0 n l=3u w=3u\n.endif\n",
+            "M3",
+        ),
+    ] {
+        let (has_err, rows) = if_deck(&format!("{IF_N}{head}")).await;
+        assert!(!has_err, "{head}");
+        assert_eq!(if_paths(&rows), [want], "{head}");
+    }
+}
+
+/// A value is true when it is not 0, however small
+#[tokio::test]
+async fn if_truth_is_any_value_that_is_not_zero() {
+    for value in ["0.5", "-1", "1e-20", "1e-300"] {
+        let text = format!("{IF_N}.param t={value}\n.if (t)\n{IF_M1}.else\n{IF_M2}.endif\n");
+        assert_eq!(if_paths(&if_deck(&text).await.1), ["M1"], "{value}");
+    }
+    let text = format!("{IF_N}.if (0)\n{IF_M1}.else\n{IF_M2}.endif\n");
+    assert_eq!(if_paths(&if_deck(&text).await.1), ["M2"]);
+}
+
+/// Text in a branch that is not active is not read: names need no definition
+#[tokio::test]
+async fn if_inactive_branch_is_not_evaluated() {
+    for body in [
+        ".if (0)\n.if (undefined_name)\nM1 d g 0 0 n l=1u w=1u\n.endif\n.endif\nM2 d g 0 0 n l=2u w=2u\n",
+        ".if (1)\nM2 d g 0 0 n l=2u w=2u\n.elseif (undefined_name)\nM3 d g 0 0 n l=3u w=3u\n.endif\n",
+        ".if (0)\nM1 d g 0 0 nomodel l=1u w=1u\nX1 d g nosubckt\n.param q='undefined_name'\n.endif\nM2 d g 0 0 n l=2u w=2u\n",
+    ] {
+        let (has_err, rows) = if_deck(&format!("{IF_N}{body}")).await;
+        assert!(!has_err, "{body}");
+        assert_eq!(if_paths(&rows), ["M2"], "{body}");
+        assert!(rows[0].1 == "n", "{body}: {rows:?}");
+    }
+}
+
+/// A condition is evaluated for each instance, with the values passed to it
+#[tokio::test]
+async fn if_is_evaluated_for_each_instance() {
+    let text = format!(
+        "{IF_N}.macro s d g w=1u\n.if (w>2u)\nM1 d g 0 0 n l=1u w=w\n.else\nM2 d g 0 0 n l=2u w=w\n.endif\n.eom\n\
+         X1 d g s w=1u\nX2 d g s w=3u\n"
+    );
+    assert_eq!(if_paths(&if_deck(&text).await.1), ["X1.M2", "X2.M1"]);
+    // with parhier: the top level wins over a value passed (global only)
+    let body = ".param k=1\n.subckt s d g\n.if (k==1)\nM1 d g 0 0 n l=1u w=1u\n.else\nM2 d g 0 0 n l=2u w=2u\n.endif\n.ends\nX1 d g s k=2\n";
+    let global = format!("{IF_N}{body}");
+    assert_eq!(if_paths(&if_deck(&global).await.1), ["X1.M1"]);
+    let local = format!("{IF_N}.option parhier=local\n{body}");
+    assert_eq!(if_paths(&if_deck(&local).await.1), ["X1.M2"]);
+}
+
+/// The values of `.param` follow the order of the file: a condition sees all
+/// plain `.param` statements of its level, and the branches of earlier blocks
+#[tokio::test]
+async fn if_params_follow_the_order_of_the_file() {
+    let b = |q: &str| format!(".if (1)\n.param q={q}\n.endif\n");
+    let use_q = "M1 d g 0 0 n l=q w=1u\n";
+    for (body, want) in [
+        (format!(".param q=1u\n{}{use_q}", b("2u")), 2.0),
+        (format!("{}.param q=1u\n{use_q}", b("2u")), 1.0),
+        (format!(".if (0)\n.param q=2u\n.endif\n.param q=1u\n{use_q}"), 1.0),
+        (format!("{}{}{use_q}", b("1u"), b("2u")), 2.0),
+        // a text read later
+        (format!(".if (1)\n.param r='q*2'\n.endif\n.param q=1u\nM1 d g 0 0 n l=r w=1u\n"), 2.0),
+        (format!(".param q=1u\n.param r='q*2'\n{}M1 d g 0 0 n l=r w=1u\n", b("2u")), 4.0),
+        // nested blocks
+        (format!(".if (1)\n{}.param q=1u\n.endif\n{use_q}", b("2u")), 1.0),
+        (format!(".if (1)\n.param q=1u\n{}.endif\n{use_q}", b("2u")), 2.0),
+        (
+            ".if (1)\n.param q=1\n.if (q==1)\n.param q=2\n.endif\n.if (q==2)\n.param q=3\n.endif\n.endif\nM1 d g 0 0 n l='q*1u' w=1u\n".to_owned(),
+            3.0,
+        ),
+    ] {
+        let text = format!("{IF_N}{body}");
+        assert_eq!(if_lengths(&text).await, [("M1".to_owned(), want)], "{body}");
+    }
+    let m = format!("{IF_M1}.else\n{IF_M2}.endif\n");
+    for (body, want) in [
+        (format!(".param q=1\n.if (q>1)\n{m}.param q=2\n"), "M1"),
+        (format!(".if (q>1)\n{m}.param q=1\n.param q=2\n"), "M1"),
+        (format!(".param q=1\n{}.if (q>1)\n{m}", b("2")), "M1"),
+        (format!("{}.param q=1\n.if (q>1)\n{m}", b("2")), "M2"),
+        (format!("{}.if (q>1)\n{m}.param q=1\n", b("2")), "M2"),
+        (format!(".param q=1\n.if (q>1)\n{m}{}", b("2")), "M2"),
+    ] {
+        let text = format!("{IF_N}{body}");
+        assert_eq!(if_paths(&if_deck(&text).await.1), [want], "{body}");
+    }
+}
+
+/// A value passed hides a branch's `.param`, which hides a `.subckt` default
+#[tokio::test]
+async fn if_params_of_an_instance() {
+    let text = format!(
+        "{IF_N}.option parhier=local\n.subckt s d g k=1\n.if (k==1)\n.param k=2\n.endif\nM1 d g 0 0 n l='k*1u' w=1u\n.ends\n\
+         X1 d g s\nX2 d g s k=5\nX3 d g s k=1\n"
+    );
+    assert_eq!(
+        if_lengths(&text).await,
+        [
+            ("X1.M1".to_owned(), 2.0),
+            ("X2.M1".to_owned(), 5.0),
+            ("X3.M1".to_owned(), 1.0)
+        ]
+    );
+    // the top level's branches are of the top level
+    let body = ".if (1)\n.param k=9\n.endif\n.subckt s d g k=2\nM1 d g 0 0 n l='k*1u' w=1u\n.ends\nX1 d g s\n";
+    assert_eq!(
+        if_lengths(&format!("{IF_N}{body}")).await,
+        [("X1.M1".to_owned(), 9.0)]
+    );
+    let local = format!("{IF_N}.option parhier=local\n{body}");
+    assert_eq!(if_lengths(&local).await, [("X1.M1".to_owned(), 2.0)]);
+    // a false branch binds nothing
+    let hide = |c: u8| {
+        format!(
+            "{IF_N}.option parhier=local\n.param k=9\n.subckt s d g\n.if ({c})\n.param k=2\n.endif\nM1 d g 0 0 n l='k*1u' w=1u\n.ends\nX1 d g s\n"
+        )
+    };
+    assert_eq!(if_lengths(&hide(1)).await, [("X1.M1".to_owned(), 2.0)]);
+    assert_eq!(if_lengths(&hide(0)).await, [("X1.M1".to_owned(), 9.0)]);
+}
+
+/// Models and subckts in a branch are seen by the whole level, also above the
+/// block. Bins keep the order of the file across a branch and the level.
+#[tokio::test]
+async fn if_models_and_subckts_in_a_branch() {
+    let text = format!(
+        "* t\nM1 d g 0 0 q l=1u w=1u\n.if (1)\n.model q nmos level=54\n.else\n.model q pmos level=54\n.endif\n"
+    );
+    let (has_err, rows) = if_deck(&text).await;
+    assert!(!has_err);
+    assert_eq!(rows, pairs(&[("M1", "q")]));
+    let text = format!(
+        "{IF_N}.subckt a d g\n{IF_M1}.ends\n.subckt b d g\n{IF_M2}.ends\n.param t=2\n.if (t==1)\nXs d g a\n.elseif (t==2)\nXs d g b\n.else\nXs d g a\n.endif\n"
+    );
+    assert_eq!(if_paths(&if_deck(&text).await.1), ["Xs.M2"]);
+    // a branch defines the same name in each case
+    let text = format!(
+        "{IF_N}.param t=1\n.if (t==1)\n.subckt c d g\n{IF_M1}.ends\n.else\n.subckt c d g\n{IF_M2}.ends\n.endif\nX1 d g c\n"
+    );
+    assert_eq!(if_paths(&if_deck(&text).await.1), ["X1.M1"]);
+    let bin =
+        |s: &str| format!(".model b.{s} nmos level=54 lmin=1e-8 lmax=1e-3 wmin=1e-8 wmax=1e-3\n");
+    let m = "M1 d g 0 0 b l=1u w=1u\n";
+    let first_plain = format!(
+        "* t\n.model b.2 nmos level=54 lmin=1e-8 lmax=1e-3 wmin=1e-8 wmax=1e-3\n.if (1)\n{}.endif\n{m}",
+        bin("1")
+    );
+    assert_eq!(if_deck(&first_plain).await.1, pairs(&[("M1", "b.2")]));
+    let first_branch = format!("* t\n.if (1)\n{}.endif\n{}{m}", bin("1"), bin("2"));
+    assert_eq!(if_deck(&first_branch).await.1, pairs(&[("M1", "b.1")]));
+}
+
+/// The lines of a level keep the order of the file, with a branch in its place
+#[tokio::test]
+async fn if_lines_keep_the_order_of_the_file() {
+    let text = format!("{IF_N}{IF_M1}.if (1)\n{IF_M2}.endif\n{IF_M3}");
+    assert_eq!(if_paths(&if_deck(&text).await.1), ["M1", "M2", "M3"]);
+}
+
+/// `.if` can open in one file and close in another; `.lib` and `.inc` are read
+/// in a true branch
+#[tokio::test]
+async fn if_across_files_and_libraries() {
+    let (_dir, parsed, files) = parse_deck(&[
+        ("deck.sp", "* t\n.model n nmos level=54\n.if (0)\n.inc 'mid.inc'\nM3 d g 0 0 n l=3u w=3u\n.endif\n"),
+        ("mid.inc", "M1 d g 0 0 n l=1u w=1u\n.else\nM2 d g 0 0 n l=2u w=2u\n"),
+    ])
+    .await;
+    let (ast, has_err) = files.build(parsed);
+    assert!(!has_err);
+    assert_eq!(if_paths(&chosen(&ast)), ["M2", "M3"]);
+
+    let lib = ".lib tt\n.param lc=1u\n.model q nmos level=54\n.endl tt\n.lib ss\n.param lc=2u\n.model q pmos level=54\n.endl ss\n";
+    let (_dir, parsed, files) = parse_deck(&[
+        ("deck.sp", "* t\n.param corner=2\n.if (corner==1)\n.lib 'c.l' tt\n.else\n.lib 'c.l' ss\n.endif\nM1 d g 0 0 q l=lc w=1u\n"),
+        ("c.l", lib),
+    ])
+    .await;
+    let (ast, _) = files.build(parsed);
+    let m = ast.mosfet_models().remove(0);
+    let s = m.selection.unwrap();
+    assert!(close(s.l, 2e-6), "{}", s.l);
+    assert!(matches!(s.model.model_type, crate::ast::ModelType::PMOS));
+}
+
+/// HSPICE stops at these forms: each one is an error here
+#[tokio::test]
+async fn if_bad_forms_are_errors() {
+    for body in [
+        // a block that does not close, or closes what is not open
+        ".if (1)\nM1 d g 0 0 n l=1u w=1u\n",
+        ".endif\n",
+        ".else\n",
+        ".elseif (1)\n",
+        ".if (1)\n.else\n.else\n.endif\n",
+        ".if (1)\n.else\n.elseif (1)\n.endif\n",
+        // across a body, or with `.alter` in it
+        ".subckt s d g\n.if (1)\n.ends\n.endif\n",
+        ".if (1)\n.subckt s d g\n.endif\n.ends\n",
+        ".if (1)\n.alter\n.endif\n",
+        // the condition
+        ".if\n.endif\n",
+        ".if ()\n.endif\n",
+        ".if 1\n.endif\n",
+        ".if {1}\n.endif\n",
+        ".if (1) && (1)\n.endif\n",
+        ".if (1\n+ )\n.endif\n",
+        ".if (0)\n.elseif 1\n.endif\n",
+        ".if (1) text\n.endif\n",
+        ".if (1)\n+ text\n.endif\n",
+        // text after the keywords
+        ".if (1)\n.else text\n.endif\n",
+        ".if (1)\n.else if (1)\n.endif\n",
+        ".if (1)\n.endif text\n",
+        ".if (1)\n.endif\n+ w=3u\n",
+    ] {
+        let (has_err, _) = if_deck(&format!("{IF_N}{body}")).await;
+        assert!(has_err, "no error for:\n{body}");
+    }
+    // `.elsif` is not a keyword: it is an unknown command, and is ignored
+    let text = format!("{IF_N}.if (0)\n{IF_M1}.elsif (1)\n{IF_M2}.else\n{IF_M3}.endif\n");
+    let (has_err, rows) = if_deck(&text).await;
+    assert!(!has_err);
+    assert_eq!(if_paths(&rows), ["M3"]);
+}
+
+/// A condition that cannot be computed is one row with an error; it is not a
+/// MOSFET, and the lines around the block still count
+#[tokio::test]
+async fn if_condition_that_cannot_be_computed() {
+    for cond in ["nothing>1", "1=1", "'a'=='a'", "temper>50"] {
+        let text = format!(
+            "{IF_N}.subckt s d g\n{IF_M1}.if ({cond})\n{IF_M2}.else\n{IF_M3}.endif\n.ends\nX1 d g s\nX2 d g s\n"
+        );
+        let (_dir, parsed, files) = parse_deck(&[("deck.sp", &text)]).await;
+        let (ast, _) = files.build(parsed);
+        let rows = chosen(&ast);
+        assert_eq!(rows.len(), 4, "{cond}: {rows:?}");
+        assert_eq!(rows[0].0, "X1.if", "{cond}");
+        assert!(rows[0].1.starts_with("error: "), "{cond}: {rows:?}");
+        assert_eq!(rows[1], ("X1.M1".to_owned(), "n".to_owned()), "{cond}");
+        assert!(matches!(
+            ast.mosfet_models()[0].selection,
+            Err(crate::models::SelectError::Condition { .. })
+        ));
+        let usage = ast.model_usage();
+        assert_eq!(usage.mosfets, 2, "{cond}");
+        assert_eq!(usage.errors.len(), 1, "{cond}");
+        assert_eq!(usage.errors[0].1, 2, "{cond}");
+    }
+}
+
+/// `.option` in an active branch applies; in another branch it does not
+#[tokio::test]
+async fn if_options() {
+    let parhier = |c: u8| {
+        format!(
+            "{IF_N}.if ({c})\n.option parhier=local\n.endif\n.param k=1u\n.subckt s d g k=2u\nM1 d g 0 0 n l=k w=1u\n.ends\nX1 d g s\n"
+        )
+    };
+    assert_eq!(if_lengths(&parhier(1)).await, [("X1.M1".to_owned(), 2.0)]);
+    assert_eq!(if_lengths(&parhier(0)).await, [("X1.M1".to_owned(), 1.0)]);
+    let scale =
+        |c: u8| format!("{IF_N}.if ({c})\n.option scale=1e-6\n.endif\nM1 d g 0 0 n l=0.5 w=2\n");
+    assert_eq!(if_lengths(&scale(1)).await, [("M1".to_owned(), 0.5)]);
+    assert_eq!(if_lengths(&scale(0)).await, [("M1".to_owned(), 500000.0)]);
+    // the order of the file decides between a branch and the level
+    let order = |before: &str, after: &str| {
+        format!("{IF_N}{before}.if (1)\n.option scale=2e-6\n.endif\n{after}M1 d g 0 0 n l=1 w=1\n")
+    };
+    assert_eq!(
+        if_lengths(&order(".option scale=1e-6\n", "")).await,
+        [("M1".to_owned(), 2.0)]
+    );
+    assert_eq!(
+        if_lengths(&order("", ".option scale=1e-6\n")).await,
+        [("M1".to_owned(), 1.0)]
+    );
+}
+
+/// [`AST::model_usage`] counts the active branches of each instance, as the
+/// list does
+#[tokio::test]
+async fn if_usage_agrees_with_the_list() {
+    let leaf = ".subckt leaf d g v=1\n.if (v>1)\n.param w0=1u\nM1 d g 0 0 n l=1u w=w0\n.else\nM2 d g 0 0 p l=2u w=2u\nM3 d g 0 0 p l=2u w=2u\n.endif\n.ends\n";
+    let models = "* t\n.model n nmos level=54\n.model p pmos level=54\n";
+    let x4 = "X1 d g mid\nX2 d g mid v=2\nX3 d g mid\nX4 d g mid v=2\n";
+    let mid = ".subckt mid d g v=1\nX1 d g leaf v=v\nX2 d g leaf\n.ends\n";
+    let branch_model = ".subckt inner d g\nM1 d g 0 0 mm l=1u w=1u\n.ends\n\
+         .subckt host d g k=1\n.if (k==1)\n.model mm nmos level=54\n.else\n.model mm pmos level=54\n.endif\nX1 d g inner\nX2 d g inner\n.ends\n\
+         X1 d g host\nX2 d g host k=2\nX3 d g host\n";
+    let branch_subckt = ".subckt host d g k=1\n.if (k==1)\n.subckt inner d g\nM1 d g 0 0 n l=1u w=1u\n.ends\n.else\n.subckt inner d g\nM1 d g 0 0 p l=1u w=1u\nM2 d g 0 0 p l=1u w=1u\n.ends\n.endif\nX1 d g inner\n.ends\n\
+         X1 d g host\nX2 d g host k=2\nX3 d g host\n";
+    let branch_x = ".subckt host d g k=1\n.if (k==1)\nX1 d g leaf\n.endif\n.ends\nX1 d g host\nX2 d g host k=2\nX3 d g host\n";
+    let top_if =
+        ".param top=1\n.if (top==1)\n.param v0=2\nX1 d g leaf v=v0\n.else\nX1 d g leaf\n.endif\n";
+    let nested = ".subckt host d g k=1 j=1\n.if (k==1)\n.if (j==1)\nM1 d g 0 0 n l=1u w=1u\n.else\nM1 d g 0 0 p l=1u w=1u\n.endif\n.endif\n.ends\nX1 d g host\nX2 d g host j=2\nX3 d g host k=2\nX4 d g host\n";
+    let read_above = ".param a=1\n.subckt host d g\n.if (a==1)\nM1 d g 0 0 n l=1u w=1u\n.else\nM1 d g 0 0 p l=1u w=1u\n.endif\n.ends\n.subckt wrap d g a=1\nX1 d g host\n.ends\nX1 d g wrap\nX2 d g wrap a=2\nX3 d g wrap\n";
+    for deck in [
+        format!("{models}{leaf}{mid}{x4}"),
+        format!("{models}{branch_model}"),
+        format!("{models}{branch_subckt}"),
+        format!("{models}{leaf}{branch_x}"),
+        format!("{models}{leaf}{top_if}"),
+        format!("{models}{nested}"),
+        format!("{models}{read_above}"),
+    ] {
+        for option in ["", ".option parhier=local\n"] {
+            let text = format!("{option}{deck}");
+            let (_dir, parsed, files) = parse_text(&[("top.sp", &text)]).await;
+            let (ast, _) = files.build(parsed);
+            let mut expected: HashMap<String, u64> = HashMap::new();
+            for m in ast.mosfet_models() {
+                let name = m
+                    .selection
+                    .as_ref()
+                    .map_or_else(|e| e.to_string(), |s| s.model.name.to_string());
+                *expected.entry(name).or_default() += 1;
+            }
+            let usage = ast.model_usage();
+            let mut got: HashMap<String, u64> = HashMap::new();
+            for (m, n) in &usage.models {
+                *got.entry(m.name.to_string()).or_default() += n;
+            }
+            for (e, n, _) in &usage.errors {
+                *got.entry(e.to_string()).or_default() += n;
+            }
+            assert_eq!(got, expected, "{text}");
+        }
+    }
+}
+
+/// A deep nest of blocks is one error, not a stack overflow; a nest within the
+/// limit runs
+#[tokio::test]
+async fn if_nesting_limit() {
+    let nest = |n: usize| {
+        format!(
+            "{IF_N}{}{IF_M1}{}",
+            ".if (1)\n".repeat(n),
+            ".endif\n".repeat(n)
+        )
+    };
+    let (has_err, rows) = if_deck(&nest(200)).await;
+    assert!(!has_err);
+    assert_eq!(if_paths(&rows), ["M1"]);
+    let (has_err, _) = if_deck(&nest(100_000)).await;
+    assert!(has_err);
+}
+
+/// The text of a block survives printing the netlist
+#[tokio::test]
+async fn if_blocks_are_printed() {
+    let text = format!("{IF_N}.if (1)\n{IF_M1}.elseif (2)\n{IF_M2}.else\n{IF_M3}.endif\n");
+    let (_dir, parsed, files) = parse_deck(&[("deck.sp", &text)]).await;
+    let (ast, _) = files.build(parsed);
+    let printed = ast.to_string().to_lowercase();
+    for word in [
+        ".if (1)",
+        ".elseif (2)",
+        ".else",
+        ".endif",
+        "m1 ",
+        "m2 ",
+        "m3 ",
+    ] {
+        assert!(printed.contains(word), "no `{word}` in:\n{printed}");
+    }
+}
+
+/// Short forms of the commands, and longer words that are other commands
+#[tokio::test]
+async fn short_forms_of_commands() {
+    for (form, want) in [
+        (".par k=2u\nM1 d g 0 0 n l=k w=1u\n", 2.0),
+        (".parame k=2u\nM1 d g 0 0 n l=k w=1u\n", 2.0),
+        (".parameters k=2u\nM1 d g 0 0 n l=k w=1u\n", 2.0),
+        (".su s d g\nM1 d g 0 0 n l=2u w=1u\n.ends\nX1 d g s\n", 2.0),
+        (
+            ".subc s d g\nM1 d g 0 0 n l=2u w=1u\n.ends\nX1 d g s\n",
+            2.0,
+        ),
+        (".mac s d g\nM1 d g 0 0 n l=2u w=1u\n.eom\nX1 d g s\n", 2.0),
+        (".mod q nmos level=54\nM1 d g 0 0 q l=2u w=1u\n", 2.0),
+        (".mode q nmos level=54\nM1 d g 0 0 q l=2u w=1u\n", 2.0),
+        (".els\n", 0.0),
+    ] {
+        if want == 0.0 {
+            continue;
+        }
+        let text = format!("{IF_N}{form}");
+        let (_dir, parsed, files) = parse_deck(&[("deck.sp", &text)]).await;
+        let (ast, has_err) = files.build(parsed);
+        assert!(!has_err, "{form}");
+        let rows = ast.mosfet_models();
+        assert_eq!(rows.len(), 1, "{form}");
+        let s = rows[0].selection.as_ref().unwrap();
+        assert!(close(s.l * 1e6, want), "{form}: L={}", s.l);
+    }
+    // `.opt` is `.option`
+    let text = format!("{IF_N}.opti scale=1e-6\nM1 d g 0 0 n l=2 w=1\n");
+    assert_eq!(if_lengths(&text).await, [("M1".to_owned(), 2.0)]);
+    // `.in` and `.li` read files
+    let (_dir, parsed, files) = parse_deck(&[
+        (
+            "deck.sp",
+            "* t\n.in 'a.inc'\n.li 'b.l' s\nM1 d g 0 0 q l=k w=1u\n",
+        ),
+        ("a.inc", ".param k=2u\n"),
+        ("b.l", ".lib s\n.model q nmos level=54\n.endl s\n"),
+    ])
+    .await;
+    let (ast, has_err) = files.build(parsed);
+    assert!(!has_err);
+    assert_eq!(chosen(&ast), pairs(&[("M1", "q")]));
+    // the keywords of a block
+    let text = format!("{IF_N}.if (0)\n{IF_M1}.elsei (0)\n{IF_M2}.els\n{IF_M3}.endi\n");
+    assert_eq!(if_paths(&if_deck(&text).await.1), ["M3"]);
+    // `.alt` ends the first run
+    let text = format!("{IF_N}{IF_M1}.alt\n{IF_M2}");
+    assert_eq!(if_paths(&if_deck(&text).await.1), ["M1"]);
+    // longer words: unknown commands, which are ignored
+    for word in ["paramx", "params", "alters", "alterx"] {
+        let text = format!("{IF_N}.{word} k\n{IF_M1}");
+        let (has_err, rows) = if_deck(&text).await;
+        assert!(!has_err, "{word}");
+        assert_eq!(if_paths(&rows), ["M1"], "{word}");
+    }
+    // the form of `.temp`: the value of `temper`
+    for (head, temper) in [
+        (".te 75\n", 75.0),
+        (".temper 75\n", 75.0),
+        (".temperatures 75\n", 75.0),
+        (".tempx 75\n", 25.0),
+        (".temperature 75\n", 75.0),
+        (".temp=75\n", 75.0),
+        (".temp '50+25'\n", 75.0),
+        (".param t=75\n.temp t\n", 75.0),
+        (".temp 50\n.temp 75\n", 50.0),
+        (".temp 75 100\n", 75.0),
+        (".option tnom=50\n", 50.0),
+        (".option tnom=50\n.option tnom=75\n", 75.0),
+        (".option tnom=50\n.temp 75\n", 75.0),
+        (".option tnom='50'\n", 25.0),
+        (".param tt=50\n.option tnom=tt\n", 25.0),
+        (".if (1)\n.temp 75\n.endif\n", 75.0),
+        (".if (0)\n.temp 75\n.endif\n", 25.0),
+        (".subckt s d g\n.temp 75\n.ends\nX1 d g s\n", 25.0),
+    ] {
+        let text = format!("{IF_N}{head}M1 d g 0 0 n l='temper*1u' w=1u\n");
+        let (_dir, parsed, files) = parse_deck(&[("deck.sp", &text)]).await;
+        let (ast, _) = files.build(parsed);
+        let s = ast.mosfet_models().remove(0).selection.unwrap();
+        assert!(close(s.l * 1e6, temper), "{head}: L={}", s.l);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rules of the selector, as measured on HSPICE (`golden/NOTES.md`)
+
+/// What the deck `text` gives for each row: path, the model (or the error), L
+/// and W in um, NF. The counts of [`AST::model_usage`] must agree with the rows.
+async fn deck_rows(text: &str) -> Vec<(String, String, f64, f64, f64)> {
+    let (_dir, parsed, files) = parse_deck(&[("deck.sp", text)]).await;
+    let (ast, _) = files.build(parsed);
+    usage_agrees(&ast, text);
+    let um = |x: f64| (x * 1e12).round() / 1e6;
+    ast.mosfet_models()
+        .into_iter()
+        .map(|m| match &m.selection {
+            Ok(s) => (m.path, s.model.name.to_lowercase(), um(s.l), um(s.w), s.nf),
+            Err(e) => (m.path, format!("error: {e}"), 0.0, 0.0, 0.0),
+        })
+        .collect()
+}
+
+/// The counts of [`AST::model_usage`] against the rows of the list
+fn usage_agrees(ast: &AST<'_>, text: &str) {
+    let mut expected: HashMap<String, u64> = HashMap::new();
+    let rows = ast.mosfet_models();
+    for m in &rows {
+        let name = m
+            .selection
+            .as_ref()
+            .map_or_else(|e| e.to_string(), |s| s.model.name.to_string());
+        *expected.entry(name).or_default() += 1;
+    }
+    let usage = ast.model_usage();
+    let mut got: HashMap<String, u64> = HashMap::new();
+    for (m, n) in &usage.models {
+        *got.entry(m.name.to_string()).or_default() += n;
+    }
+    for (e, n, _) in &usage.errors {
+        *got.entry(e.to_string()).or_default() += n;
+    }
+    assert_eq!(got, expected, "{text}");
+}
+
+/// The L and W of the one row of a deck
+async fn one_size(text: &str) -> (f64, f64) {
+    let rows = deck_rows(text).await;
+    assert_eq!(rows.len(), 1, "{text}: {rows:?}");
+    assert!(!rows[0].1.starts_with("error"), "{text}: {rows:?}");
+    (rows[0].2, rows[0].3)
+}
+
+/// The model of the one row of a deck
+async fn one_model(text: &str) -> String {
+    let rows = deck_rows(text).await;
+    assert_eq!(rows.len(), 1, "{text}: {rows:?}");
+    rows[0].1.clone()
+}
+
+/// `scale`, `scalm`, `defl` and `defw` take plain numbers only. The last plain
+/// number wins, also after the MOSFET line. Other values are ignored (decks
+/// `opt_scale_*`, `opd_*`, `os_*`).
+#[tokio::test]
+async fn option_sizes_are_plain_numbers() {
+    let line = "M1 d g 0 0 n w=1u\n";
+    for (head, l) in [
+        (".option defl=7u\n", 7.0),
+        (".option DEFL=7u\n", 7.0),
+        (".option defl='7u'\n", 100.0),
+        (".param q=7u\n.option defl=q\n", 100.0),
+        (".option defl='3u+4u'\n", 100.0),
+        (".option defl=7u\n.option defl='9u'\n", 7.0),
+        (".param q=9u\n.option defl=7u\n.option defl=q\n", 7.0),
+        (".option defl='9u'\n.option defl=7u\n", 7.0),
+        (".option defl=9u\n.option defl=7u\n", 7.0),
+    ] {
+        let text = format!("{IF_N}{head}{line}");
+        assert_eq!(one_size(&text).await, (l, 1.0), "{head}");
+    }
+    let line = "M1 d g 0 0 n l=2 w=3\n";
+    for (head, l, w) in [
+        (".option scale=1u\n", 2.0, 3.0),
+        (".option scale='1u'\n", 2e6, 3e6),
+        (".param q=1u\n.option scale=q\n", 2e6, 3e6),
+        (".option scale=1u\n.option scale='4u'\n", 2.0, 3.0),
+        (".param q=4u\n.option scale=1u\n.option scale=q\n", 2.0, 3.0),
+        (".subckt z d g\n.option scale=4u\n.ends\n", 2e6, 3e6),
+    ] {
+        let text = format!("{IF_N}{head}{line}");
+        assert_eq!(one_size(&text).await, (l, w), "{head}");
+    }
+    // after the line
+    assert_eq!(
+        one_size(&format!("{IF_N}{line}.option scale=1u\n")).await,
+        (2.0, 3.0)
+    );
+    // `scalm` chooses the bin, `b.2` with these limits times 1000
+    let bins = ".model b.1 nmos level=54 lmin=1e-9 lmax=1e-6 wmin=1e-9 wmax=1e-3\n\
+                .model b.2 nmos level=54 lmin=1e-6 lmax=1e-3 wmin=1e-9 wmax=1\n";
+    for (head, want) in [
+        ("", "b.2"),
+        (".option scalm=1e3\n", "b.1"),
+        (".option scalm='1e3'\n", "b.2"),
+        (".param q=1e3\n.option scalm=q\n", "b.2"),
+    ] {
+        let text = format!("* t\n{head}{bins}M1 d g 0 0 b l=2u w=1u\n");
+        assert_eq!(one_model(&text).await, want, "{head}");
+    }
+}
+
+/// `.option wnflag` takes a number, also in quotes. An expression or a name is
+/// ignored. On the line, every value counts (decks `opw_*`).
+#[tokio::test]
+async fn wnflag_values() {
+    let bins = ".model a.1 nmos level=54 lmin=1e-8 lmax=1e-3 wmin=1e-8 wmax=1e-6\n\
+                .model a.2 nmos level=54 lmin=1e-8 lmax=1e-3 wmin=1e-6 wmax=1e-3\n";
+    let line = "M1 d g 0 0 a w=4u l=1u nf=8";
+    for (head, tail, want) in [
+        ("", "", "a.1"),
+        (".option wnflag=0\n", "", "a.2"),
+        (".option wnflag=1\n", "", "a.1"),
+        (".option wnflag\n", "", "a.1"),
+        (".option wnflag='1'\n", "", "a.1"),
+        (".option wnflag='0'\n", "", "a.2"),
+        (".option wnflag='1-1'\n", "", "a.1"),
+        (".param wf=0\n.option wnflag=wf\n", "", "a.1"),
+        ("", " wnflag=0", "a.2"),
+        ("", " wnflag='0'", "a.2"),
+        (".param wf=0\n", " wnflag=wf", "a.2"),
+        (".option wnflag=0\n", " wnflag=1", "a.1"),
+    ] {
+        let text = format!("* t\n{head}{bins}{line}{tail}\n");
+        assert_eq!(one_model(&text).await, want, "{head}{tail}");
+    }
+}
+
+/// `.option wl` swaps the two values after the model name. It counts anywhere
+/// in the deck: after the line, in a subckt that is not used, in a branch that
+/// is not active, in an include. Only `wl` and `wl=1` set it, and the last
+/// one wins (decks `opt_wl_*`, `wv_*`).
+#[tokio::test]
+async fn option_wl_swaps_the_values() {
+    let line = "M1 d g 0 0 n 1u 2u\n";
+    for (head, swap) in [
+        ("", false),
+        (".option wl\n", true),
+        (".OPTION WL\n", true),
+        (".option wl=1\n", true),
+        (".option wl=1.0\n", true),
+        (".option wl=0\n", false),
+        (".option wl=2\n", false),
+        (".option wl=0.5\n", false),
+        (".option wl='1'\n", false),
+        (".param q=1\n.option wl=q\n", false),
+        (".option nowl\n", false),
+        (".option wl\n.option wl=0\n", false),
+        (".option wl=0\n.option wl\n", true),
+        (".option wl\n.option wl='1'\n", false),
+        (".option wl='1'\n.option wl\n", true),
+        (".param q=1\n.option wl\n.option wl=q\n", false),
+        (".subckt z d g\n.option wl\n.ends\n", true),
+        (".if (0)\n.option wl\n.endif\n", true),
+        (".if (1)\n.option wl\n.endif\n", true),
+    ] {
+        let text = format!("{IF_N}{head}{line}");
+        let want = if swap { (2.0, 1.0) } else { (1.0, 2.0) };
+        assert_eq!(one_size(&text).await, want, "{head}");
+    }
+    let wl = ".option wl\n";
+    assert_eq!(one_size(&format!("{IF_N}{line}{wl}")).await, (2.0, 1.0));
+    // a value given by name wins over its place; the other one is not given
+    assert_eq!(
+        one_size(&format!("{IF_N}{wl}M1 d g 0 0 n 1u w=2u\n")).await,
+        (100.0, 2.0)
+    );
+    assert_eq!(
+        one_size(&format!("{IF_N}{wl}M1 d g 0 0 n 3u\n")).await,
+        (100.0, 3.0)
+    );
+    assert_eq!(
+        one_size(&format!("{IF_N}{wl}M1 d g 0 0 n 1u 2u 3u\n")).await,
+        (2.0, 1.0)
+    );
+    // in a subckt
+    let text = format!("{IF_N}{wl}.subckt s d g\n{line}.ends\nX1 d g s\n");
+    assert_eq!(one_size(&text).await, (2.0, 1.0));
+    // in an include
+    let (_dir, parsed, files) = parse_deck(&[
+        ("deck.sp", &format!("{IF_N}.inc 'wl.inc'\n{line}")),
+        ("wl.inc", wl),
+    ])
+    .await;
+    let (ast, _) = files.build(parsed);
+    let s = ast.mosfet_models().remove(0).selection.unwrap();
+    assert!(close(s.l, 2e-6), "{}", s.l);
+    // a bin is chosen with the swapped values
+    let text = format!(
+        "* t\n{wl}.model b.1 nmos level=54 lmin=1e-8 lmax=1u wmin=1e-8 wmax=1e-3\n\
+         .model b.2 nmos level=54 lmin=1u lmax=1e-3 wmin=1e-8 wmax=1e-3\nM1 d g 0 0 b 1u 500n\n"
+    );
+    assert_eq!(one_model(&text).await, "b.1");
+}
+
+/// NF below 1 counts as 1 in the result, and the bin still divides W by it. NF=0
+/// leaves W whole (decks `m_nf_zero`, `mx_nf_*`).
+#[tokio::test]
+async fn nf_below_one() {
+    let bins = |limit: &str| {
+        format!(
+            "* t\n.model a.1 nmos level=54 lmin=1e-8 lmax=1e-3 wmin=1e-8 wmax={limit}\n\
+             .model a.2 nmos level=54 lmin=1e-8 lmax=1e-3 wmin={limit} wmax=1e-3\n"
+        )
+    };
+    for (head, line, model, nf) in [
+        (bins("3e-6"), "M1 d g 0 0 a w=2u l=1u nf=0.5\n", "a.2", 1.0),
+        (bins("1e-6"), "M1 d g 0 0 a w=4u l=1u nf=0\n", "a.2", 1.0),
+        (bins("1e-6"), "M1 d g 0 0 a w=4u l=1u nf=8\n", "a.1", 8.0),
+        (
+            bins("1e-6"),
+            "M1 d g 0 0 a w=2.5u l=1u nf=2.5\n",
+            "a.2",
+            2.5,
+        ),
+    ] {
+        let rows = deck_rows(&format!("{head}{line}")).await;
+        assert_eq!(rows.len(), 1, "{line}");
+        assert_eq!((rows[0].1.as_str(), rows[0].4), (model, nf), "{line}");
+    }
+}
+
+/// HSPICE stops at a size that is not positive; W=0 runs (decks `m_l_neg`,
+/// `m_w_neg`, `m_nf_neg`, `m_l_zero`, `m_m_zero`, `m_w_zero`)
+#[tokio::test]
+async fn sizes_that_are_not_positive() {
+    for (tail, stops) in [
+        ("l=-1u w=1u", true),
+        ("l=1u w=-1u", true),
+        ("l=1u w=1u nf=-2", true),
+        ("l=0 w=1u", true),
+        ("l=1u w=1u m=0", true),
+        ("l=1u w=1u m=-1", true),
+        ("l=1u w=0", false),
+        ("l=1u w=1u m=2", false),
+        ("l=1u w=1u M=2", false),
+        ("l=1u w=1u m='1+1'", false),
+    ] {
+        let rows = deck_rows(&format!("{IF_N}M1 d g 0 0 n {tail}\n")).await;
+        assert_eq!(rows.len(), 1, "{tail}");
+        assert_eq!(rows[0].1.starts_with("error"), stops, "{tail}: {rows:?}");
+    }
+}
+
+/// With a limit given twice, the first one counts (deck `mdl_dup_keys`)
+#[tokio::test]
+async fn first_limit_of_two_counts() {
+    let text = "* t\n.model b.1 nmos level=54 lmin=1e-8 lmax=1e-6 lmax=1e-3 wmin=1e-8 wmax=1e-3\n\
+                .model b.2 nmos level=54 lmin=1e-3 lmax=1 wmin=1e-8 wmax=1e-3\n\
+                M1 d g 0 0 b l=2u w=1u\n";
+    assert!(one_model(text).await.starts_with("error"), "{text}");
+    let text = text.replace("lmax=1e-6 lmax=1e-3", "lmax=1e-3 lmax=1e-6");
+    assert_eq!(one_model(&text).await, "b.1");
+}
+
+/// Only NMOS and PMOS models serve an M line, and other types of the name are
+/// not seen (decks `mt_*`, `mdl_diode_on_m`, `mdl_r_on_m`)
+#[tokio::test]
+async fn only_mos_models_serve_an_m_line() {
+    let line = "M1 d g 0 0 q l=1u w=1u\n";
+    for kind in ["nmos", "NMOS", "pmos", "PMos"] {
+        assert_eq!(
+            one_model(&format!("* t\n.model q {kind} level=54\n{line}")).await,
+            "q",
+            "{kind}"
+        );
+    }
+    for kind in [
+        "d", "r", "c", "nch", "pch", "n", "p", "nfet", "pfet", "nmosfet", "npn",
+    ] {
+        let text = format!("* t\n.model q {kind}\n{line}");
+        assert!(one_model(&text).await.starts_with("error"), "{kind}");
+    }
+    // the bins of a name of another type
+    let text = format!("* t\n.model q.1 nch level=54 lmin=1e-8 lmax=1 wmin=1e-8 wmax=1\n{line}");
+    assert!(one_model(&text).await.starts_with("error"), "{text}");
+    // the model at the top level serves past a diode model of the name
+    let text =
+        format!("* t\n.model q nmos level=54\n.subckt s d g\n.model q d\n{line}.ends\nX1 d g s\n");
+    assert_eq!(one_model(&text).await, "q");
+    assert_eq!(deck_rows(&text).await[0].1, "q");
+}
+
+/// Level 72 bins hold a fin count, not a width: `nfinmin <= nfin < nfinmax`.
+/// `wsheetmin <= wsheet < wsheetmax` is the other form (decks `f_*`, `k_*`,
+/// `w_*`, `p_*`).
+#[tokio::test]
+async fn finfet_bins() {
+    let bins = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u nfinmin=1 nfinmax=4\n\
+                .model f.2 nmos level=72 lmin=1e-8 lmax=1u nfinmin=4 nfinmax=9\n";
+    for (head, tail, want) in [
+        ("", "l=500n nfin=1", "f.1"),
+        ("", "l=500n nfin=2", "f.1"),
+        ("", "l=500n nfin=3.5", "f.1"),
+        ("", "l=500n nfin=4", "f.2"),
+        ("", "l=500n nfin=8.5", "f.2"),
+        ("", "l=500n NFIN=8.5", "f.2"),
+        ("", "l=500n", "f.1"),
+        ("", "l=500n w=1u", "f.1"),
+        ("", "l=500n w=1u nfin=6", "f.2"),
+        ("", "l=500n nfin=6 nf=2", "f.2"),
+        ("", "l=500n nfin=3 nf=2", "f.1"),
+        ("", "l=500n nfin=3 m=2", "f.1"),
+        (".param k=6\n", "l=500n nfin=k", "f.2"),
+        (".param k=3\n", "l=500n nfin='k*2'", "f.2"),
+        ("", "500n 1u nfin=6", "f.2"),
+        (".option scale=1e-6\n", "l=0.5 nfin=6", "f.2"),
+        (".option scale=2\n", "l=250n nfin=3", "f.1"),
+    ] {
+        let text = format!("* t\n{head}{bins}M1 d g 0 0 f {tail}\n");
+        assert_eq!(one_model(&text).await, want, "{head}{tail}");
+    }
+    for (head, tail) in [
+        ("", "l=500n nfin=0.5"),
+        ("", "l=500n nfin=9"),
+        ("", "l=500n nfin=10"),
+        ("", "l=1u nfin=3"),
+        ("", "l=2u nfin=3"),
+        (".option scalm=1e-1\n", "l=500n nfin=6"),
+    ] {
+        let text = format!("* t\n{head}{bins}M1 d g 0 0 f {tail}\n");
+        assert!(one_model(&text).await.starts_with("error"), "{head}{tail}");
+    }
+    // the keys of a bin
+    for (model, line, want) in [
+        (
+            ".model f.1 nmos level=72 lmin=1e-8 lmax=1u wmin=1e-8 wmax=1e-3 nfinmin=1 nfinmax=4\n",
+            "l=500n w=1u nfin=2",
+            "f.1",
+        ),
+        (
+            ".model f.1 nmos level=72 lmin=1e-8 lmax=1u wmin=1e-8 wmax=1e-3\n",
+            "l=500n w=1u",
+            "error",
+        ),
+        (
+            ".model f.1 nmos level=72 lmax=1u nfinmin=1 nfinmax=4\n",
+            "l=500n nfin=2",
+            "error",
+        ),
+        (
+            ".model f.1 nmos level=72 lmin=1e-8 lmax=1u nfinmin=1\n",
+            "l=500n nfin=2",
+            "error",
+        ),
+        (
+            ".model f.1 nmos level=54 lmin=1e-8 lmax=1u nfinmin=1 nfinmax=4\n",
+            "l=500n w=1u nfin=2",
+            "error",
+        ),
+        (
+            ".model f.1 nmos level=70 lmin=1e-8 lmax=1u wmin=1e-8 wmax=1e-3\n",
+            "l=500n w=1u",
+            "f.1",
+        ),
+        (".model f nmos level=72\n", "l=500n nfin=6", "f"),
+        (".model f nmos level=72\n", "l=500n", "f"),
+    ] {
+        let got = one_model(&format!("* t\n{model}M1 d g 0 0 f {line}\n")).await;
+        assert!(got.starts_with(want), "{model}{line}: {got}");
+    }
+    // the sheet form
+    let sheets = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u wsheetmin=1e-9 wsheetmax=1e-8\n\
+                  .model f.2 nmos level=72 lmin=1e-8 lmax=1u wsheetmin=1e-8 wsheetmax=1e-6\n";
+    let text = format!("* t\n{sheets}M1 d g 0 0 f l=500n wsheet=2e-8\n");
+    assert_eq!(one_model(&text).await, "f.2");
+    let text = format!("* t\n{sheets}M1 d g 0 0 f l=500n w=2e-8\n");
+    assert!(one_model(&text).await.starts_with("error"), "{text}");
+    // a bin of another level, in the same set
+    let text = "* t\n.model f.1 nmos level=54 lmin=1e-8 lmax=1u wmin=1e-8 wmax=1e-3\n\
+                .model f.2 nmos level=72 lmin=1e-8 lmax=1u nfinmin=1 nfinmax=4\n\
+                M1 d g 0 0 f l=500n w=1u nfin=2\n";
+    assert_eq!(one_model(text).await, "f.1");
+    // a parameter read by the fin count changes the bin in the counts too
+    let text = format!(
+        "* t\n{bins}.subckt s d g k=2\nM1 d g 0 0 f l=500n nfin=k\n.ends\nX1 d g s\nX2 d g s k=5\nX3 d g s\n"
+    );
+    let rows = deck_rows(&text).await;
+    let models: Vec<&str> = rows.iter().map(|r| r.1.as_str()).collect();
+    assert_eq!(models, ["f.1", "f.2", "f.1"]);
+}
+
+/// `m` on an X line is not passed to the subckt (decks `x_m_*`)
+#[tokio::test]
+async fn m_on_an_x_line_is_not_passed() {
+    for (text, l) in [
+        (
+            ".subckt s d g m=3\nM1 d g 0 0 n l='m*1u' w=1u\n.ends\nX1 d g s m=2\n",
+            3.0,
+        ),
+        (
+            ".param m=5\n.subckt s d g\nM1 d g 0 0 n l='m*1u' w=1u\n.ends\nX1 d g s m=2\n",
+            5.0,
+        ),
+        (
+            ".option parhier=local\n.param m=5\n.subckt s d g\nM1 d g 0 0 n l='m*1u' w=1u\n.ends\nX1 d g s m=2\n",
+            5.0,
+        ),
+        (
+            ".subckt s d g m=3\nM1 d g 0 0 n l='m*1u' w=1u\n.ends\nX1 d g s M=2\n",
+            3.0,
+        ),
+        (
+            ".subckt s d g k=3\nM1 d g 0 0 n l='k*1u' w=1u\n.ends\nX1 d g s k=2 m=2\n",
+            2.0,
+        ),
+    ] {
+        let text = format!("{IF_N}{text}");
+        assert_eq!(one_size(&text).await, (l, 1.0), "{text}");
+    }
+    let text = format!("{IF_N}.subckt s d g\nM1 d g 0 0 n l='m*1u' w=1u\n.ends\nX1 d g s m=2\n");
+    assert!(one_model(&text).await.starts_with("error"), "{text}");
+}
+
+/// A condition stops at `temper` and `time`, also through a parameter (decks
+/// `tc_*`). In a value, `time` reads 0 (deck `p_time_in_expr`).
+#[tokio::test]
+async fn temper_and_time() {
+    for head in [
+        ".temp 75\n.param t='temper'\n.if (t>50)\n",
+        ".temp 75\n.param t='temper*1'\n.if (t)\n",
+        ".if (temper>50)\n",
+        ".if (time>0)\n",
+        ".param t='time'\n.if (t==0)\n",
+    ] {
+        let text = format!("{IF_N}{head}{IF_M1}.else\n{IF_M2}.endif\n");
+        let (_, rows) = if_deck(&text).await;
+        assert_eq!(rows.len(), 1, "{head}: {rows:?}");
+        assert!(rows[0].1.starts_with("error"), "{head}: {rows:?}");
+    }
+    // the same parameters read in a value are not a problem
+    let text = format!("{IF_N}.temp 75\n.param t='temper'\nM1 d g 0 0 n l='t*1u' w=1u\n");
+    assert_eq!(one_size(&text).await, (75.0, 1.0));
+    let text = format!("{IF_N}M1 d g 0 0 n l='time+1u' w=1u\n");
+    assert_eq!(one_size(&text).await, (1.0, 1.0));
+    let text = format!("{IF_N}.param t='time+1u'\nM1 d g 0 0 n l=t w=1u\n");
+    assert_eq!(one_size(&text).await, (1.0, 1.0));
+}
+
+/// `log(0)` is the logarithm of 1e-28 (decks `g_log0`, `g_log100`)
+#[tokio::test]
+async fn logarithm_of_zero() {
+    let text = format!("{IF_N}.param c='log(0)'\nM1 d g 0 0 n l='(c+1000)*1e-9' w=1u\n");
+    let (l, _) = one_size(&text).await;
+    assert!((l - 0.9355276).abs() < 1e-6, "{l}");
+    let text = format!("{IF_N}.param c='log10(0)'\nM1 d g 0 0 n l='(c+1000)*1e-9' w=1u\n");
+    let (l, _) = one_size(&text).await;
+    assert!((l - 0.972).abs() < 1e-6, "{l}");
+}
+
+/// An X line that HSPICE rejects gives an error row, and no rows below it:
+/// node counts (decks `x_too_few_nodes`, `x_too_many_nodes`, `subckt_param_kw`),
+/// recursion (`x_self`, `x_mutual`), and a depth over the limit (`dp_loc_*`).
+#[tokio::test]
+async fn x_lines_that_cannot_be_expanded() {
+    let body = "M1 d g 0 0 n l=1u w=1u\n";
+    let s = format!(".subckt s d g\n{body}.ends\n");
+    for line in ["X1 d s\n", "X1 d g h s\n", "X1 s\n"] {
+        let rows = deck_rows(&format!("{IF_N}{s}{line}")).await;
+        assert_eq!(rows.len(), 1, "{line}: {rows:?}");
+        assert_eq!(rows[0].0, "X1", "{line}");
+        assert!(rows[0].1.starts_with("error"), "{line}: {rows:?}");
+    }
+    // the keyword `param:` is a node there
+    let text =
+        format!("{IF_N}.subckt s d g param: w=1u\nM1 d g 0 0 n l=1u w=w\n.ends\nX1 d g s w=3u\n");
+    assert!(deck_rows(&text).await[0].1.starts_with("error"), "{text}");
+    // the right count
+    assert_eq!(deck_rows(&format!("{IF_N}{s}X1 d g s\n")).await[0].1, "n");
+    // recursion
+    for text in [
+        format!(".subckt a d g\n{body}X1 d g a\n.ends\nX1 d g a\n"),
+        format!(".subckt a d g\nX1 d g b\n.ends\n.subckt b d g\n{body}X1 d g a\n.ends\nX1 d g a\n"),
+    ] {
+        let text = format!("{IF_N}{text}");
+        let rows = deck_rows(&text).await;
+        assert!(
+            rows.iter().any(|r| r.1.starts_with("error")),
+            "{text}: {rows:?}"
+        );
+    }
+    // too deep for the walk
+    let mut deep = format!("{IF_N}.subckt s0 d g\n{body}.ends\n");
+    for k in 1..300 {
+        deep += &format!(".subckt s{k} d g\nX1 d g s{}\n.ends\n", k - 1);
+    }
+    deep += "X1 d g s299\n";
+    let rows = deck_rows(&deep).await;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].1.starts_with("error"), "{}", rows[0].1);
+    // such errors do not count as MOSFETs
+    let (_dir, parsed, files) = parse_deck(&[("deck.sp", &deep)]).await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(ast.model_usage().mosfets, 0);
+    let text = format!("{IF_N}{s}X1 d s\nX2 d g s\n");
+    let (_dir, parsed, files) = parse_deck(&[("deck.sp", &text)]).await;
+    let (ast, _) = files.build(parsed);
+    assert_eq!(ast.model_usage().mosfets, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Forms of a line, as measured on HSPICE (`golden/NOTES.md`)
+
+/// `(path, L, W)` of each row of a deck with no error. The errors of the parse
+/// fail the test.
+async fn clean_sizes(files: &[(&str, &str)]) -> Vec<(String, f64, f64)> {
+    let (_dir, parsed, built) = parse_deck(files).await;
+    let (ast, has_err) = built.build(parsed);
+    assert!(!has_err, "{files:?}");
+    let um = |x: f64| (x * 1e12).round() / 1e6;
+    ast.mosfet_models()
+        .into_iter()
+        .map(|m| match &m.selection {
+            Ok(s) => (m.path.clone(), um(s.l), um(s.w)),
+            Err(e) => panic!("{}: {e}: {files:?}", m.path),
+        })
+        .collect()
+}
+
+/// HSPICE reads a chain of parameters of any length, in any order, at any level
+/// (decks `c_*`, `r_*`, `s_*`, `sr_*`, `f_*`, `i_*`, `params50k`).
+#[tokio::test]
+async fn long_chains_of_parameters() {
+    let chain = |n: usize, reverse: bool| {
+        let mut rows = vec![".param p0=1n\n".to_owned()];
+        rows.extend((1..=n).map(|k| format!(".param p{k}='p{}+1n'\n", k - 1)));
+        if reverse {
+            rows.reverse();
+        }
+        rows.concat()
+    };
+    for n in [99, 100, 101, 150, 1000, 5000] {
+        let size = (n + 1) as f64 * 1e-3;
+        let close = |(l, w): (f64, f64)| (l - size).abs() < 1e-9 && w == 1.0;
+        let line = format!("M1 d g 0 0 n l=p{n} w=1u\n");
+        for reverse in [false, true] {
+            let rows = chain(n, reverse);
+            let text = format!("{IF_N}{rows}{line}");
+            assert!(close(one_size(&text).await), "top, {n}, {reverse}");
+            let text = format!("{IF_N}.subckt c d g\n{rows}{line}.ends\nX1 d g c\n");
+            assert!(close(one_size(&text).await), "subckt, {n}, {reverse}");
+            let text = format!("{IF_N}{rows}.subckt c d g\n{line}.ends\nX1 d g c\n");
+            assert!(close(one_size(&text).await), "read below, {n}, {reverse}");
+            let text = format!("{IF_N}{rows}.if (p{n}>1n)\n{line}.endif\n");
+            assert!(close(one_size(&text).await), ".if, {n}, {reverse}");
+        }
+    }
+    // a loop stays an error, whatever its length
+    for n in [2, 150, 1000] {
+        let rows = chain(n, false).replace(".param p0=1n", &format!(".param p0='p{n}+1n'"));
+        let rows = deck_rows(&format!("{IF_N}{rows}M1 d g 0 0 n l=p{n} w=1u\n")).await;
+        assert!(rows[0].1.starts_with("error"), "{n}: {rows:?}");
+    }
+    // `temper` stops a condition also at the far end of a chain
+    for n in [99, 100, 101, 200] {
+        let rows = chain(n, false).replace(".param p0=1n\n", ".param p0='temper'\n");
+        let text = format!("{IF_N}{rows}.if (p{n}>1n)\nM1 d g 0 0 n l=1u w=1u\n.endif\n");
+        let rows = deck_rows(&text).await;
+        assert!(
+            rows.iter().any(|r| r.1.starts_with("error")),
+            "{n}: {rows:?}"
+        );
+    }
+    // a loop or a name with no value at the far end stops all the names before it
+    for far in [".param p0='q' q='r' r='q'\n", ".param p0='nothing'\n"] {
+        let rows = chain(500, false).replace(".param p0=1n\n", far);
+        let rows = deck_rows(&format!("{IF_N}{rows}M1 d g 0 0 n l=p500 w=1u\n")).await;
+        assert!(rows[0].1.starts_with("error"), "{far}: {rows:?}");
+    }
+}
+
+/// `=` can start the `+` line after the name of a `.param` (decks `p_plus_eq*`)
+#[tokio::test]
+async fn equals_sign_on_a_plus_line_of_param() {
+    for cards in [
+        ".param q\n+ =1u\n",
+        ".param q\n+=1u\n",
+        ".param q\n+ =1u r\n+ =2u\n",
+    ] {
+        let text = format!("{IF_N}{cards}M1 d g 0 0 n l=q w=1u\n");
+        assert_eq!(one_size(&text).await, (1.0, 1.0), "{cards}");
+    }
+}
+
+/// `(` and `)` only separate words on a MOSFET line, also after `key=`. So a space,
+/// a comma or a `)` ends the value there, and `(2u+3u)` is one word (decks `g*`, `w*`).
+#[tokio::test]
+async fn parentheses_after_a_key_on_a_mosfet_line() {
+    let cards = format!("{IF_N}.param k=4u j=5u\n");
+    for (tail, l, w) in [
+        ("l=1u w=(2u + 3u)", 1.0, 2.0),
+        ("l=1u w=(2u +3u)", 1.0, 2.0),
+        ("l=1u w=( 2u + 3u )", 1.0, 2.0),
+        ("l=1u w=(2u 3u)", 1.0, 2.0),
+        ("l=1u w=(2u,3u)", 1.0, 2.0),
+        ("l=1u w=(k + j)", 1.0, 4.0),
+        ("l=1u w=(k j)", 1.0, 4.0),
+        ("l=1u w=(k -1u)", 1.0, 4.0),
+        ("l=1u w=((k + j))", 1.0, 4.0),
+        ("l=1u w=((k)+(j))", 1.0, 4.0),
+        ("l=1u w=(k)+(j)", 1.0, 4.0),
+        ("l=1u w=(2u)+(3u)", 1.0, 2.0),
+        ("l=1u w=(k * 1)", 1.0, 4.0),
+        ("l=1u w=(k *1)", 1.0, 4.0),
+        ("l=(2u * 3) w=1u", 2.0, 100.0),
+        ("l=(k * 3) w=1u", 4.0, 100.0),
+        ("l=(2u ** 3) w=1u", 2.0, 100.0),
+        ("l=(2u + 3n) w=1u", 2.0, 1.0),
+        ("l=(k + 3n) w=1u", 4.0, 1.0),
+        ("l=(2u + 3u) (4u)", 2.0, 100.0),
+        ("l=(2u + 3u) w=9u", 2.0, 9.0),
+        ("l=(2u + 3u) l=9u", 9.0, 100.0),
+        ("w=9u l=(2u + 3u) (4u)", 2.0, 9.0),
+        ("l=(k)+1u", 4.0, 1.0),
+        ("l=(k)+1u w=9u", 4.0, 9.0),
+        ("l=(k)-1u w=9u", 4.0, 9.0),
+        ("l=(k+j)+(j)", 9.0, 100.0),
+        ("l=(k+j)+1u", 9.0, 1.0),
+        ("l=((2u)+1u) w=1u", 2.0, 1.0),
+        // one word
+        ("l=1u w=( 2u+3u )", 1.0, 5.0),
+        ("l=1u w=( 2u+3u)", 1.0, 5.0),
+        ("l=1u w=(2u+3u )", 1.0, 5.0),
+        ("l=1u w=(k+j)", 1.0, 9.0),
+        ("l=1u w=( k+j )", 1.0, 9.0),
+        ("l=1u w=((k+j))", 1.0, 9.0),
+        ("l=1u w=(k*1)", 1.0, 4.0),
+        ("l=1u w=( k )", 1.0, 4.0),
+        ("l=1u w=( 2u )", 1.0, 2.0),
+        // quotes keep the whole text
+        ("l='(2u + 3u)' w=1u", 5.0, 1.0),
+        ("l=\"(2u + 3u)\" w=1u", 5.0, 1.0),
+        // over `+` lines
+        ("l=(1u\n+ +2u)", 1.0, 2.0),
+        ("l=(1u\n+ 2u)", 1.0, 2.0),
+        ("l=(1u\n+ 2u) w=3u", 1.0, 3.0),
+        ("w=(1u\n+ 2u) l=3u", 3.0, 2.0),
+        ("l=(k\n+ +j)", 4.0, 5.0),
+        ("l=(k\n+ j)", 4.0, 5.0),
+        ("l=(\n+ 1u)", 1.0, 100.0),
+        ("l=(\n+ 1u+2u)", 3.0, 100.0),
+        ("l=(1u+2u\n+ )", 3.0, 100.0),
+        ("l=(1u+2u\n+ ) w=3u", 3.0, 3.0),
+    ] {
+        let text = format!("{cards}M1 d g 0 0 n {tail}\n");
+        assert_eq!(one_size(&text).await, (l, w), "{tail}");
+    }
+    // a word that ends in an operator has no value, and neither W below 0
+    for tail in [
+        "l=1u w=(2u+ 3u)",
+        "l=1u w=(k* 1)",
+        "l=(k+\n+ j)",
+        "l=(k)-1u",
+    ] {
+        let rows = deck_rows(&format!("{cards}M1 d g 0 0 n {tail}\n")).await;
+        assert!(rows[0].1.starts_with("error"), "{tail}: {rows:?}");
+    }
+}
+
+/// A `+` with no word right after it takes a place and gives no value. In `+2u` it
+/// is the sign of the word (decks `w*`).
+#[tokio::test]
+async fn a_lone_plus_on_a_mosfet_line() {
+    let cards = format!("{IF_N}.param k=4u\n");
+    for (tail, l, w) in [
+        ("1u + 2u", 1.0, 100.0),
+        ("1u +(2u)", 1.0, 100.0),
+        ("1u + (2u)", 1.0, 100.0),
+        ("1u + k", 1.0, 100.0),
+        ("1u + 2u 3u", 1.0, 100.0),
+        ("1u + w=3u", 1.0, 3.0),
+        ("1u + l=3u", 3.0, 100.0),
+        ("+ 1u", 100.0, 1.0),
+        ("+ 1u 2u", 100.0, 1.0),
+        ("+ l=1u w=2u", 1.0, 2.0),
+        ("l=1u + 2u", 1.0, 100.0),
+        ("l=1u + k", 1.0, 100.0),
+        ("w=2u + 3u", 100.0, 2.0),
+        ("w=2u + 3u l=1u", 1.0, 2.0),
+        ("w=2u + 3u + 4u", 100.0, 2.0),
+        ("w=2u + l=3u", 3.0, 2.0),
+        ("l=1u w=2u + 3u", 1.0, 2.0),
+        ("1u 2u +", 1.0, 2.0),
+        ("1u +\n+ 2u", 1.0, 100.0),
+        // the sign of a word
+        ("1u +2u", 1.0, 2.0),
+        ("1u +k", 1.0, 4.0),
+        ("+1u", 1.0, 100.0),
+        ("l=1u +2u", 1.0, 2.0),
+        ("l=1u +k", 1.0, 4.0),
+        ("w=2u +3u", 100.0, 3.0),
+    ] {
+        let text = format!("{cards}M1 d g 0 0 n {tail}\n");
+        assert_eq!(one_size(&text).await, (l, w), "{tail}");
+    }
+}
+
+/// HSPICE assigns the plain numbers of a MOSFET line first and then the
+/// expressions, each in the order of the line, and the last one stays. A name, a
+/// value in quotes and a word with an operator are expressions. `+2u`, `(2u)` and
+/// `2umos` are plain numbers (decks `kx_*`, `ky_*`, `ma_*`, `mb_*`, `mc_*`).
+#[tokio::test]
+async fn numbers_then_expressions_on_a_mosfet_line() {
+    let cards = format!("{IF_N}.model a nmos level=54\n.param k=2u j=3u b=4u\n");
+    for (tail, l, w) in [
+        ("n 1u 2u w=5u", 1.0, 5.0),
+        ("n 1u k w=5u", 1.0, 2.0),
+        ("n 1u k*1 w=5u", 1.0, 2.0),
+        ("n 1u '2u' w=5u", 1.0, 2.0),
+        ("n 1u '2u*1' w=5u", 1.0, 2.0),
+        ("n k l=5u", 2.0, 100.0),
+        ("n 1u l=5u", 5.0, 100.0),
+        ("n '1u' l=5u", 1.0, 100.0),
+        ("n k 2u l=5u", 2.0, 2.0),
+        ("n l=5u k w=6u", 5.0, 2.0),
+        ("n l=5u 1u w=6u", 5.0, 6.0),
+        ("n w=5u 1u", 100.0, 1.0),
+        ("n w=5u k w=6u", 100.0, 2.0),
+        ("n w=5u 1u w=6u", 100.0, 6.0),
+        ("n w='5u' 1u 2u", 100.0, 5.0),
+        ("n w=j 1u k", 100.0, 3.0),
+        ("n w=j k", 100.0, 2.0),
+        ("n w=j k 1u", 100.0, 2.0),
+        ("n 1u k w=j", 1.0, 3.0),
+        ("n 1u 2u w='5u'", 1.0, 5.0),
+        ("n k l=j", 3.0, 100.0),
+        ("n w=k w=5u", 100.0, 2.0),
+        ("n w='2u' w=5u", 100.0, 2.0),
+        ("n w=5u w=k", 100.0, 2.0),
+        ("n w=j w=k", 100.0, 2.0),
+        ("n w=k w=j", 100.0, 3.0),
+        ("n l=1u w=(2u) w=5u", 1.0, 5.0),
+        ("n l=1u w=(k) w=5u", 1.0, 2.0),
+        ("n l=1u w=+2u w=5u", 1.0, 5.0),
+        ("n l=1u w=2umos w=5u", 1.0, 5.0),
+        ("n l=1u w=+k w=5u", 1.0, 2.0),
+        ("n 1u (k) w=5u", 1.0, 2.0),
+        ("n 1u (2u) w=5u", 1.0, 5.0),
+        ("n 1u +2u w=5u", 1.0, 5.0),
+        ("n 1u +k w=5u", 1.0, 2.0),
+        ("n 1u 2umos w=5u", 1.0, 5.0),
+        ("n 1u 2n7002 w=5u", 1.0, 5.0),
+        ("n 1u w=5u 2u", 1.0, 5.0),
+        ("n nf=2 k w=5u", 100.0, 2.0),
+        ("n nf=2 1u k", 100.0, 1.0),
+        ("n k j 'k' w=7u l=7u", 2.0, 3.0),
+        // the words between the model and the first key
+        ("a 1u b l=5u", 5.0, 4.0),
+        ("a k b l=5u", 2.0, 4.0),
+        ("a k w=5u 3u", 2.0, 5.0),
+        ("a k l=5u 3u", 2.0, 100.0),
+        ("a 1u j w=5u", 1.0, 3.0),
+        ("a 1u 2u j w=5u", 1.0, 5.0),
+        ("a b j w=5u l=5u", 4.0, 3.0),
+        ("a b 2u l=5u w=6u", 4.0, 6.0),
+        ("a k w=j 2u", 2.0, 3.0),
+        ("a l=5u k w=6u", 5.0, 2.0),
+    ] {
+        let text = format!("{cards}M1 d g 0 0 {tail}\n");
+        assert_eq!(
+            clean_sizes(&[("deck.sp", &text)]).await,
+            [("M1".to_owned(), l, w)],
+            "{tail}"
+        );
+    }
+    // `.option wl`: the first place is W
+    for (tail, l, w) in [
+        ("k 1u w=5u", 1.0, 2.0),
+        ("1u k l=5u", 2.0, 1.0),
+        ("1u 2u l=5u w=6u", 5.0, 6.0),
+        ("w=5u 1u", 1.0, 5.0),
+        ("l=5u 1u", 1.0, 100.0),
+        ("l=5u k", 2.0, 100.0),
+        ("w=5u k", 2.0, 5.0),
+    ] {
+        let text = format!("{cards}.option wl\nM1 d g 0 0 n {tail}\n");
+        assert_eq!(
+            clean_sizes(&[("deck.sp", &text)]).await,
+            [("M1".to_owned(), l, w)],
+            "wl {tail}"
+        );
+    }
+}
+
+/// A word that starts with a number is an expression only with an operator right
+/// after the number. HSPICE reads any other such word as the number (decks `gv_*`,
+/// `gx_*`, `hx_*`).
+#[tokio::test]
+async fn words_that_start_with_a_number() {
+    let cards = format!("{IF_N}.param k=2u\n");
+    for (tail, l, w) in [
+        ("1u 2u*1", 1.0, 2.0),
+        ("1u*1 2u", 1.0, 2.0),
+        ("1u*1 w=2u", 1.0, 2.0),
+        ("1e-6*2 1u", 2.0, 1.0),
+        ("1u 2*k", 1.0, 4.0),
+        ("1u 2u/2", 1.0, 1.0),
+        ("1u 4u/2+1u", 1.0, 3.0),
+        ("1u 1e-6+1u", 1.0, 2.0),
+        ("1u 2u-1u", 1.0, 1.0),
+        ("1u -2u*-1", 1.0, 2.0),
+        ("1u +2u*1", 1.0, 2.0),
+        ("1u 2umos*1", 1.0, 2.0),
+        ("1u 2u*1mos", 1.0, 0.002),
+        ("1u 2u**1", 1.0, 2.0),
+        ("1u .5u*2", 1.0, 1.0),
+        ("1u 2.u*1", 1.0, 2.0),
+        ("1u 2u*1 $ comment", 1.0, 2.0),
+        ("1u\n+ 2u*1", 1.0, 2.0),
+        ("1u 2n7002", 1.0, 0.002),
+        ("1u 2u.5", 1.0, 2.0),
+        ("1u 2^2", 1.0, 2e6),
+        ("1u 2**2", 1.0, 4e6),
+        ("1u 2*3^2", 1.0, 18e6),
+        ("1u 2<3", 1.0, 2e6),
+        ("1u 2>3", 1.0, 2e6),
+        ("1u 2||3", 1.0, 2e6),
+        ("1u 2u%", 1.0, 2.0),
+        ("1u 2u#", 1.0, 2.0),
+        ("1u 2u@3", 1.0, 2.0),
+        ("1u 2u~3", 1.0, 2.0),
+        ("1u 2u:3", 1.0, 2.0),
+        ("1u 2u_3", 1.0, 2.0),
+        ("1u 2u[3]", 1.0, 2.0),
+        ("1u 2u|3", 1.0, 2.0),
+        ("l=1u w=2^2", 1.0, 2e6),
+        ("l=1u w=2**2", 1.0, 4e6),
+        ("l=1u w=2*3^2", 1.0, 18e6),
+        ("l=1u w=2u.5", 1.0, 2.0),
+        ("l=1u w=2umos", 1.0, 2.0),
+        ("l=1u w='2^2'", 1.0, 4e6),
+    ] {
+        let text = format!("{cards}M1 d g 0 0 n {tail}\n");
+        assert_eq!(
+            clean_sizes(&[("deck.sp", &text)]).await,
+            [("M1".to_owned(), l, w)],
+            "{tail}"
+        );
+    }
+    // the model at the 4th place
+    for tail in ["1u 2u*1", "1u*1 2u", "1u (2u*1)"] {
+        let text = format!("{cards}M1 d g 0 n {tail}\n");
+        assert_eq!(
+            clean_sizes(&[("deck.sp", &text)]).await,
+            [("M1".to_owned(), 1.0, 2.0)],
+            "{tail}"
+        );
+    }
+}
+
+/// `(` and `)` between the values of a MOSFET line only separate them (decks
+/// `gv_*`, `gx_*`, `hx_*`).
+#[tokio::test]
+async fn parentheses_between_mosfet_values() {
+    let cards = format!("{IF_N}.param k=2u\n");
+    for (tail, l, w) in [
+        ("1u (2u*1)", 1.0, 2.0),
+        ("l=1u (k*1)", 1.0, 2.0),
+        ("l=1u (2u)", 1.0, 2.0),
+        ("l=1u ( 2u*1 )", 1.0, 2.0),
+        ("w=1u (k*1)", 100.0, 2.0),
+        ("w=5u (1u)", 100.0, 1.0),
+        ("1u 2u (1p*1)", 1.0, 2.0),
+        ("l=1u w=2u (1p*1)", 1.0, 2.0),
+        ("l=1u (2u + 3u)", 1.0, 2.0),
+        ("l=1u (2u 3u)", 1.0, 2.0),
+        ("1u ((2u*1))", 1.0, 2.0),
+        ("1u (2u*1) (3p*1)", 1.0, 2.0),
+        ("l=1u w=2u (3p*1) (4p*1)", 1.0, 2.0),
+        ("1u (2u*1)$c", 1.0, 2.0),
+        ("1u 2u*1,3p*1", 1.0, 2.0),
+        ("1u,(2u*1)", 1.0, 2.0),
+        ("1u\n+ (2u*1)", 1.0, 2.0),
+        ("l=1u\n+ (2u*1)", 1.0, 2.0),
+        ("1u (2u*1) w=5u", 1.0, 2.0),
+        ("l=1u (2u*1) w=5u", 1.0, 2.0),
+    ] {
+        let text = format!("{cards}M1 d g 0 0 n {tail}\n");
+        assert_eq!(
+            clean_sizes(&[("deck.sp", &text)]).await,
+            [("M1".to_owned(), l, w)],
+            "{tail}"
+        );
+    }
+}
+
+/// A printed MOSFET line keeps the order of its values, so that it reads the same.
+#[tokio::test]
+async fn a_printed_mosfet_line_reads_the_same() {
+    let cards = format!("{IF_N}.param k=2u\n");
+    for tail in [
+        "w=5u 1u",
+        "w=5u k w=6u",
+        "1u w=5u 2u",
+        "off w=5u",
+        "w=5u off 1u",
+        "1u k w=5u",
+        "1u + 2u",
+        "w=(2u + 3u)",
+        "l=5u 1u w=6u",
+    ] {
+        let text = format!("{cards}M1 d g 0 0 n {tail}\n");
+        let rows = clean_sizes(&[("deck.sp", &text)]).await;
+        let (_dir, parsed, built) = parse_deck(&[("deck.sp", &text)]).await;
+        let (ast, _) = built.build(parsed);
+        let printed = format!("* title\n{ast}\n");
+        assert_eq!(
+            clean_sizes(&[("deck.sp", &printed)]).await,
+            rows,
+            "{tail}: {printed}"
+        );
+    }
+}
+
+/// Each word after the model name takes a place, a `key=value` too. A later
+/// value wins over an earlier one of the same name (decks `mx_*`,
+/// `m_off_*`, `m_one_key_after_value`).
+#[tokio::test]
+async fn words_and_keys_mix_on_a_mosfet_line() {
+    for (tail, l, w) in [
+        ("l=1u w=2u", 1.0, 2.0),
+        ("1u 2u", 1.0, 2.0),
+        ("1u w=2u", 1.0, 2.0),
+        ("w=2u 1u", 100.0, 1.0),
+        ("w=2u 1u 3u", 100.0, 1.0),
+        ("l=1u 2u", 1.0, 2.0),
+        ("1u w=2u 3u", 1.0, 2.0),
+        ("1u l=2u 3u", 2.0, 100.0),
+        ("w=2u k", 100.0, 7.0),
+        ("w=2u off 1u", 100.0, 2.0),
+        ("1u w=2u off", 1.0, 2.0),
+        ("l=1u w=2u off", 1.0, 2.0),
+        ("l=1u off w=2u", 1.0, 2.0),
+        ("off w=2u", 100.0, 2.0),
+        ("OFF l=1u OFF w=2u", 1.0, 2.0),
+        ("off off 1u", 100.0, 100.0),
+        ("l=1u w=2u ic=1,1,1", 1.0, 2.0),
+        ("l=1u w=2u off ic=1,1,1", 1.0, 2.0),
+        ("l=1u ic=1,1,1 w=2u off", 1.0, 2.0),
+        ("'1u' w=2u", 1.0, 2.0),
+        ("'1u' '2u'", 1.0, 2.0),
+        ("l=1u '2u'", 1.0, 2.0),
+    ] {
+        let text = format!("{IF_N}.param k=7u\nM1 d g 0 0 n {tail}\n");
+        let rows = clean_sizes(&[("deck.sp", &text)]).await;
+        assert_eq!(rows, [("M1".to_owned(), l, w)], "{tail}");
+        // the same over `+` lines
+        let text = format!(
+            "{IF_N}.param k=7u\nM1 d g 0 0 n\n{}\n",
+            tail.split(' ')
+                .map(|word| format!("+ {word}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let rows = clean_sizes(&[("deck.sp", &text)]).await;
+        assert_eq!(rows, [("M1".to_owned(), l, w)], "{tail}");
+    }
+    // `=` on the next line
+    let text = format!("{IF_N}M1 d g 0 0 n l=\n+ 1u w\n+ =2u\n");
+    let rows = clean_sizes(&[("deck.sp", &text)]).await;
+    assert_eq!(rows, [("M1".to_owned(), 1.0, 2.0)]);
+    // what is printed reads the same
+    for tail in ["w=2u 1u", "1u w=2u 3u", "w=2u off 1u", "l=1u off w=2u"] {
+        let text = format!("{IF_N}M1 d g 0 0 n {tail}\n");
+        let (_dir, parsed, files) = parse_deck(&[("deck.sp", &text)]).await;
+        let (ast, _) = files.build(parsed);
+        let printed = format!("{ast}");
+        let again = clean_sizes(&[("deck.sp", &format!("* again\n{printed}\n"))]).await;
+        let first = clean_sizes(&[("deck.sp", &text)]).await;
+        assert_eq!(again, first, "{tail}: {printed}");
+    }
+}
+
+/// `$` in a word that starts with a letter is a character of the name. After a
+/// value, it starts a comment (decks `cm_dollar_*`, `m_name_special`,
+/// `p_dollar_in_name`).
+#[tokio::test]
+async fn dollar_in_a_word() {
+    for (text, want) in [
+        ("M$1 d g 0 0 n l=1u w=1u\n", ("M$1", 1.0, 1.0)),
+        ("M1 d$a g$b 0 0 n l=1u w=1u\n", ("M1", 1.0, 1.0)),
+        (
+            ".model q$a nmos level=54\nM1 d g 0 0 q$a l=1u w=1u\n",
+            ("M1", 1.0, 1.0),
+        ),
+        (
+            ".subckt s$a d g\nM1 d g 0 0 n l=1u w=1u\n.ends s$a\nX$1 d g s$a\n",
+            ("X$1.M1", 1.0, 1.0),
+        ),
+        (".param a$b=2u\nM1 d g 0 0 n l=a$b w=1u\n", ("M1", 2.0, 1.0)),
+        (
+            ".param a$b=2u\nM1 d g 0 0 n l='a$b*2' w=1u\n",
+            ("M1", 4.0, 1.0),
+        ),
+        (
+            ".param a$b=2u\nM1 d g 0 0 n l=a$b*2 w=1u\n",
+            ("M1", 4.0, 1.0),
+        ),
+        (".param a$=3u\nM1 d g 0 0 n l=a$ w=1u\n", ("M1", 3.0, 1.0)),
+        (
+            ".param a$b=2u c='a$b+1u'\nM1 d g 0 0 n l=c w=1u\n",
+            ("M1", 3.0, 1.0),
+        ),
+        // after a value: a comment
+        ("M1 d g 0 0 n l=1u$ w=9u\n", ("M1", 1.0, 100.0)),
+        ("M1 d g 0 0 n l='1u'$ w=9u\n", ("M1", 1.0, 100.0)),
+        ("M1 d g 0 0 n l=1u w=2u$X=3 $Y=4\n", ("M1", 1.0, 2.0)),
+        ("M1 d g 0 0 n l=1u w=2u $ w=9u\n", ("M1", 1.0, 2.0)),
+        (
+            ".param a=1u$ b=2u\nM1 d g 0 0 n l=a w=1u\n",
+            ("M1", 1.0, 1.0),
+        ),
+        // the other characters of a name
+        (
+            ".param _a=1u a_b=2u a.b=4u\nM1 d g 0 0 n l=_a w=a_b\n",
+            ("M1", 1.0, 2.0),
+        ),
+        (
+            ".param _a=1u a_b=2u a.b=4u\nM1 d g 0 0 n l=a.b w='a.b*2'\n",
+            ("M1", 4.0, 8.0),
+        ),
+    ] {
+        let rows = clean_sizes(&[("deck.sp", &format!("{IF_N}{text}"))]).await;
+        assert_eq!(rows, [(want.0.to_owned(), want.1, want.2)], "{text}");
+    }
+    // a name read after the comment is not defined
+    let text = format!("{IF_N}.param a=1u$ b=2u\nM1 d g 0 0 n l=b w=1u\n");
+    assert!(if_deck(&text).await.1[0].1.starts_with("error"), "{text}");
+}
+
+/// A word `//` starts a comment on every kind of line (decks `cm_slash_*`,
+/// `o_slash_*`)
+#[tokio::test]
+async fn slash_comments() {
+    for (text, want) in [
+        ("M1 d g 0 0 n l=1u w=2u // w=9u\n", ("M1", 1.0, 2.0)),
+        ("M1 d g 0 0 n l=1u // w=9u\n", ("M1", 1.0, 100.0)),
+        (
+            "// a comment line\nM1 d g 0 0 n l=1u w=2u\n",
+            ("M1", 1.0, 2.0),
+        ),
+        ("M1 d g 0 0 n l=1u w=2u //c\n", ("M1", 1.0, 2.0)),
+        (
+            ".param k=2u // k=9u\nM1 d g 0 0 n l=k w=2u\n",
+            ("M1", 2.0, 2.0),
+        ),
+        (
+            ".model q nmos level=54 // note\nM1 d g 0 0 q l=1u w=2u\n",
+            ("M1", 1.0, 2.0),
+        ),
+        (
+            ".subckt s d g // note\nM1 d g 0 0 n l=1u w=2u\n.ends // note\nX1 d g s // c\n",
+            ("X1.M1", 1.0, 2.0),
+        ),
+        // a comment line does not end the statement
+        ("M1 d g 0 0 n l=1u\n// note\n+ w=2u\n", ("M1", 1.0, 2.0)),
+        ("M1 d g 0 0 n l=1u // note\n+ w=2u\n", ("M1", 1.0, 2.0)),
+        // not in quotes
+        (
+            ".param s='a//b' k=2u\nM1 d g 0 0 n l=k w=2u\n",
+            ("M1", 2.0, 2.0),
+        ),
+    ] {
+        let rows = clean_sizes(&[("deck.sp", &format!("{IF_N}{text}"))]).await;
+        assert_eq!(rows, [(want.0.to_owned(), want.1, want.2)], "{text}");
+    }
+    // a path keeps its slashes
+    let rows = clean_sizes(&[
+        (
+            "deck.sp",
+            &format!("{IF_N}.inc './/a.inc'\nM1 d g 0 0 n l=k w=2u\n"),
+        ),
+        ("a.inc", ".param k=3u\n"),
+    ])
+    .await;
+    assert_eq!(rows, [("M1".to_owned(), 3.0, 2.0)]);
+}
+
+/// A comma separates the items after a value, on every kind of line (decks
+/// `pc_*`, `p_commas`)
+#[tokio::test]
+async fn commas_between_items() {
+    for (text, want) in [
+        (".param a=1u,b=2u\nM1 d g 0 0 n l=a w=b\n", (1.0, 2.0)),
+        (".param a=1u ,b=2u\nM1 d g 0 0 n l=a w=b\n", (1.0, 2.0)),
+        (".param a=1u , b=2u\nM1 d g 0 0 n l=a w=b\n", (1.0, 2.0)),
+        (".param a=1u,\n+ b=2u\nM1 d g 0 0 n l=a w=b\n", (1.0, 2.0)),
+        (".param a='1u',b='2u'\nM1 d g 0 0 n l=a w=b\n", (1.0, 2.0)),
+        (".param a=1u,b=2u,c=3u\nM1 d g 0 0 n l=a w=c\n", (1.0, 3.0)),
+        (
+            ".param a='1u*1',b='2u'\nM1 d g 0 0 n l='a' w='b'\n",
+            (1.0, 2.0),
+        ),
+        ("M1 d g 0 0 n l=1u,w=2u\n", (1.0, 2.0)),
+        (".option defl=1u,defw=2u\nM1 d g 0 0 n\n", (1.0, 2.0)),
+        (".option defl=1u , defw=2u\nM1 d g 0 0 n\n", (1.0, 2.0)),
+        (
+            ".model q nmos level=54,lmin=0\nM1 d g 0 0 q l=1u w=2u\n",
+            (1.0, 2.0),
+        ),
+        (
+            ".subckt s d g a=1u,b=2u\nM1 d g 0 0 n l=a w=b\n.ends\nX1 d g s\n",
+            (1.0, 2.0),
+        ),
+        (
+            ".subckt s d g a=9u b=9u\nM1 d g 0 0 n l=a w=b\n.ends\nX1 d g s a=1u,b=2u\n",
+            (1.0, 2.0),
+        ),
+    ] {
+        let rows = clean_sizes(&[("deck.sp", &format!("{IF_N}{text}"))]).await;
+        assert_eq!(rows.len(), 1, "{text}");
+        assert_eq!((rows[0].1, rows[0].2), want, "{text}");
+    }
+}
+
+/// A form feed is white space (deck `e_formfeed`). `.lib` goes on on `+` lines
+/// (deck `lib_cont`).
+#[tokio::test]
+async fn form_feed_and_library_lines() {
+    for text in [
+        "\u{c}\nM1 d g 0 0 n l=1u w=2u\n",
+        "M1 d g 0 0 n l=1u w=2u\n\u{c}\n",
+        "M1 d g 0 0 n\u{c}l=1u w=2u\n",
+    ] {
+        let rows = clean_sizes(&[("deck.sp", &format!("{IF_N}{text}"))]).await;
+        assert_eq!(rows, [("M1".to_owned(), 1.0, 2.0)], "{text:?}");
+    }
+    let lib = ".lib a\n.param k=3u\n.endl a\n";
+    for head in [
+        ".lib\n+ 'x.l'\n+ a\n",
+        ".lib 'x.l'\n+ a\n",
+        ".lib\n+ 'x.l' a\n",
+    ] {
+        let deck = format!("{IF_N}{head}M1 d g 0 0 n l=k w=2u\n");
+        let rows = clean_sizes(&[("deck.sp", &deck), ("x.l", lib)]).await;
+        assert_eq!(rows, [("M1".to_owned(), 3.0, 2.0)], "{head}");
+    }
+}
+
+/// The short forms of `.data`, and its rows with no `+` (decks `dat_rows_*`)
+#[tokio::test]
+async fn data_blocks() {
+    for (open, close) in [
+        (".data", ".enddata"),
+        (".da", ".enddata"),
+        (".dat", ".enddata"),
+        (".data", ".endd"),
+        (".data", ".endda"),
+        (".DATA", ".ENDDATA"),
+    ] {
+        let text = format!("{IF_N}{open} dd\n a b\n 1 2\n{close}\n{IF_M1}");
+        let rows = clean_sizes(&[("deck.sp", &text)]).await;
+        assert_eq!(rows, [("M1".to_owned(), 1.0, 1.0)], "{open} {close}");
+    }
+}
+
+/// An include is looked for in the folder of the file that includes it, then in
+/// the folder of the top file, then in the folders of `.option search`, in the
+/// order of the deck (decks `inc_nested_rel_cwd`, `lib_inc_rel_cwd`, `opt_search_*`,
+/// `search_option*`)
+#[tokio::test]
+async fn where_includes_are_found() {
+    let q = ".model q nmos level=54\n";
+    let m = "M1 d g 0 0 q l=k w=1u\n";
+    let k = |n: u32| format!(".param k={n}u\n");
+    // the folder of the file wins, then the folder of the top file
+    let own = clean_sizes(&[
+        ("deck.sp", &format!("* t\n{q}.inc 'sub/a.inc'\n{m}")),
+        ("sub/a.inc", ".inc 'b.inc'\n"),
+        ("sub/b.inc", &k(1)),
+        ("b.inc", &k(2)),
+    ])
+    .await;
+    assert_eq!(own, [("M1".to_owned(), 1.0, 1.0)]);
+    let top = clean_sizes(&[
+        ("deck.sp", &format!("* t\n{q}.inc 'sub/a.inc'\n{m}")),
+        ("sub/a.inc", ".inc 'b.inc'\n"),
+        ("b.inc", &k(2)),
+    ])
+    .await;
+    assert_eq!(top, [("M1".to_owned(), 2.0, 1.0)]);
+    let lib = clean_sizes(&[
+        ("deck.sp", &format!("* t\n{q}.lib 'sub/a.l' s\n{m}")),
+        ("sub/a.l", ".lib s\n.inc 'b.inc'\n.endl s\n"),
+        ("b.inc", &k(2)),
+    ])
+    .await;
+    assert_eq!(lib, [("M1".to_owned(), 2.0, 1.0)]);
+    // `.option search`
+    for (head, want) in [
+        (".option search='d1'\n.inc 'x.inc'\n", 1.0),
+        (".option search=d1\n.inc 'x.inc'\n", 1.0),
+        (".option search='./d1/'\n.inc 'x.inc'\n", 1.0),
+        (".option search='d1' search='d2'\n.inc 'x.inc'\n", 1.0),
+        (".option search='d2' search='d1'\n.inc 'x.inc'\n", 2.0),
+        (
+            ".option search='d2'\n.option search='d1'\n.inc 'x.inc'\n",
+            2.0,
+        ),
+        (".option search='d9' search='d2'\n.inc 'x.inc'\n", 2.0),
+        (".inc 'set.inc'\n.inc 'x.inc'\n", 1.0),
+        (
+            ".subckt z d g\n.option search='d1'\n.ends\n.inc 'x.inc'\n",
+            1.0,
+        ),
+        (".option search='d1'\n.lib 'y.l' s\n", 3.0),
+    ] {
+        let rows = clean_sizes(&[
+            ("deck.sp", &format!("* t\n{q}{head}{m}")),
+            ("set.inc", ".option search='d1'\n"),
+            ("d1/x.inc", &k(1)),
+            ("d2/x.inc", &k(2)),
+            ("d1/y.l", ".lib s\n.param k=3u\n.endl s\n"),
+        ])
+        .await;
+        assert_eq!(rows, [("M1".to_owned(), want, 1.0)], "{head}");
+    }
+    // the folder of the top file wins over a search folder
+    let rows = clean_sizes(&[
+        (
+            "deck.sp",
+            &format!("* t\n{q}.option search='d1'\n.inc 'x.inc'\n{m}"),
+        ),
+        ("x.inc", &k(5)),
+        ("d1/x.inc", &k(1)),
+    ])
+    .await;
+    assert_eq!(rows, [("M1".to_owned(), 5.0, 1.0)]);
+    // a sibling in the search folder
+    let rows = clean_sizes(&[
+        (
+            "deck.sp",
+            &format!("* t\n{q}.option search='d1'\n.inc 'x.inc'\n{m}"),
+        ),
+        ("d1/x.inc", ".inc 'sib.inc'\n"),
+        ("d1/sib.inc", &k(6)),
+    ])
+    .await;
+    assert_eq!(rows, [("M1".to_owned(), 6.0, 1.0)]);
+    // not found anywhere: the error of the include
+    let (_dir, parsed, files) = parse_deck(&[(
+        "deck.sp",
+        &format!("* t\n{q}.option search='d1'\n.inc 'none.inc'\n"),
+    )])
+    .await;
+    let (_, has_err) = files.build(parsed);
+    assert!(has_err);
+}
+
+/// A size option of 0 or below gives the default back, as the last plain number
+/// (decks `zd_*`, `zq_*`).
+#[tokio::test]
+async fn size_options_of_zero_and_below() {
+    let l2 = ".model n.1 nmos level=54 lmin=1e-9 lmax=2u wmin=1e-9 wmax=1\n\
+              .model n.2 nmos level=54 lmin=2u lmax=1 wmin=1e-9 wmax=1\n";
+    let line = "M1 d g 0 0 n w=1u\n";
+    for (head, want) in [
+        (".option defl=0\n", "n.2"),
+        (".option defl=-1u\n", "n.2"),
+        (".option defl=1u\n.option defl=0\n", "n.2"),
+        (".option defl=1u defl=-1u\n", "n.2"),
+        (".option defl=1u\n", "n.1"),
+        (".option defl=1u scale=10\n", "n.2"),
+        // the default of 100u, scaled
+        (".option defl=0 scale=1e-2\n", "n.1"),
+    ] {
+        let text = format!("* t\n{head}{l2}{line}");
+        assert_eq!(one_model(&text).await, want, "{head}");
+    }
+    let (l, w) = (100.0, 100.0);
+    for head in [".option defl=0 defw=0\n", ".option defl=-1u defw=-1u\n"] {
+        let text = format!("{IF_N}{head}M1 d g 0 0 n\n");
+        assert_eq!(one_size(&text).await, (l, w), "{head}");
+    }
+    for head in [
+        ".option scale=0\n",
+        ".option scale=-1\n",
+        ".option scale=2\n.option scale=0\n",
+        ".option scale=2 scale=-1\n",
+    ] {
+        let text = format!("{IF_N}{head}M1 d g 0 0 n l=1u w=1u\n");
+        assert_eq!(one_size(&text).await, (1.0, 1.0), "{head}");
+    }
+    let line = "M1 d g 0 0 n l=1u w=1u\n";
+    for head in [".option scalm=0\n", ".option scalm=-1\n"] {
+        let text = format!("* t\n{head}{l2}{line}");
+        assert_eq!(one_model(&text).await, "n.1", "{head}");
+    }
+    let bin = ".model n.1 nmos level=54 lmin=1e-3 lmax=2e-3 wmin=1e-9 wmax=1e3\n";
+    let text = format!("* t\n.option scalm=1e-3\n{bin}M1 d g 0 0 n l=1.5u w=1u\n");
+    assert_eq!(one_model(&text).await, "n.1");
+    let text = format!("* t\n.option scalm=1e-3 scalm=0\n{bin}M1 d g 0 0 n l=1.5u w=1u\n");
+    assert!(one_model(&text).await.starts_with("error"));
+    // a size on the line below 0 still stops
+    for text in [
+        format!("{IF_N}M1 d g 0 0 n l=-1u w=1u\n"),
+        format!("{IF_N}M1 d g 0 0 n l=1u w=-1u\n"),
+        format!("{IF_N}.option scale=-1\nM1 d g 0 0 n l=-1u w=1u\n"),
+    ] {
+        assert!(one_model(&text).await.starts_with("error"), "{text}");
+    }
+}
+
+/// `hertz` reads 0 in a value, as `time` does, and a condition cannot read it
+/// (decks `sv_hertz*`)
+#[tokio::test]
+async fn hertz_reads_zero() {
+    let text = format!("{IF_N}M1 d g 0 0 n l='hertz+1u' w=1u\n");
+    assert_eq!(one_size(&text).await, (1.0, 1.0));
+    let text = ".model n.1 nmos level=54 lmin='hertz+1e-9' lmax=1 wmin=1e-9 wmax=1\nM1 d g 0 0 n l=1u w=1u\n";
+    assert_eq!(one_model(&format!("* t\n{text}")).await, "n.1");
+    for head in [".if (hertz>1)\n", ".param h='hertz'\n.if (h>1)\n"] {
+        let text = format!("{IF_N}{head}{IF_M1}.else\n{IF_M2}.endif\n");
+        let (_, rows) = if_deck(&text).await;
+        assert_eq!(rows.len(), 1, "{head}: {rows:?}");
+        assert!(rows[0].1.starts_with("error"), "{head}: {rows:?}");
+    }
+}
+
+/// A level 72 bin with both `nfin*` and `wsheet*` limits reads both. A sheet bin
+/// needs a sheet width above 0 on the line. `.option scale` scales WSHEET
+/// (decks `h_*`, `hb_*`).
+#[tokio::test]
+async fn finfet_bins_of_both_kinds() {
+    let both = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u nfinmin=1 nfinmax=4 wsheetmin=1e-8 wsheetmax=1e-6\n\
+                .model f.2 nmos level=72 lmin=1e-8 lmax=1u nfinmin=4 nfinmax=9 wsheetmin=1e-8 wsheetmax=1e-6\n";
+    let other = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u nfinmin=1 nfinmax=4 wsheetmin=1e-8 wsheetmax=1e-7\n\
+                 .model f.2 nmos level=72 lmin=1e-8 lmax=1u nfinmin=1 nfinmax=4 wsheetmin=1e-7 wsheetmax=1e-6\n";
+    let mix = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u wsheetmin=1e-8 wsheetmax=1e-6\n\
+               .model f.2 nmos level=72 lmin=1e-8 lmax=1u nfinmin=1 nfinmax=9\n";
+    let fins = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u nfinmin=1 nfinmax=4\n";
+    let sheet = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u wsheetmin=1e-8 wsheetmax=1e-6\n";
+    let sheet4 = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u wsheetmin=1e-8 wsheetmax=1e-6 nsheetmin=3 nsheetmax=9\n";
+    let zero = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u wsheetmin=0 wsheetmax=1e-6\n";
+    let fin0 = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u nfinmin=0 nfinmax=4\n";
+    let six = ".model f.1 nmos level=72 lmin=1e-8 lmax=1u wmin=1e-3 wmax=1 nfinmin=1 nfinmax=4\n";
+    let scaled = ".model f.1 nmos level=72 lmin=1e-9 lmax=1e-3 wsheetmin=1e-9 wsheetmax=1e-7\n\
+                  .model f.2 nmos level=72 lmin=1e-9 lmax=1e-3 wsheetmin=1e-7 wsheetmax=1e-5\n";
+    for (head, bins, tail, want) in [
+        ("", both, "l=500n nfin=6 wsheet=2e-8", Some("f.2")),
+        ("", both, "l=500n wsheet=2e-8", Some("f.1")),
+        ("", both, "l=500n nfin=6", None),
+        ("", both, "l=500n", None),
+        ("", both, "l=500n w=2e-8", None),
+        ("", other, "l=500n nfin=2 wsheet=2e-7", Some("f.2")),
+        ("", other, "l=500n wsheet=2e-7", Some("f.2")),
+        ("", other, "l=500n nfin=2", None),
+        ("", mix, "l=500n nfin=2", Some("f.2")),
+        ("", mix, "l=500n wsheet=2e-8", Some("f.1")),
+        ("", mix, "l=500n nfin=2 wsheet=2e-8", Some("f.1")),
+        ("", fins, "l=500n wsheet=2e-8", Some("f.1")),
+        ("", sheet, "l=500n nfin=2 wsheet=2e-8", Some("f.1")),
+        ("", sheet4, "l=500n wsheet=2e-8 nsheet=1", Some("f.1")),
+        ("", sheet4, "l=500n wsheet=2e-8", Some("f.1")),
+        ("", zero, "l=500n", None),
+        ("", zero, "l=500n wsheet=0", None),
+        ("", fin0, "l=500n", Some("f.1")),
+        ("", fin0, "l=500n nfin=0", None),
+        ("", six, "l=500n w=1u nfin=2", Some("f.1")),
+        (
+            ".option scale=10\n",
+            scaled,
+            "l=500n wsheet=5e-8",
+            Some("f.2"),
+        ),
+    ] {
+        let text = format!("* t\n{head}{bins}M1 d g 0 0 f {tail}\n");
+        let got = one_model(&text).await;
+        match want {
+            Some(want) => assert_eq!(got, want, "{head}{bins}{tail}"),
+            None => assert!(got.starts_with("error"), "{head}{bins}{tail}: {got}"),
+        }
+    }
+}
+
+/// The values after `ic=` belong to it: they take no place of L or W (decks
+/// `lt_ic_*`)
+#[tokio::test]
+async fn values_after_ic() {
+    for (tail, l, w) in [
+        ("ic=1,1,1", 100.0, 100.0),
+        ("ic=1,1,1 l=1u w=3u", 1.0, 3.0),
+        ("l=1u ic=1,1,1 3u", 1.0, 100.0),
+        ("ic=1,1,1 1u 3u", 100.0, 100.0),
+        ("ic=1,2 1u 3u", 100.0, 100.0),
+        ("ic=1 1u 3u", 100.0, 100.0),
+        ("ic=1, 1, 1 l=1u", 1.0, 100.0),
+        ("l=1u ad=1p,3u", 1.0, 100.0),
+    ] {
+        let text = format!("{IF_N}M1 d g 0 0 n {tail}\n");
+        assert_eq!(one_size(&text).await, (l, w), "{tail}");
+    }
+}
+
+/// A `,` can end a `.param` or `.option` statement, and `.inc` goes on on a `+`
+/// line (decks `cc_*`, `in_over_plus`)
+#[tokio::test]
+async fn ends_of_statements() {
+    let text = format!("{IF_N}.param a=1u,\nM1 d g 0 0 n l=a w=1u\n");
+    assert_eq!(one_size(&text).await, (1.0, 1.0));
+    let text = format!("{IF_N}.option defl=1u,\nM1 d g 0 0 n w=1u\n");
+    assert_eq!(one_size(&text).await, (1.0, 1.0));
+    let rows = clean_sizes(&[
+        (
+            "deck.sp",
+            &format!("{IF_N}.inc\n+ 'a.inc'\nM1 d g 0 0 n l=k w=1u\n"),
+        ),
+        ("a.inc", ".param k=1u\n"),
+    ])
+    .await;
+    assert_eq!(rows, [("M1".to_owned(), 1.0, 1.0)]);
+}
+
+/// A `.lib <name>` line in a section is read over, and the first `.endl` ends the
+/// section (decks `ln_*`)
+#[tokio::test]
+async fn section_lines_in_a_section() {
+    for (library, call, l) in [
+        (".lib a\n.lib b\n.param k=1u\n.endl b\n.endl a\n", "a", 1.0),
+        (".lib a\n.lib b\n.param k=1u\n.endl b\n.endl a\n", "b", 1.0),
+        (
+            ".lib a\n.param k=1u\n.lib b\n.param k=2u\n.endl b\n.endl a\n",
+            "a",
+            2.0,
+        ),
+        (
+            ".lib a\n.lib 'x.l' b\n.lib b\n.param k=2u\n.endl b\n.endl a\n",
+            "a",
+            2.0,
+        ),
+        (
+            ".lib a\n.lib b\n.lib c\n.param k=1u\n.endl c\n.endl b\n.endl a\n",
+            "a",
+            1.0,
+        ),
+        (
+            ".lib a\n.param k=2u\n.lib b\n.lib c\n.param k=1u\n.endl c\n.endl b\n.endl a\n",
+            "c",
+            1.0,
+        ),
+        // the first `.endl` ends the section
+        (
+            ".lib a\n.lib b\n.param k=1u\n.endl b\n.param k=3u\n.endl a\n",
+            "a",
+            1.0,
+        ),
+        (
+            ".lib a\n.param k=1u\n.endl zzz\n.param k=5u\n.lib c\n.endl c\n",
+            "a",
+            1.0,
+        ),
+        (".lib a\n.param k=1u\n.endl a\n.endl a\n", "a", 1.0),
+        (
+            ".LIB B $ note\n.param k=1u\n.LIB A $ note\n.ENDL\n",
+            "b",
+            1.0,
+        ),
+    ] {
+        let rows = clean_sizes(&[
+            (
+                "deck.sp",
+                &format!("{IF_N}.lib 'x.l' {call}\nM1 d g 0 0 n l=k w=1u\n"),
+            ),
+            ("x.l", library),
+        ])
+        .await;
+        assert_eq!(rows, [("M1".to_owned(), l, 1.0)], "{library}");
     }
 }

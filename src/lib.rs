@@ -111,6 +111,36 @@ pub struct AST<'s> {
     pub general: Vec<ast::General<'s>>,
     pub data: Vec<ast::Data<'s>>,
     pub unknwon: Vec<ast::Unknwon<'s>>,
+    /// The `.if` blocks of this level, in netlist order. The statements in
+    /// their branches are not in the lists above.
+    pub cond: Vec<CondBlock<'s>>,
+}
+
+/// An `.if` ... `.endif` block. Which branch is active depends on the instance
+/// of the level that holds it (see `models`).
+#[derive(Debug, Clone)]
+pub struct CondBlock<'s> {
+    /// How many items of the lists of the level come before the block: its
+    /// place in the netlist order
+    pub param_at: usize,
+    pub func_at: usize,
+    pub model_at: usize,
+    pub instance_at: usize,
+    pub option_at: usize,
+    pub unknwon_at: usize,
+    pub branches: Vec<CondBranch<'s>>,
+    /// What the row of an error in a condition of this block refers to. A row
+    /// names a line of the netlist, and this one has no element.
+    pub line: instance::Instance<'s>,
+}
+
+/// A branch of an [`CondBlock`]: `.if`, `.elseif` or `.else`
+#[derive(Debug, Clone, Default)]
+pub struct CondBranch<'s> {
+    /// The text in the parentheses; `None` for `.else`
+    pub cond: Option<Cow<'s, str>>,
+    /// The statements of the branch, as those of a level
+    pub ast: AST<'s>,
 }
 
 // #[cfg(feature = "py")]
@@ -202,6 +232,132 @@ impl Reporter {
     }
 }
 
+/// Where [`ast::ASTBuilder::build`] adds statements: a level, or the current
+/// branch of the innermost open `.if` block of that level. A block can open in
+/// one file and close in another, so this is passed through the includes. Each
+/// `.subckt` body has its own.
+struct Target<'a, 's> {
+    level: &'a mut AST<'s>,
+    /// the open blocks, the outermost first
+    open: Vec<CondBlock<'s>>,
+    /// the blocks that are nested too deep, and so not kept
+    deep: usize,
+}
+
+impl<'a, 's> Target<'a, 's> {
+    fn new(level: &'a mut AST<'s>) -> Self {
+        Self {
+            level,
+            open: Vec::new(),
+            deep: 0,
+        }
+    }
+
+    /// The AST that takes the statements now
+    fn current(&mut self) -> &mut AST<'s> {
+        match self.open.last_mut() {
+            Some(block) => &mut block.branches.last_mut().expect("a branch").ast,
+            None => self.level,
+        }
+    }
+
+    /// Reads an `.if`, `.elseif`, `.else` or `.endif` line. `depth`: the
+    /// number of `.subckt` bodies and `.if` blocks around this level.
+    fn line(
+        &mut self,
+        line: &ast::CondLine,
+        pos: Option<Pos>,
+        depth: usize,
+        reporter: &mut Reporter,
+        file: &'s str,
+        file_id: &FileId,
+    ) {
+        use builder::Builder as _;
+        let mut report = |e: err::ParseErrorInner| reporter.report(&e.with(pos), file_id, file);
+        match line {
+            ast::CondLine::If(_)
+                if self.deep > 0 || depth + self.open.len() >= parser::MAX_NESTING =>
+            {
+                if self.deep == 0 {
+                    report(err::ParseErrorInner::NestingTooDeep {
+                        keyword: "if",
+                        subckt: "(the block)".to_owned(),
+                        limit: parser::MAX_NESTING,
+                    });
+                }
+                self.deep += 1;
+            }
+            ast::CondLine::If(cond) => {
+                let at = self.current();
+                let block = CondBlock {
+                    param_at: at.param.len(),
+                    func_at: at.param_func.len(),
+                    model_at: at.model.len(),
+                    instance_at: at.instance.len(),
+                    option_at: at.option.len(),
+                    unknwon_at: at.unknwon.len(),
+                    branches: vec![CondBranch {
+                        cond: Some(cond.build(file)),
+                        ast: AST::default(),
+                    }],
+                    line: instance::Instance {
+                        name: Cow::Borrowed("if"),
+                        ctx: instance::InstanceCtx::Unknown {
+                            r#type: b'.',
+                            nodes: Vec::new(),
+                            params: Vec::new(),
+                        },
+                    },
+                };
+                self.open.push(block);
+            }
+            // (the lines inside a block that is not kept)
+            ast::CondLine::EndIf if self.deep > 0 => self.deep -= 1,
+            _ if self.deep > 0 => {}
+            ast::CondLine::EndIf => match self.open.pop() {
+                Some(block) => self.current().cond.push(block),
+                None => report(err::ParseErrorInner::StrayCond { keyword: "endif" }),
+            },
+            ast::CondLine::ElseIf(_) | ast::CondLine::Else => {
+                let (keyword, cond) = match line {
+                    ast::CondLine::ElseIf(cond) => ("elseif", Some(cond.build(file))),
+                    _ => ("else", None),
+                };
+                match self.open.last_mut() {
+                    None => report(err::ParseErrorInner::StrayCond { keyword }),
+                    Some(block) if block.branches.last().is_some_and(|b| b.cond.is_none()) => {
+                        report(err::ParseErrorInner::AfterElse { keyword })
+                    }
+                    Some(block) => block.branches.push(CondBranch {
+                        cond,
+                        ast: AST::default(),
+                    }),
+                }
+            }
+        }
+    }
+
+    /// The end of the level (or a line that cannot be in a block, at `pos`):
+    /// the blocks still open are errors, and their statements stay in the
+    /// netlist as the blocks are read so far.
+    fn close_all(
+        &mut self,
+        pos: Option<Pos>,
+        reporter: &mut Reporter,
+        file: &str,
+        file_id: &FileId,
+    ) {
+        if !self.open.is_empty() || self.deep > 0 {
+            let e = err::ParseErrorInner::MissingEndif.with(pos);
+            reporter.report(&e, file_id, file);
+        }
+        self.deep = 0;
+        while let Some(block) = self.open.pop() {
+            self.current().cond.push(block);
+        }
+    }
+}
+
 /// What [`ast::ASTBuilder::build`] reads from the whole parse, and what it
 /// reports to.
 struct BuildCtx<'s, 'p> {
@@ -230,7 +386,7 @@ impl ast::ASTBuilder {
     /// recursion uses little stack.
     fn build<'s>(
         &self,
-        ast: &mut AST<'s>,
+        to: &mut Target<'_, 's>,
         cx: &mut BuildCtx<'s, '_>,
         file_id: &FileId,
         parsed_id: ParsedId,
@@ -248,7 +404,10 @@ impl ast::ASTBuilder {
                 continue;
             }
             match seg {
+                // (the statements of a block that is nested too deep)
+                ast::Segment::Local(_) | ast::Segment::Include { .. } if to.deep > 0 => {}
                 ast::Segment::Local(local_ast) => {
+                    let depth = depth + to.open.len();
                     for s in &local_ast.subckt {
                         if depth >= parser::MAX_NESTING {
                             let err = err::ParseErrorInner::NestingTooDeep {
@@ -263,10 +422,25 @@ impl ast::ASTBuilder {
                             cx.reporter.report(&err.with(Some(pos)), file_id, file);
                             continue;
                         }
-                        let child = new_subckt(&mut ast.subckt, s, file, &mut cx.reporter, file_id);
-                        s.ast.build(child, cx, file_id, parsed_id, depth + 1);
+                        let child = new_subckt(
+                            &mut to.current().subckt,
+                            s,
+                            file,
+                            &mut cx.reporter,
+                            file_id,
+                        );
+                        let mut body = Target::new(child);
+                        s.ast.build(&mut body, cx, file_id, parsed_id, depth + 1);
+                        let end = Some(Pos {
+                            start: s.name.start,
+                            line_num: s.name.line_num,
+                        });
+                        body.close_all(end, &mut cx.reporter, file, file_id);
                     }
-                    build_statements(local_ast, ast, &mut cx.reporter, file, file_id);
+                    build_statements(local_ast, to.current(), &mut cx.reporter, file, file_id);
+                }
+                ast::Segment::Cond { line, pos } => {
+                    to.line(line, *pos, depth, &mut cx.reporter, file, file_id);
                 }
                 ast::Segment::Include { res, pos } => match res.get() {
                     Some(Ok(id)) => {
@@ -287,7 +461,7 @@ impl ast::ASTBuilder {
                         }
                         cx.reading.push((id.0, None));
                         let (file_id, _ast) = &cx.parsed_inner[id.0];
-                        _ast.build(ast, cx, file_id, *id, depth);
+                        _ast.build(to, cx, file_id, *id, depth);
                         cx.reading.pop();
                     }
                     Some(Err(e)) => cx.reporter.report(e, file_id, file),
@@ -300,7 +474,10 @@ impl ast::ASTBuilder {
                         cx.reporter.report(&e, file_id, file);
                     }
                 },
-                ast::Segment::Alter { stmt, .. } => {
+                ast::Segment::Alter { stmt, pos, .. } => {
+                    // (HSPICE stops at an `.alter` line in an `.if` block)
+                    to.close_all(*pos, &mut cx.reporter, file, file_id);
+                    let ast = to.current();
                     ast.alter_runs += 1;
                     if !after_alter {
                         after_alter = true;
@@ -399,11 +576,21 @@ impl Files {
             reporter: Reporter::default(),
             reading: Vec::new(),
         };
+        let mut to = Target::new(&mut ast);
+        let mut last = None;
         for top_id in parsed.top_ids {
             let (file_id, _ast) = &parsed.inner[top_id.0];
             cx.reading.push((top_id.0, None));
-            _ast.build(&mut ast, &mut cx, file_id, top_id, 0);
+            _ast.build(&mut to, &mut cx, file_id, top_id, 0);
             cx.reading.pop();
+            last = Some((top_id, file_id));
+        }
+        if let Some((top_id, file_id)) = last {
+            let line = parsed.inner[top_id.0].1.after_end.map(|end| Pos {
+                start: 0,
+                line_num: end.line,
+            });
+            to.close_all(line, &mut cx.reporter, &self.inner[top_id.0], file_id);
         }
         (ast, cx.reporter.finish())
     }

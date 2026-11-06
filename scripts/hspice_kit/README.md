@@ -62,7 +62,9 @@ What HSPICE answered (each is a deck of this kit or a probe case):
    named on an instance line (`q_nonnumeric`, `q_two_dots_*`, `q_bin_direct*`).
    A bin looked at must set its four limits (`q_incomplete_*`, `q_mc_*`).
 7. L and W may be the first two values after the model name: numbers, names of
-   parameters or quoted expressions (`q_positional*`).
+   parameters or quoted expressions (`q_positional*`). HSPICE assigns the plain
+   numbers first and then the expressions, each in the order of the line, and the
+   last one stays.
 8. `**` and `^` associate to the left, `0**y` is 0, a negative base takes the
    integer part of `y`, and `sqrt` and `log` of a negative number give the
    negative of the result for its absolute value (`q_expr*`). Scale factors go by
@@ -81,11 +83,13 @@ What HSPICE answered (each is a deck of this kit or a probe case):
 11. Quotes in a group stop HSPICE (`q_group_quotes`, `q_quote_in_group`), but not in
     `agauss`, `gauss`, `aunif`, `unif`, `limit` and `str`, when the call is the whole
     value (`q_stat_quotes*`, `q_str_quotes`). A line inside quotes must be a `+` line
-    (`q_quoted_*`). `.temp` takes no group (`q_temp_*`). A value in parentheses does
-    not go on on a `+` line of a MOSFET line (`q_mos_group_lines`).
+    (`q_quoted_*`). `.temp` takes no group (`q_temp_*`). On a MOSFET line, parentheses
+    only separate words, also over a `+` line (`q_mos_group_lines`).
 
-`golden/NOTES.md` ("Probes for the merge of the two parser branches") lists more
-forms, also those on which netlist-db is known to differ.
+`golden/NOTES.md` ("Probes for the merge of the two parser branches" and
+"Comparison rounds with HSPICE as the reference") lists more forms, also those on
+which netlist-db is known to differ. `rounds/` holds the generators of those
+rounds.
 
 Known gaps, reported by `compare_hspice.py` but not failing it:
 - HSPICE evaluates the limits of each bin in the instance of the first MOSFET
@@ -98,9 +102,6 @@ Known gaps, reported by `compare_hspice.py` but not failing it:
   reaches at most one MOSFET per bin, and none for a bin whose limits are numbers
   (`grep -iE '(lmin|lmax|wmin|wmax) *= *[^0-9.+ -]' FILES` lists the others). On
   such a deck HSPICE can also stop.
-- A value in parentheses over a `+` line of a MOSFET line (`q_mos_group_lines`):
-  HSPICE reads a part of it. netlist-db reports an error, so it gives no wrong
-  value.
 
 Known gaps not in this kit:
 - a definition instantiated inside itself: HSPICE stops. netlist-db skips that
@@ -111,8 +112,6 @@ Known gaps not in this kit:
 - `m` on an X line: HSPICE computes it at the level of the line, netlist-db in
   the new instance. This can change a result only if an expression reads `m`;
 - `20db`: HSPICE gives 9.99999907, netlist-db 10.
-- `OFF` after a `key=value` on a MOSFET line (`M1 d g 0 0 nch l=2u w=1u OFF`):
-  HSPICE runs it. netlist-db reports an error and does not count that MOSFET;
 - `M1 d g 0 0 nch l=max(1u,2u) w=1u`: HSPICE stops, netlist-db reads L=2u.
 
 ## On the HSPICE machine

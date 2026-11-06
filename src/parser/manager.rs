@@ -1,13 +1,18 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
+    mem,
     path::{Path, PathBuf},
     sync::{Arc, Mutex as StdMutex},
 };
 use tokio::sync::{Mutex, OnceCell, oneshot};
 
 use super::ParseOptions;
-use crate::{ast::ASTBuilder, span::FileStorage};
+use crate::{
+    ast::ASTBuilder,
+    err::ParseError,
+    span::{FileStorage, ParsedId, Pos},
+};
 
 #[derive(Debug)]
 pub struct ParseManager {
@@ -28,6 +33,23 @@ pub struct ParseManager {
     lib_override_matched: Vec<AtomicBool>,
     /// `ParseOptions::skip_prot`
     skip_prot: bool,
+    /// Where a relative include is looked for, after the folder of the file
+    /// that includes it: the folders of the top files, then the working folder
+    pub(super) roots: Vec<PathBuf>,
+    /// The includes not found so far, which wait for all of `.option search`
+    deferred: StdMutex<Vec<Include>>,
+}
+
+/// An `.inc` or `.lib` line whose file is to be read
+#[derive(Debug)]
+pub(super) struct Include {
+    /// the name on the line
+    pub(super) file_name: PathBuf,
+    /// the path of the file
+    pub(super) path: PathBuf,
+    pub(super) section: Option<String>,
+    pub(super) pos: Option<Pos>,
+    pub(super) res: Arc<std::sync::OnceLock<Result<ParsedId, ParseError>>>,
 }
 
 pub(super) type SharedText = Result<Arc<(String, Option<u32>)>, (std::io::ErrorKind, String)>;
@@ -53,11 +75,14 @@ impl ParseManager {
     /// A manager with the default options.
     #[cfg(test)]
     pub(super) fn new() -> (Arc<Self>, oneshot::Receiver<()>) {
-        Self::with_options(&ParseOptions::default())
+        Self::with_options(&ParseOptions::default(), Vec::new())
     }
 
-    /// A manager whose parse uses `opts`.
-    pub(super) fn with_options(opts: &ParseOptions) -> (Arc<Self>, oneshot::Receiver<()>) {
+    /// A manager whose parse uses `opts`, with the folders `roots` for includes.
+    pub(super) fn with_options(
+        opts: &ParseOptions,
+        roots: Vec<PathBuf>,
+    ) -> (Arc<Self>, oneshot::Receiver<()>) {
         let (tx, done_rx) = oneshot::channel();
         let lib_override = opts
             .lib_override
@@ -83,6 +108,8 @@ impl ParseManager {
                 lib_override,
                 lib_override_matched,
                 skip_prot: opts.skip_prot,
+                roots,
+                deferred: StdMutex::new(Vec::new()),
             }),
             done_rx,
         )
@@ -91,6 +118,35 @@ impl ParseManager {
     /// `ParseOptions::skip_prot`
     pub(super) fn skip_prot(&self) -> bool {
         self.skip_prot
+    }
+
+    /// Keeps `include`, whose file is not found so far.
+    pub(super) fn defer(&self, include: Include) {
+        self.deferred
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(include);
+    }
+
+    /// The includes kept by [`ParseManager::defer`]
+    pub(super) fn take_deferred(&self) -> Vec<Include> {
+        mem::take(
+            &mut *self
+                .deferred
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+
+    /// A new signal for [`ParseManager::wait`], for work that starts after the
+    /// count reached zero. The caller holds a guard while it starts this work.
+    pub(super) fn rearm(&self) -> oneshot::Receiver<()> {
+        let (tx, done_rx) = oneshot::channel();
+        *self
+            .done_tx
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx);
+        done_rx
     }
 
     /// Register one unit of work, released when the guard is dropped.
