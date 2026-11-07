@@ -1,4 +1,4 @@
-//! Plan Task 13a: each golden deck that HSPICE rejects gives a load Error,
+//! Each golden deck that HSPICE rejects gives a load Error,
 //! except the cases that `golden/NOTES.md` lists under "Known
 //! differences", and the load checks of forms that HSPICE rejects give no
 //! Error on a deck that HSPICE runs.

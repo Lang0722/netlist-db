@@ -1,5 +1,5 @@
 //! The Python module `netlist_db.netlist_db`: a loaded netlist and its
-//! queries (plan Task 11). Each query returns a JSON string, which
+//! queries. Each query returns a JSON string, which
 //! `netlist_db/__init__.py` turns into a `dict`. A query error is a JSON
 //! object `{"error": {"kind", "message", "suggestions"}}`, never an
 //! exception (a panic, which is a bug, is the kind `internal`); only `load`

@@ -826,7 +826,7 @@ fn rcl_order() {
     assert_eq!(expr(rcl(&x).0), "lmod");
     assert!(rcl_positional(&x).is_empty());
     // A first token with a character that model names do not have, and
-    // then a value: an error, as before plan Task 6a-P (it gave the
+    // then a value: an error (a past version gave the
     // expression `rmod-1` as the value and tc1=2k, with no error). An
     // expression value before tc1 must be in quotes.
     let bad = |element: &str, token: &str| {

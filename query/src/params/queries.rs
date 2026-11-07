@@ -734,7 +734,7 @@ impl Netlist {
                 ));
             }
         }
-        // the parts of the source have the plan's names, whatever the
+        // the parts of the source have fixed names, whatever the
         // deck's spelling (`DC 1`)
         for it in &mut items {
             for (name, sym) in [("dc", dc), ("ac", ac), ("acphase", acphase)] {
@@ -1055,7 +1055,7 @@ impl Netlist {
                 ),
             ),
         }
-        // the value has the plan's name, whatever the deck's spelling of
+        // the value has a fixed name, whatever the deck's spelling of
         // `r=` or of a `.param R`
         for it in &mut items {
             if it.sym.is_some() && it.sym == ksym {

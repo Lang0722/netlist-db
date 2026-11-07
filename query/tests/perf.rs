@@ -1,4 +1,4 @@
-//! The speed and memory gate (plan Task 13). Release only, run on purpose:
+//! The speed and memory gate. Release only, run on purpose:
 //!
 //! ```sh
 //! timeout 180 cargo test --release -p netlist-query --test perf -- --ignored --test-threads=1 --nocapture
@@ -169,7 +169,7 @@ fn perf_gate() {
     ] {
         assert!(t < Duration::from_millis(10), "{what} {t:?}");
     }
-    // the plan's gate: one more level (10x the instances, about 10% more
+    // the gate: one more level (10x the instances, about 10% more
     // lines) needs less than 1.3x the memory
     assert!(
         (ten_rss as f64) < 1.3 * base_rss as f64,

@@ -87,7 +87,7 @@ fn adv(d: usize, c: usize, body: bool) -> String {
 }
 
 /// One `resolve_element` call costs work linear in the number of
-/// `.param` functions, calls and definitions (plan Task 8 close-out):
+/// `.param` functions, calls and definitions:
 /// doubling the deck at most about doubles the work, where a scan of
 /// all functions at each call, or a copy of the list of the subckts
 /// that define a function at each call, would make it 4 times as much.

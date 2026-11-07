@@ -1,5 +1,9 @@
 # HSPICE golden corpus: findings
 
+Labels such as `Task 8`, `6a-P` and `8b-G` name the steps of the build plan of
+the query tool. The plan is no longer in the tree. To read it, run
+`git show 214b481:docs/superpowers/plans/2026-10-31-llm-netlist-query.md`.
+
 Oracle: HSPICE P-2019.06-SP1-1 (win64) on the Parallels VM "Windows 11",
 runs from 2026-10-31 to 2026-11-01. Each `cases/<case>/` holds `deck.sp`
 (+ aux files), the exact HSPICE listing `hspice.lis` (CR stripped), and

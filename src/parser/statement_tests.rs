@@ -42,7 +42,7 @@ fn texts<'a>(file: &'a str, spans: &[Span]) -> Vec<&'a str> {
 
 #[tokio::test]
 async fn param_function_parsed() {
-    // The plan's example: one function and one parameter.
+    // One function and one parameter.
     let (parsed, files) = parse_text("param_func_one", ".param f(a,b)='a*b' g=2\n").await;
     assert!(error_msgs(&parsed).is_empty(), "{:?}", error_msgs(&parsed));
     let file = top_text(&parsed, &files);

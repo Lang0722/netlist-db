@@ -1,5 +1,5 @@
 //! Load checks for forms that HSPICE rejects and that parameter resolution
-//! otherwise finds only when a query reaches them (plan Task 13a). Each
+//! otherwise finds only when a query reaches them. Each
 //! check reads each line once. An `L` line looks its model card up once
 //! for each definition and pair of words, so the cost is linear in the
 //! input; only an R line whose value names a model card (a form that

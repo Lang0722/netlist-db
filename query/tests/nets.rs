@@ -1,4 +1,4 @@
-//! Connectivity: `net_info` and `trace_net` (plan Task 9).
+//! Connectivity: `net_info` and `trace_net`.
 
 use netlist_query::{LoadOptions, NetInfo, NetView, Netlist, Page, QueryError, TraceDir};
 use std::path::{Path, PathBuf};
@@ -429,7 +429,7 @@ fn golden_angle_names() {
 #[test]
 fn skipped_lines_make_nets_incomplete() {
     // `DELAY` lines are skipped with a load Error: the nets of their
-    // definition can have pins that are not listed (review of Task 9)
+    // definition can have pins that are not listed
     let (_d, net) = load_text(
         "delay",
         "* delay\ng1 o1 0 delay in 0 td=1n\nv1 in 0 1\nvsense n2 0 0\nr1 o1 0 1\n.end\n",

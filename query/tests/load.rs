@@ -1,4 +1,4 @@
-//! Load, summary and diagnostics (plan Task 6).
+//! Load, summary and diagnostics.
 
 use netlist_query::{
     Diagnostic, Level, LibOverride, LoadError, LoadOptions, Netlist, Page, QueryError, TitleLine,

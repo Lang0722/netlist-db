@@ -134,7 +134,7 @@ enum Word {
     Name,
     /// A name that starts with a digit: such a word that is not a number
     /// (`2n7002`), or a number with other letters after its scale
-    /// (`5vnmos`, `33nmos`, `2umos`, `10pF`; plan rule `digit_first_model`,
+    /// (`5vnmos`, `33nmos`, `2umos`, `10pF`, see
     /// `netlist_expr::exact_number`). HSPICE rejects it as a model name
     /// (golden `mos_digit_model`).
     DigitFirst,

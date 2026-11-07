@@ -1,4 +1,4 @@
-"""The MCP tools, called in process (plan Task 12)."""
+"""The MCP tools, called in process."""
 
 import asyncio
 import json

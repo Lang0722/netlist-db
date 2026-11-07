@@ -460,17 +460,17 @@ async fn test_top() {
 #[cfg(test)]
 mod recover_tests;
 
-/// Statements and parse options (Task 5 of the plan): `.param` functions,
+/// Statements and parse options: `.param` functions,
 /// `.global`, `.prot` regions, `.alter`, the title line, `.lib` overrides
 /// and analysis commands.
 #[cfg(test)]
 mod statement_tests;
 
-/// Follow-ups of Task 5a (5a-P): `.lib` override triples, `.endl` in
+/// `.lib` override triples, `.endl` in
 /// comments, deep `.subckt` nesting, `.macro`/`.eom`, and the title line.
 #[cfg(test)]
 mod follow_up_tests;
 
-/// Task 6a-P: the lines after `.end`, and files that are not valid UTF-8.
+/// The lines after `.end`, and files that are not valid UTF-8.
 #[cfg(test)]
 mod end_and_utf8_tests;

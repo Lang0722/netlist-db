@@ -1,4 +1,4 @@
-//! Hierarchy, counts, subcircuit queries and instance paths (plan Task 7).
+//! Hierarchy, counts, subcircuit queries and instance paths.
 
 use netlist_query::{
     ChildCall, Diagnostic, ElementInfo, Level, LoadOptions, Netlist, Page, QueryError, SubcktRow,
@@ -275,7 +275,7 @@ fn golden_totals_all_cases() {
             continue;
         }
         // HSPICE counts the parasitic R and C of an included DSPF
-        // (`dspf_included`); the summary gives them apart (Task 10)
+        // (`dspf_included`); the summary gives them apart
         for (kind, n) in s.expanded_parasitics.clone().unwrap_or_default() {
             *got.entry(kind).or_default() += n;
         }
@@ -2326,7 +2326,7 @@ fn golden_duplicate_element() {
     let rc = info(&net, "x1.xq.rc");
     assert_eq!(rc.def, "cell");
     // `x1` and `xq` both name two lines: one caveat, with the count
-    // (plan Task 7a: one caveat for each kind)
+    // (one caveat for each kind)
     let dup_caveats: Vec<&String> = rc
         .caveats
         .iter()

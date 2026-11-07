@@ -1,4 +1,4 @@
-"""The Python API (plan Task 11), on the golden cases."""
+"""The Python API, on the golden cases."""
 
 import json
 import pathlib

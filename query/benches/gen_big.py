@@ -1,4 +1,4 @@
-"""Write the decks of the speed and memory gate (plan Task 13).
+"""Write the decks of the speed and memory gate.
 
     python3 gen_big.py OUT.sp           1,000 cells x 102 devices; each cell
                                         called 10 times at the top level:

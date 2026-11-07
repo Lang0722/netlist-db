@@ -1,4 +1,4 @@
-//! Parameter resolution (plan Task 8), checked against the HSPICE golden
+//! Parameter resolution, checked against the HSPICE golden
 //! corpus (`golden/cases`) and pinned on small decks.
 
 use netlist_query::{
@@ -915,7 +915,7 @@ fn scale_dtemp_and_duplicate_caveats() {
     );
 }
 
-/// The Task 8 forms that HSPICE was not run on (golden/NOTES.md,
+/// The parameter forms that HSPICE was not run on (golden/NOTES.md,
 /// "Choices not probed"): a function that calls itself, a statistical
 /// function in an `X` line override, a `.model` card in a subckt, a third
 /// number after a name value, several temperatures, a chain of more than
@@ -1317,7 +1317,7 @@ fn top_nested_scopes() {
     assert_eq!(k.chain[0].scope, "(outer)");
 }
 
-/// The 1,000-cell × 102-device × 10-instance deck of the plan: one
+/// The 1,000-cell × 102-device × 10-instance deck: one
 /// `resolve_element` answers in < 10 ms (release build).
 #[test]
 #[ignore = "timing: run with --release -- --ignored"]
@@ -1829,7 +1829,7 @@ v9 9 0 PWL(0 '0.3
     assert_eq!(net.summary().errors, 0);
     assert_eq!(value(&net, "rp", "r"), 4000.0);
     let net = golden("unquoted_space");
-    // HSPICE rejects the deck: `rc2` names `c2` (Task 13a)
+    // HSPICE rejects the deck: `rc2` names `c2`
     assert_eq!(error_lines(&net, "undefined_param"), ["deck.sp:10"]);
     assert_eq!(net.summary().errors, 1);
     assert_eq!(value(&net, "rb2", "r"), 2000.0);

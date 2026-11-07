@@ -110,9 +110,8 @@ impl<'s> InstanceCtx<'s> {
 ///
 /// A name that starts with a digit is an error in each place where a model
 /// name can be: a word such as `2n7002`, and a number with other letters
-/// after its scale (`5vnmos`, `33nmos`, `2umos`: plan rule
-/// `digit_first_model`; HSPICE rejects such a model name, golden
-/// `mos_digit_model`). One token alone stays the value, read as HSPICE
+/// after its scale (`5vnmos`, `33nmos`, `2umos`: HSPICE rejects such a model
+/// name, golden `mos_digit_model`). One token alone stays the value, read as HSPICE
 /// reads a number (`1mohm` = 1e-3, golden `units2`).
 ///
 /// The numbers after the value are [`RCL_POSITIONAL`] (`tc1`, `tc2`; golden

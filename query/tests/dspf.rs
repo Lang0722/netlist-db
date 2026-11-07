@@ -1,4 +1,4 @@
-//! DSPF files: the included form and `.option sim_dspf` (plan Task 10).
+//! DSPF files: the included form and `.option sim_dspf`.
 
 use netlist_query::{
     Diagnostic, LoadOptions, NetInfo, NetView, Netlist, Page, Parasitics, TraceDir,

@@ -1,4 +1,4 @@
-//! Parameter resolution (plan Task 8): the value of a parameter as seen from
+//! Parameter resolution: the value of a parameter as seen from
 //! an instance path, under `.option parhier`, with the chain of the
 //! definitions that gave it.
 //!

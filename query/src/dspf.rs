@@ -1,4 +1,4 @@
-//! DSPF parasitic files (plan Task 10, spec 6.1a).
+//! DSPF parasitic files (spec 6.1a).
 //!
 //! A DSPF is SPICE text with structured `*|` comment lines. It arrives in
 //! two ways:
