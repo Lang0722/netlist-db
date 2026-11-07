@@ -44,7 +44,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
-      - run: cargo check --all-features
+      - run: cargo check --all-features -p netlist-db -p netlist-query -p netlist-expr
 
   # Run tests.
   unit_test:
@@ -62,7 +62,7 @@ jobs:
       - name: Build
         run: cargo build --verbose
       - name: Run Tests
-        run: cargo test --verbose --release
+        run: cargo test --verbose --release -p netlist-db -p netlist-query -p netlist-expr
   # Checks code style.
   clippy:
     needs: check
@@ -76,35 +76,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           components: clippy
-      - run: cargo clippy --all-features
-  # examples:
-  #   needs: check
-  #   name: Run Examples
-  #   runs-on: ubuntu-latest
-  #   # env:
-  #     # RUSTFLAGS: "-D warnings -A clippy::todo"
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: ${{ env.RUST_VERSION }}
-  #         components: clippy
-  #     - run: cargo run --example parser --release -- tests/top.sp
-  regression:
-    needs: [unit_test, clippy]
-    name: Regression
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-D warnings"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          components: rustfmt
-      - name: Run Regression
-        # https://www.reddit.com/r/git/comments/1ecplap/how_to_get_the_head_commit_hash_of_a_pr_in_github/#:~:text=If%20you%20want%20to%20get,head.
-        run: echo "TODO ${{ github.event.pull_request.head.sha }}"
+      - run: cargo clippy --all-features -p netlist-db -p netlist-query -p netlist-expr
   # Compute code coverage
   codecov:
     needs: [unit_test, clippy]
@@ -119,7 +91,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-tarpaulin
-      - run: cargo tarpaulin --verbose --release --lib --examples --workspace --exclude liberty-macros --exclude-files dev/* --out xml html --output-dir target/codecov
+      - run: cargo tarpaulin --verbose --release --lib --examples --workspace --exclude netlist-macros --exclude-files dev/* --out xml html --output-dir target/codecov
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v4
         with:

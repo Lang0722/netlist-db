@@ -554,7 +554,7 @@ async fn data_file_quotes_stripped() {
             panic!("{quote}: {:?}", ast.data[0].values);
         };
         assert_eq!(data_files.files[0].file, "a.txt", "{quote}");
-        assert_eq!(data_files.out.as_deref(), Some("o.txt"), "{quote}");
+        assert_eq!(data_files.out, Some("o.txt"), "{quote}");
     }
 }
 

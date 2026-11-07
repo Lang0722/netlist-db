@@ -34,14 +34,14 @@ use netlist_db::{
     },
     instance::{
         BJT_POSITIONAL, ControlledKind, CurrentBuilder, DIODE_POSITIONAL, InstanceBuilder,
-        InstanceCtxBuilder, MOS_POSITIONAL, MOSFETBuilder, RCL_POSITIONAL, SourceBuilder,
-        VoltageBuilder, gives_no_value,
+        InstanceCtxBuilder, MOS_POSITIONAL, MOSFETBuilder, RCL_POSITIONAL, RclBuilder,
+        SourceBuilder, VoltageBuilder, gives_no_value,
     },
-    parser::{IncludeLimits, IncludeStep, MAX_NESTING, parse_top_multi_with},
+    parser::{IncludeLimits, IncludeStep, MAX_NESTING, canonical_cmd, parse_top_multi_with},
 };
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     iter::once,
     slice,
 };
@@ -149,6 +149,7 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
         .iter()
         .map(|(id, _)| id.path().display().to_string())
         .collect();
+    let (mos_models, wl) = mos_model_names(&parsed, &texts);
     let mut lower = Lower {
         parsed: &parsed,
         texts: &texts,
@@ -162,6 +163,7 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
             root: Root::None,
             parhier: Parhier::Global,
             options: Vec::new(),
+            tnom: None,
             globals: Vec::new(),
             temps: Vec::new(),
             alters: Vec::new(),
@@ -183,7 +185,10 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
         site: None,
         def_site: Vec::new(),
         model_first: HashMap::new(),
+        mos_models,
+        wl,
         non_utf8_files: HashSet::new(),
+        lone_cr_files: HashSet::new(),
         alter: None,
         alter_errors: Vec::new(),
         analysis: Vec::new(),
@@ -191,6 +196,13 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
         sweeps: Vec::new(),
         sweeps_seen: HashSet::new(),
     };
+    // An estimate of one new name for each 48 bytes of text. It only sizes
+    // the name table at the start: a low estimate costs a regrowth, and a
+    // high one costs unused memory.
+    lower
+        .net
+        .syms
+        .reserve(texts.iter().map(String::len).sum::<usize>() / 48);
     lower.run(opts)?;
     let mut net = lower.net;
     // `a/../b.sp` and `b.sp` are one file
@@ -304,8 +316,14 @@ struct Lower<'p> {
     def_site: Vec<Option<u32>>,
     /// The first `.model` card of each name in each scope, and its read.
     model_first: HashMap<(DefId, Sym), (LocIdx, Option<u32>)>,
+    /// See [`mos_model_names`].
+    mos_models: HashSet<String>,
+    /// `.option wl`: the first value after the model of a MOSFET is W.
+    wl: bool,
     /// The files with a `non_utf8` warning.
     non_utf8_files: HashSet<&'p str>,
+    /// The files with a `lone_cr` warning.
+    lone_cr_files: HashSet<&'p str>,
     /// The `.alter` block of the statements being lowered.
     alter: Option<u32>,
     /// The `.alter` lines reported as inside a `.subckt`.
@@ -341,7 +359,7 @@ impl<'p> Lower<'p> {
         let top_ast = &parsed.inner[top].1;
         if let Some(title) = &top_ast.title {
             let text = &self.texts[top];
-            let line = &text[title.line.start..title.line.end];
+            let line = &text[title.line.start..title.line.end()];
             let message = format!("{}. Line: `{}`", title.message, shorten(line.trim()));
             let loc = LocIdx {
                 file: top as u32,
@@ -546,15 +564,27 @@ impl<'p> Lower<'p> {
                     );
                     self.diag(Level::Info, "alter_block", message, Some(loc));
                 }
-                Segment::Cond { line, pos } => self.cond_line(line, *pos, pid, report),
+                Segment::Cond { line, pos } => self.cond_line(line, *pos, pid, def, report),
             }
         }
     }
 
     /// The query layer does not evaluate `.if` blocks: it reads all branches.
-    /// One note for each block says so.
-    fn cond_line(&mut self, line: &CondLine, pos: Option<Pos>, pid: usize, report: bool) {
-        if report && matches!(line, CondLine::If(_)) {
+    /// One note for each block says so. It also marks `def` as holding an
+    /// `.if` block (`Def::has_if`).
+    fn cond_line(
+        &mut self,
+        line: &CondLine,
+        pos: Option<Pos>,
+        pid: usize,
+        def: DefId,
+        report: bool,
+    ) {
+        if !matches!(line, CondLine::If(_)) {
+            return;
+        }
+        self.net.defs[def.idx()].has_if = true;
+        if report {
             let loc = LocIdx {
                 file: pid as u32,
                 line: pos.map_or(0, |p| p.line_num),
@@ -572,7 +602,7 @@ impl<'p> Lower<'p> {
     fn data_blocks(&mut self, local: &LocalAST, pid: usize) {
         let text: &str = &self.texts[pid];
         for d in &local.data {
-            let name = self.net.syms.intern(&text[d.name.start..d.name.end]);
+            let name = self.net.syms.intern(&text[d.name.start..d.name.end()]);
             let spans: Vec<&Span> = match &d.values {
                 DataValuesBuilder::InlineExpr { params, .. }
                 | DataValuesBuilder::InlineNum { params, .. } => params.iter().collect(),
@@ -584,11 +614,11 @@ impl<'p> Lower<'p> {
             };
             let params = spans
                 .into_iter()
-                .map(|sp| self.net.syms.intern(&text[sp.start..sp.end]))
+                .map(|sp| self.net.syms.intern(&text[sp.start..sp.end()]))
                 .collect();
             let loc = LocIdx {
                 file: pid as u32,
-                line: d.name.line_num,
+                line: d.name.line_num.get(),
             };
             self.data_blocks.push((name, params, loc));
         }
@@ -780,14 +810,14 @@ impl<'p> Lower<'p> {
         let line = |k: Kind, i: usize| -> Option<u32> {
             match k {
                 Kind::Note => notes.get(i).map(|n| n.0),
-                Kind::Subckt => local.subckt.get(i).map(|s| s.name.line_num),
-                Kind::Element => local.instance.get(i).map(|e| e.name.line_num),
-                Kind::Model => local.model.get(i).map(|m| m.name.line_num),
-                Kind::Param => local.param.get(i).map(|kv| kv.k.line_num),
-                Kind::Func => local.param_func.get(i).map(|f| f.name.line_num),
-                Kind::Global => local.global.get(i).map(|g| g.line_num),
-                Kind::Option => local.option.get(i).map(|(k, _)| k.line_num),
-                Kind::Command => local.unknown.get(i).map(|c| c.cmd.line_num),
+                Kind::Subckt => local.subckt.get(i).map(|s| s.name.line_num.get()),
+                Kind::Element => local.instance.get(i).map(|e| e.name.line_num.get()),
+                Kind::Model => local.model.get(i).map(|m| m.name.line_num.get()),
+                Kind::Param => local.param.get(i).map(|kv| kv.k.line_num.get()),
+                Kind::Func => local.param_func.get(i).map(|f| f.name.line_num.get()),
+                Kind::Global => local.global.get(i).map(|g| g.line_num.get()),
+                Kind::Option => local.option.get(i).map(|(k, _)| k.line_num.get()),
+                Kind::Command => local.unknown.get(i).map(|c| c.cmd.line_num.get()),
             }
         };
         // a merge of the kinds: the next statement of each kind
@@ -839,7 +869,7 @@ impl<'p> Lower<'p> {
                     Kind::Global => {
                         if self.alter.is_none() {
                             let g = &local.global[i];
-                            let sym = self.net.syms.intern(&self.texts[pid][g.start..g.end]);
+                            let sym = self.net.syms.intern(&self.texts[pid][g.start..g.end()]);
                             if !self.net.globals.contains(&sym) {
                                 self.net.globals.push(sym);
                             }
@@ -847,7 +877,7 @@ impl<'p> Lower<'p> {
                     }
                     Kind::Option => {
                         let (key, value) = &local.option[i];
-                        self.option(key, value.as_ref(), pid, report);
+                        self.option(key, value.as_ref(), pid, def == ROOT, report);
                     }
                     Kind::Command => self.command(&local.unknown[i], pid, report),
                 }
@@ -899,10 +929,10 @@ impl<'p> Lower<'p> {
     ) {
         let texts = self.texts;
         let text: &'p str = &texts[pid];
-        let name_str = &text[s.name.start..s.name.end];
+        let name_str = &text[s.name.start..s.name.end()];
         let loc = LocIdx {
             file: pid as u32,
-            line: s.name.line_num,
+            line: s.name.line_num.get(),
         };
         if depth >= MAX_NESTING {
             // only an include chain gets here: the parser limits each file
@@ -917,12 +947,12 @@ impl<'p> Lower<'p> {
         let name = self.net.syms.intern(name_str);
         let id = DefId(u32::try_from(self.net.defs.len()).expect("fewer than 2^32 definitions"));
         let mut d = new_def(name, (parent != ROOT).then_some(parent), loc, self.alter);
-        d.text = tref(pid as u32, s.text.start, s.text.end);
-        d.text_line = s.text.line_num;
+        d.text = tref(pid as u32, s.text.start, s.text.end());
+        d.text_line = s.text.line_num.get();
         d.ports = s
             .ports
             .iter()
-            .map(|p| self.net.syms.intern(&text[p.start..p.end]))
+            .map(|p| self.net.syms.intern(&text[p.start..p.end()]))
             .collect();
         d.defaults = s
             .params
@@ -996,11 +1026,11 @@ impl<'p> Lower<'p> {
         let text: &'p str = &self.texts[pid];
         let syms = &mut self.net.syms;
         let kind = match m.model_type {
-            ModelTypeBuilder::Unknown(sp) => syms.intern(&text[sp.start..sp.end]),
+            ModelTypeBuilder::Unknown(sp) => syms.intern(&text[sp.start..sp.end()]),
             ref known => {
                 // the type as the deck spells it: the token after the name
                 let ty = model_type(known, text);
-                let spelled = next_token(text.as_bytes(), m.name.end)
+                let spelled = next_token(text.as_bytes(), m.name.end())
                     .and_then(|at| text.get(at..at + ty.len()))
                     .filter(|w| w.eq_ignore_ascii_case(ty));
                 match spelled {
@@ -1010,18 +1040,18 @@ impl<'p> Lower<'p> {
             }
         };
         let model = ModelDef {
-            name: syms.intern(&text[m.name.start..m.name.end]),
+            name: syms.intern(&text[m.name.start..m.name.end()]),
             kind,
             loc: LocIdx {
                 file: pid as u32,
-                line: m.name.line_num,
+                line: m.name.line_num.get(),
             },
             alter: self.alter,
             // the last `level` key wins (golden `ind_level_twice`)
             level: m
                 .params
                 .iter()
-                .rfind(|kv| text[kv.k.start..kv.k.end].eq_ignore_ascii_case("level"))
+                .rfind(|kv| text[kv.k.start..kv.k.end()].eq_ignore_ascii_case("level"))
                 .map(|kv| match kv.v {
                     ValueBuilder::Num(x) => Some(x),
                     ValueBuilder::Expr(_) => None,
@@ -1055,16 +1085,16 @@ impl<'p> Lower<'p> {
         let file = pid as u32;
         let syms = &mut self.net.syms;
         let func = FuncDef {
-            name: syms.intern(&text[f.name.start..f.name.end]),
+            name: syms.intern(&text[f.name.start..f.name.end()]),
             args: f
                 .args
                 .iter()
-                .map(|a| syms.intern(&text[a.start..a.end]))
+                .map(|a| syms.intern(&text[a.start..a.end()]))
                 .collect(),
-            body: tref(file, f.body.start, f.body.end),
+            body: tref(file, f.body.start, f.body.end()),
             loc: LocIdx {
                 file,
-                line: f.name.line_num,
+                line: f.name.line_num.get(),
             },
             alter: self.alter,
         };
@@ -1082,15 +1112,24 @@ impl<'p> Lower<'p> {
     }
 
     /// Lowers one `.option` item. `report` is false on a later visit of
-    /// the file.
-    fn option(&mut self, key: &Span, value: Option<&ValueBuilder>, pid: usize, report: bool) {
+    /// the file. `top`: the item is at the top level, the only place where
+    /// `parhier` sets the mode (deck `oph_sub`). `tnom` is read there only
+    /// too, as the model selector reads it (not probed).
+    fn option(
+        &mut self,
+        key: &Span,
+        value: Option<&ValueBuilder>,
+        pid: usize,
+        top: bool,
+        report: bool,
+    ) {
         let texts = self.texts;
         let text: &'p str = &texts[pid];
         let file = pid as u32;
-        let name = self.net.syms.intern(&text[key.start..key.end]);
+        let name = self.net.syms.intern(&text[key.start..key.end()]);
         let loc = LocIdx {
             file,
-            line: key.line_num,
+            line: key.line_num.get(),
         };
         let p = match value {
             Some(v) => value_param(
@@ -1098,8 +1137,8 @@ impl<'p> Lower<'p> {
                 v,
                 text,
                 file,
-                key.line_num,
-                value_start(text, key.end),
+                key.line_num.get(),
+                value_start(text, key.end()),
                 self.alter,
             ),
             None => ParamDef {
@@ -1110,12 +1149,13 @@ impl<'p> Lower<'p> {
                 alter: self.alter,
             },
         };
-        if self.net.syms.name(name).eq_ignore_ascii_case("parhier") && self.alter.is_none() {
+        if self.net.syms.name(name).eq_ignore_ascii_case("parhier") && self.alter.is_none() && top {
             let value = p
                 .text
                 .map(|t| text[t.start as usize..t.end as usize].trim())
                 .unwrap_or_default();
-            if value.eq_ignore_ascii_case("local") {
+            // `.option parhier` alone means `local` (deck `oph_flag`)
+            if value.is_empty() || value.eq_ignore_ascii_case("local") {
                 self.net.parhier = Parhier::Local;
             } else if value.eq_ignore_ascii_case("global") {
                 self.net.parhier = Parhier::Global;
@@ -1126,6 +1166,13 @@ impl<'p> Lower<'p> {
                 self.diag(Level::Warning, "bad_option_value", message, Some(loc));
             }
         }
+        if self.net.syms.name(name).eq_ignore_ascii_case("tnom")
+            && self.alter.is_none()
+            && top
+            && p.num.is_some()
+        {
+            self.net.tnom = Some(p.clone());
+        }
         self.net.options.push(p);
     }
 
@@ -1134,10 +1181,10 @@ impl<'p> Lower<'p> {
     fn command(&mut self, cmd: &UnknownBuilder, pid: usize, report: bool) {
         let texts = self.texts;
         let text: &'p str = &texts[pid];
-        let name = &text[cmd.cmd.start..cmd.cmd.end];
+        let name = &text[cmd.cmd.start..cmd.cmd.end()];
         let loc = LocIdx {
             file: pid as u32,
-            line: cmd.cmd.line_num,
+            line: cmd.cmd.line_num.get(),
         };
         if self.alter.is_none()
             && let Some(&swept) = SWEEPING.iter().find(|c| c.eq_ignore_ascii_case(name))
@@ -1154,22 +1201,44 @@ impl<'p> Lower<'p> {
                 }
             }
         }
-        let Some(&known) = ANALYSIS.iter().find(|c| c.eq_ignore_ascii_case(name)) else {
+        // HSPICE reads the short and long forms of some commands:
+        // `.te` and `.temperature` are `.temp` (decks `ab_temp_*`)
+        let canonical = canonical_cmd(&name.to_ascii_lowercase()).to_owned();
+        let Some(&known) = ANALYSIS.iter().find(|c| **c == canonical) else {
             return;
         };
         // a `.hdl` line of an `.alter` block is not in the first run
         self.net.hdl |= known == "hdl" && self.alter.is_none();
+        let first_temp = match cmd.tokens.first() {
+            Some(TokenBuilder::Value(v)) => Some(*v),
+            // The parser gives no tokens for `.temp 50,75`. As measured, HSPICE
+            // splits the values of `.temp` at commas and a `$` right after a
+            // number starts a comment (decks `t_comma`, `t_comma_sp`,
+            // `t_comma_end`, `t_dollar_tight`). The model selector's
+            // `first_temp` holds that rule, so both tools read one value.
+            None if known == "temp" => {
+                let raw = &text[cmd.raw.start..cmd.raw.end()];
+                let word = netlist_db::eval::first_temp(raw);
+                (!word.is_empty()).then(|| {
+                    // (`word` is a slice of `raw`)
+                    let start = cmd.raw.start + (word.as_ptr() as usize - raw.as_ptr() as usize);
+                    let end = start + word.len();
+                    ValueBuilder::Expr(Span::new(start, end, cmd.raw.line_num.get()))
+                })
+            }
+            _ => None,
+        };
         if known == "temp"
-            && let Some(TokenBuilder::Value(v)) = cmd.tokens.first()
+            && let Some(v) = &first_temp
         {
             // `.TEMP` spells the name `temp`
             let temp = self.net.syms.intern(name);
-            let from = Some(cmd.cmd.end);
+            let from = Some(cmd.cmd.end());
             let p = value_param(temp, v, text, pid as u32, loc.line, from, self.alter);
             self.net.temps.push(p);
         } else if known == "temp" && report {
-            // `.temp=25`, `.temp "25"`, `.temp`: the line is kept, but it
-            // gives no temperature (not probed)
+            // `.temp` with no value: the line is kept, but it gives no
+            // temperature (not probed)
             let message = format!(
                 "the `.{name}` line has no value that the loader reads, so it gives no temperature. Write `.temp 25`. Line: `{}`",
                 line_at(text, cmd.cmd.start)
@@ -1200,9 +1269,15 @@ impl<'p> Lower<'p> {
     /// Lowers one element line into `def`. `report` is false on a later
     /// visit of the file.
     fn element(&mut self, inst: &InstanceBuilder, pid: usize, def: DefId, report: bool) {
-        // The parser does not count the nodes of a MOSFET from above: it does
-        // not know the models. This layer reads the last word as the model.
+        // The parser does not know the models, so it reads the last word of a
+        // MOSFET as the model. This layer reads the line again with the models
+        // of the deck (`reread_mosfet`) and counts the nodes of that reading.
+        let reread = match &inst.ctx {
+            InstanceCtxBuilder::MOSFET(m) => reread_mosfet(m, &self.texts[pid], &self.mos_models),
+            _ => None,
+        };
         if let InstanceCtxBuilder::MOSFET(m) = &inst.ctx {
+            let m = reread.as_ref().unwrap_or(m);
             let found = 4 + m.extra_nodes.len();
             if found > 7 {
                 if report {
@@ -1213,7 +1288,7 @@ impl<'p> Lower<'p> {
                     };
                     let pos = netlist_db::Pos {
                         start: inst.name.start,
-                        line_num: inst.name.line_num,
+                        line_num: inst.name.line_num.get(),
                     };
                     self.parse_error(&err.with(Some(pos)), pid);
                 }
@@ -1231,52 +1306,32 @@ impl<'p> Lower<'p> {
             def: d,
             text,
             file: pid as u32,
-            line: inst.name.line_num,
+            line: inst.name.line_num.get(),
             alter: self.alter,
         };
         let mut model = None;
         let mut callee = None;
         // R, C, L: the end of the second node token
         let nodes_end = match &inst.ctx {
-            InstanceCtxBuilder::Resistor(r) => Some(&r.n2),
-            InstanceCtxBuilder::Capacitor(c) => Some(&c.n2),
-            InstanceCtxBuilder::Inductor(l) => Some(&l.n2),
+            InstanceCtxBuilder::Resistor(r)
+            | InstanceCtxBuilder::Capacitor(r)
+            | InstanceCtxBuilder::Inductor(r) => Some(&r.n2),
             _ => None,
         }
         // `load` checked that every file is shorter than 4 GiB
-        .map(|n2| n2.end as u32);
+        .map(|n2| n2.end() as u32);
         let kind = match &inst.ctx {
+            // the key of the value is `r=`, `c=` or `l=`
             InstanceCtxBuilder::Resistor(r) => {
-                model = cx.rcl(
-                    "r",
-                    [&r.n1, &r.n2],
-                    r.model.as_ref(),
-                    r.value.as_ref(),
-                    r.positional_params(),
-                    &r.params,
-                );
+                model = cx.rcl("r", r);
                 ElemKind::Resistor
             }
-            InstanceCtxBuilder::Capacitor(c) => {
-                model = cx.rcl(
-                    "c",
-                    [&c.n1, &c.n2],
-                    c.model.as_ref(),
-                    c.value.as_ref(),
-                    c.positional_params(),
-                    &c.params,
-                );
+            InstanceCtxBuilder::Capacitor(r) => {
+                model = cx.rcl("c", r);
                 ElemKind::Capacitor
             }
-            InstanceCtxBuilder::Inductor(l) => {
-                model = cx.rcl(
-                    "l",
-                    [&l.n1, &l.n2],
-                    l.model.as_ref(),
-                    l.value.as_ref(),
-                    l.positional_params(),
-                    &l.params,
-                );
+            InstanceCtxBuilder::Inductor(r) => {
+                model = cx.rcl("l", r);
                 ElemKind::Inductor
             }
             InstanceCtxBuilder::Voltage(v) => {
@@ -1292,6 +1347,7 @@ impl<'p> Lower<'p> {
                 ElemKind::Isource
             }
             InstanceCtxBuilder::MOSFET(m) => {
+                let m = reread.as_ref().unwrap_or(m);
                 for n in [&m.nd, &m.ng, &m.ns].into_iter().chain(&m.nb) {
                     cx.pin(n);
                 }
@@ -1299,7 +1355,7 @@ impl<'p> Lower<'p> {
                     cx.pin(n);
                 }
                 model = Some(cx.sym(&m.mname));
-                cx.mosfet_values(m);
+                cx.mosfet_values(m, self.wl);
                 ElemKind::Mosfet
             }
             InstanceCtxBuilder::BJT(b) => {
@@ -1403,7 +1459,7 @@ impl<'p> Lower<'p> {
                 let (start, end) = statement_rest(text, end as usize);
                 let loc = LocIdx {
                     file: pid as u32,
-                    line: inst.name.line_num,
+                    line: inst.name.line_num.get(),
                 };
                 check = vec![(tref(pid as u32, start, end), loc)];
             }
@@ -1417,7 +1473,7 @@ impl<'p> Lower<'p> {
             params: range32(params_start, d.elem_params.len()),
             loc: LocIdx {
                 file: pid as u32,
-                line: inst.name.line_num,
+                line: inst.name.line_num.get(),
             },
             alter: self.alter,
             parasitic: false,
@@ -1447,10 +1503,10 @@ impl<'p> Lower<'p> {
     ///   Only where both read as numbers.
     fn pwl_warnings(&mut self, src: &SourceBuilder, text: &str, loc: LocIdx) {
         let Some(f) = &src.func else { return };
-        if !text[f.name.start..f.name.end].eq_ignore_ascii_case("pwl") {
+        if !text[f.name.start..f.name.end()].eq_ignore_ascii_case("pwl") {
             return;
         }
-        let args = one_line(&text[f.args.start..f.args.end], false);
+        let args = one_line(&text[f.args.start..f.args.end()], false);
         let values = pwl_values(&args);
         let n = values.len();
         let line = line_at(text, f.name.start);
@@ -1465,10 +1521,10 @@ impl<'p> Lower<'p> {
             .params
             .iter()
             .rev()
-            .find(|kv| text[kv.k.start..kv.k.end].eq_ignore_ascii_case("r"));
+            .find(|kv| text[kv.k.start..kv.k.end()].eq_ignore_ascii_case("r"));
         let r = repeat.and_then(|kv| match kv.v {
             ValueBuilder::Num(x) => Some(x),
-            ValueBuilder::Expr(sp) => netlist_expr::exact_number(&text[sp.start..sp.end]),
+            ValueBuilder::Expr(sp) => netlist_expr::exact_number(&text[sp.start..sp.end()]),
         });
         let last = n
             .checked_sub(if n % 2 == 1 { 1 } else { 2 })
@@ -1492,6 +1548,20 @@ impl<'p> Lower<'p> {
             e.err,
             ParseErrorInner::Encoding(_) | ParseErrorInner::LineInQuotes
         ) {
+            return;
+        }
+        // one warning for each file, also when it is read for two `.lib`
+        // sections, at the line that the first lone CR ends
+        if let ParseErrorInner::LoneCr { line } = e.err {
+            let paths = self.paths;
+            if self.lone_cr_files.insert(&paths[pid]) {
+                let message = format!("\"{}\": {}", paths[pid], e.err);
+                let loc = LocIdx {
+                    file: pid as u32,
+                    line,
+                };
+                self.diag(Level::Warning, "lone_cr", message, Some(loc));
+            }
             return;
         }
         let text: &str = &self.texts[pid];
@@ -1518,7 +1588,7 @@ impl<'p> Lower<'p> {
         // HSPICE P-2019.06 has no `.step` command: it warns and runs the
         // deck (golden `step_param`, `step_plain`, `step_lin`)
         let step = matches!(&e.err, ParseErrorInner::Unknown(cmd)
-            if text[cmd.start..cmd.end].eq_ignore_ascii_case("step"));
+            if text[cmd.start..cmd.end()].eq_ignore_ascii_case("step"));
         let (code, what) = if braces {
             // golden `param_braces`, `param_braces_param`, and in quotes
             // `brace_quoted_param`, `brace_quoted_elem`, `brace_quoted_fn`
@@ -1604,6 +1674,7 @@ fn new_def(name: Sym, parent: Option<DefId>, loc: LocIdx, alter: Option<u32>) ->
         alter,
         dup_of: None,
         has_dup: false,
+        has_if: false,
     }
 }
 
@@ -1648,6 +1719,7 @@ fn describe(err: &ParseErrorInner, text: &str, line: Option<&str>) -> (&'static 
         E::IncludeLimit(what) => ("include_limit", what.clone()),
         E::Encrypted { .. } => ("encrypted_block", err.to_string()),
         E::Encoding(what) => ("non_utf8", what.clone()),
+        E::LoneCr { .. } => ("lone_cr", err.to_string()),
         E::LineInQuotes => ("quoted_comment_line", err.to_string()),
         E::StrayCond { .. } | E::AfterElse { .. } => {
             ("if_block_form", format!("{err}. The line was skipped"))
@@ -1658,7 +1730,7 @@ fn describe(err: &ParseErrorInner, text: &str, line: Option<&str>) -> (&'static 
             "unknown_command",
             format!(
                 "unknown command `.{}`. It was ignored",
-                &text[cmd.start..cmd.end]
+                &text[cmd.start..cmd.end()]
             ),
         ),
         E::CircularDefinition(chain, idx) => {
@@ -1745,7 +1817,7 @@ fn model_type<'t>(t: &ModelTypeBuilder, text: &'t str) -> &'t str {
         ModelTypeBuilder::U => "u",
         ModelTypeBuilder::W => "w",
         ModelTypeBuilder::S => "s",
-        ModelTypeBuilder::Unknown(span) => &text[span.start..span.end],
+        ModelTypeBuilder::Unknown(span) => &text[span.start..span.end()],
     }
 }
 
@@ -1788,7 +1860,7 @@ fn sweep_names<'t>(
     ];
     let word = |t: Option<&TokenBuilder>| match t {
         Some(TokenBuilder::Value(ValueBuilder::Expr(sp))) => {
-            let w = text[sp.start..sp.end].trim();
+            let w = text[sp.start..sp.end()].trim();
             let ident = matches!(netlist_expr::parse(w), Ok(netlist_expr::Expr::Ident(_)));
             (ident && !KEYWORDS.iter().any(|k| k.eq_ignore_ascii_case(w))).then_some(w)
         }
@@ -1796,7 +1868,7 @@ fn sweep_names<'t>(
     };
     let is = |t: Option<&TokenBuilder>, k: &str| match t {
         Some(TokenBuilder::Value(ValueBuilder::Expr(sp))) => {
-            text[sp.start..sp.end].trim().eq_ignore_ascii_case(k)
+            text[sp.start..sp.end()].trim().eq_ignore_ascii_case(k)
         }
         _ => false,
     };
@@ -1837,9 +1909,9 @@ fn sweep_names<'t>(
     let data = tokens
         .iter()
         .filter_map(|t| match t {
-            TokenBuilder::KV(kv) if text[kv.k.start..kv.k.end].eq_ignore_ascii_case("data") => {
+            TokenBuilder::KV(kv) if text[kv.k.start..kv.k.end()].eq_ignore_ascii_case("data") => {
                 match kv.v {
-                    ValueBuilder::Expr(sp) => Some(text[sp.start..sp.end].trim()),
+                    ValueBuilder::Expr(sp) => Some(text[sp.start..sp.end()].trim()),
                     ValueBuilder::Num(_) => None,
                 }
             }
@@ -1847,6 +1919,145 @@ fn sweep_names<'t>(
         })
         .collect();
     (names, data)
+}
+
+/// What the MOSFET lines of the first run depend on, read from the files of
+/// the first run, also in subckts and in every `.if` branch:
+/// - the lowercase names of the NMOS and PMOS `.model` cards, and the base
+///   `nch` of each bin `nch.1`. HSPICE takes a word of a MOSFET line as its
+///   model when a card of that name is anywhere in the deck (golden/NOTES.md,
+///   the words before the model name of a MOSFET);
+/// - `.option wl`, read as the selector reads it (`models/bins.rs`, decks
+///   `opt_wl_*`, `wv_*`): only `wl` and `wl=1` set it, and the last one wins.
+///   The top level comes before its subckts, so the last one of the top level
+///   wins, else the last one of the first subckt that has one.
+///
+/// A level is read in deck order: an included file is read at its `.include`
+/// line, and each file up to its first `.alter` line, as `Files::build` reads
+/// the first run. A file is read once. The subckts are read breadth first.
+fn mos_model_names(parsed: &Parsed, texts: &[String]) -> (HashSet<String>, bool) {
+    let mut names = HashSet::new();
+    let (mut wl_top, mut wl_sub) = (None, None);
+    let mut seen = vec![false; parsed.inner.len()];
+    let tops: Vec<(&ASTBuilder, usize)> = parsed
+        .top_ids
+        .iter()
+        .inspect(|id| seen[id.0] = true)
+        .map(|id| (&parsed.inner[id.0].1, id.0))
+        .collect();
+    // breadth first: the top level, then the subckts
+    let mut queue: VecDeque<(Vec<(&ASTBuilder, usize)>, bool)> = VecDeque::from([(tops, true)]);
+    while let Some((files, top)) = queue.pop_front() {
+        let mut wl = None;
+        // the files of this level that are being read, the last one on top
+        let mut stack: Vec<_> = files
+            .iter()
+            .rev()
+            .map(|&(ast, pid)| (ast.segments.iter(), pid))
+            .collect();
+        while let Some((segments, pid)) = stack.last_mut() {
+            let pid = *pid;
+            let local = match segments.next() {
+                None => {
+                    stack.pop();
+                    continue;
+                }
+                Some(Segment::Local(local)) => local,
+                Some(Segment::Include { res, .. }) => {
+                    if let Some(Ok(id)) = res.get()
+                        && !std::mem::replace(&mut seen[id.0], true)
+                    {
+                        stack.push((parsed.inner[id.0].1.segments.iter(), id.0));
+                    }
+                    continue;
+                }
+                // the statements of the `.alter` runs come after this
+                Some(Segment::Alter { .. }) => {
+                    stack.pop();
+                    continue;
+                }
+                Some(Segment::Cond { .. }) => continue,
+            };
+            let text = &texts[pid];
+            for (k, v) in &local.option {
+                if text[k.start..k.end()].eq_ignore_ascii_case("wl") {
+                    wl = Some(matches!(v, None | Some(ValueBuilder::Num(1.0))));
+                }
+            }
+            for m in &local.model {
+                if !matches!(
+                    m.model_type,
+                    ModelTypeBuilder::NMOS | ModelTypeBuilder::PMOS
+                ) {
+                    continue;
+                }
+                let name = text[m.name.start..m.name.end()].to_ascii_lowercase();
+                match name.split_once('.') {
+                    None => _ = names.insert(name),
+                    // a bin of `base`; `a.b.1` names no model
+                    Some((base, bin))
+                        if !base.is_empty() && !bin.is_empty() && !bin.contains('.') =>
+                    {
+                        names.insert(base.to_owned());
+                    }
+                    Some(_) => {}
+                }
+            }
+            queue.extend(local.subckt.iter().map(|s| (vec![(&s.ast, pid)], false)));
+        }
+        if top {
+            wl_top = wl;
+        } else {
+            wl_sub = wl_sub.or(wl);
+        }
+    }
+    (names, wl_top.or(wl_sub).unwrap_or(false))
+}
+
+/// The MOSFET line `m` as HSPICE reads it when a word after the fourth node
+/// and before the last word names a model of the deck (`models`): the first
+/// such word is the model, the words before it are nodes, and the words after
+/// it are the first values. `M1 d g s b nch lp wp` has the model `nch`, L=lp
+/// and W=wp (golden/NOTES.md, the words before the model name of a MOSFET;
+/// decks `q_positional_names`, `q_positional_mix`, `q_two_model_words`).
+/// When no word after the fourth node names a model but the fourth word does,
+/// the line has three nodes: `M1 d g 0 nch lp` has the model `nch` and L=lp,
+/// as the model selector reads it (`Selector::read_line`).
+/// `None`: no such word, so the parser's reading, with the last word as the
+/// model, stands.
+fn reread_mosfet(m: &MOSFETBuilder, text: &str, models: &HashSet<String>) -> Option<MOSFETBuilder> {
+    let names = |sp: &Span| models.contains(&text[sp.start..sp.end()].to_ascii_lowercase());
+    let at = m.extra_nodes.iter().position(names);
+    let three_nodes = at.is_none() && !names(&m.mname) && m.nb.as_ref().is_some_and(names);
+    if at.is_none() && !three_nodes {
+        return None;
+    }
+    let mut r = m.clone();
+    let words = match at {
+        Some(at) => {
+            let words = r.extra_nodes.split_off(at + 1);
+            r.mname = r.extra_nodes.pop().expect("the model word");
+            words
+        }
+        None => {
+            r.mname = r.nb.take().expect("the fourth word");
+            std::mem::take(&mut r.extra_nodes)
+        }
+    };
+    // a word is a number as the parser reads a value after the model: a
+    // number with an operator after it is an expression
+    let values = words.into_iter().chain(once(m.mname)).map(|sp| {
+        let word = &text[sp.start..sp.end()];
+        let v = match netlist_expr::scan_number_exact(word) {
+            Some((x, end, _)) if !word[end..].starts_with(['*', '/', '+', '-']) => {
+                ValueBuilder::Num(x)
+            }
+            _ => ValueBuilder::Expr(sp),
+        };
+        (sp, v)
+    });
+    r.positional = values.chain(m.positional.iter().cloned()).collect();
+    Some(r)
 }
 
 /// Removes from `params[start..]` (the parameters of one element) each

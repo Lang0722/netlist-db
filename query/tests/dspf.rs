@@ -1,43 +1,9 @@
 //! DSPF files: the included form and `.option sim_dspf`.
 
-use netlist_query::{
-    Diagnostic, LoadOptions, NetInfo, NetView, Netlist, Page, Parasitics, TraceDir,
-};
-use std::path::{Path, PathBuf};
+mod common;
+use common::*;
 
-fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
-}
-
-/// A deck written by `write_deck`; its directory is removed on drop.
-struct Deck {
-    dir: PathBuf,
-    main: PathBuf,
-}
-
-impl Drop for Deck {
-    fn drop(&mut self) {
-        _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-/// Writes `files` (name, text) into a new directory for test `name`.
-fn write_deck(name: &str, files: &[(&str, &str)]) -> Deck {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("dspf")
-        .join(format!("{name}-{}", std::process::id()));
-    _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    for (file, text) in files {
-        std::fs::write(dir.join(file), text).unwrap();
-    }
-    let main = dir.join(files[0].0);
-    Deck { dir, main }
-}
-
-fn load(path: impl AsRef<Path>) -> Netlist {
-    Netlist::load(&LoadOptions::new(path.as_ref().to_path_buf())).unwrap()
-}
+use netlist_query::{Diagnostic, NetInfo, NetView, Netlist, Page, Parasitics, TraceDir};
 
 fn all() -> Page {
     Page {
@@ -49,21 +15,6 @@ fn all() -> Page {
 fn info(net: &Netlist, scope: &str, name: &str, view: NetView) -> NetInfo {
     net.net_info(scope, name, view, &all())
         .unwrap_or_else(|e| panic!("net_info({scope:?}, {name:?}): {e}"))
-}
-
-/// (element, pin role) of each connection.
-fn pins(i: &NetInfo) -> Vec<(String, String)> {
-    i.connections
-        .items
-        .iter()
-        .map(|c| (c.element.to_ascii_lowercase(), c.pin_role.clone()))
-        .collect()
-}
-
-fn owned(v: &[(&str, &str)]) -> Vec<(String, String)> {
-    v.iter()
-        .map(|(a, b)| (a.to_string(), b.to_string()))
-        .collect()
 }
 
 fn diags(net: &Netlist) -> Vec<Diagnostic> {
@@ -216,6 +167,23 @@ fn dspf_through_include() {
         net.summary().expanded_devices.unwrap().get("resistor"),
         None
     );
+}
+
+#[test]
+fn dspf_header_after_first_line() {
+    // a `*|DSPF` line after line 1 still makes the file a DSPF
+    let dspf = format!("* extracted\n{}", inv_dspf());
+    let deck = write_deck(
+        "header_line2",
+        &[
+            (
+                "main.sp",
+                "* t\n.include 'inv.dspf'\n.model nch nmos level=1\n.model pch pmos level=1\nxi in out vdd 0 inv\nvdd vdd 0 1\nvin in 0 0.5\n.end\n",
+            ),
+            ("inv.dspf", &dspf),
+        ],
+    );
+    assert_eq!(load(&deck.main).summary().dspf.len(), 1);
 }
 
 #[test]

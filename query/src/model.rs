@@ -283,6 +283,9 @@ pub(crate) struct Def {
     pub(crate) dup_of: Option<DefId>,
     /// A later definition in the same scope has this name.
     pub(crate) has_dup: bool,
+    /// The body holds an `.if` block: two lines with one name can be in
+    /// different branches (`duplicate_element` is then a Warning).
+    pub(crate) has_if: bool,
 }
 
 impl Def {

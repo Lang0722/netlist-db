@@ -7,9 +7,8 @@ use netlist_query::{
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
-}
+mod common;
+use common::*;
 
 /// Every case directory of the golden corpus, by name.
 fn cases() -> Vec<(String, PathBuf)> {
@@ -29,45 +28,8 @@ fn expected(dir: &Path) -> Value {
     serde_json::from_str(&text).unwrap()
 }
 
-fn load(path: impl AsRef<Path>) -> Netlist {
-    Netlist::load(&LoadOptions::new(path.as_ref().to_path_buf()))
-        .unwrap_or_else(|e| panic!("{}: {e}", path.as_ref().display()))
-}
-
 fn golden(case: &str) -> Netlist {
     load(repo(&format!("golden/cases/{case}/deck.sp")))
-}
-
-/// A deck written by `write_deck`; its directory is removed on drop.
-struct Deck {
-    dir: PathBuf,
-    main: PathBuf,
-}
-
-impl Drop for Deck {
-    fn drop(&mut self) {
-        _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-/// Writes `files` (name, text) into a new directory for test `name`.
-fn write_deck(name: &str, files: &[(&str, &str)]) -> Deck {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("golden")
-        .join(format!("{name}-{}", std::process::id()));
-    _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    for (file, text) in files {
-        std::fs::write(dir.join(file), text).unwrap();
-    }
-    let main = dir.join(files[0].0);
-    Deck { dir, main }
-}
-
-fn load_text(name: &str, text: &str) -> (Deck, Netlist) {
-    let deck = write_deck(name, &[("main.sp", text)]);
-    let net = load(&deck.main);
-    (deck, net)
 }
 
 /// The parameter `name` (any letter case) of `ep`.
@@ -2074,7 +2036,7 @@ fn golden_tc_and_sweep_probes() {
         assert_eq!(r.value, Some(want), "{name}");
         assert!(
             r.caveats.iter().any(|c| c.contains(via)
-                && c.contains("which is the `.op` value (golden `sweep_op`")
+                && c.ends_with("which is the `.op` value")
                 && !c.contains("not probed")
                 && !c.contains("before the sweep")),
             "{name}: {:?}",
@@ -2462,4 +2424,339 @@ fn caveats_are_capped() {
     );
     // one name: one caveat
     assert_eq!(net.resolve_param("", "p1").unwrap().caveats.len(), 1);
+}
+
+/// The words after the fourth node of a MOSFET line: the first one that
+/// names a model of the deck is the model, the words before it are pins,
+/// and the words after it are the first values. HSPICE reads
+/// `M1 d g s b nch lv wv` with L=lv and W=wv (decks `q_positional_names`,
+/// `q_positional_mix`, `q_two_model_words`).
+#[test]
+fn mosfet_model_word_after_nodes() {
+    let (_d, net) = load_text(
+        "mos_model_word",
+        "* t\n.param lv=1u wv=2u adp=1p asp=2p\n.model nch nmos level=54\n\
+         M1 d g s b nch lv wv\n\
+         M2 d g s b nch lv 'wv*2'\n\
+         M3 d g s b nch 'lv' 'wv'\n\
+         M4 d g s b nch 1u wv\n\
+         M5 d g s b nch lv 2u\n\
+         M6 d g s b nch lv wv adp asp\n\
+         V1 d 0 1\n.end\n",
+    );
+    for (path, w) in [
+        ("m1", 2e-6),
+        ("m2", 4e-6),
+        ("m3", 2e-6),
+        ("m4", 2e-6),
+        ("m5", 2e-6),
+        ("m6", 2e-6),
+    ] {
+        let info = net.element_info(path).unwrap();
+        assert_eq!(info.model.as_deref(), Some("nch"), "{path}");
+        let pins: Vec<&str> = info.pins.iter().map(|p| p.net.as_str()).collect();
+        assert_eq!(pins, ["d", "g", "s", "b"], "{path}");
+        approx(value(&net, path, "l"), 1e-6);
+        approx(value(&net, path, "w"), w);
+    }
+    approx(value(&net, "m6", "ad"), 1e-12);
+    approx(value(&net, "m6", "as"), 2e-12);
+    assert_eq!(net.summary().errors, 0);
+}
+
+/// Two values within a relative 1e-13 are equal, for all six comparisons,
+/// as the model selector reads them (decks `cmp_*`, `eq_edge`).
+#[test]
+fn compare_within_tolerance() {
+    let (_d, net) = load_text(
+        "cmp_near",
+        "* t\n.model n nmos level=54\n.param fin=0.016u\n.subckt mac d g tw=1u\n\
+         .param rv='(tw==0.048u)?1u:2u'\n.param low='(tw<=0.048u)?1u:2u'\n\
+         M0 d g 0 0 n l=rv w=low\n.ends\nX1 d g mac tw='fin*3'\nV1 d 0 1\n.end\n",
+    );
+    approx(value(&net, "x1.m0", "l"), 1e-6);
+    approx(value(&net, "x1.m0", "w"), 1e-6);
+    // 0.1*3 is 0.30000000000000004 in doubles
+    let (_d, net) = load_text(
+        "cmp_six",
+        "* t\n.param a='0.1*3' b=0.3\n\
+         .param c_lt='a<b' c_le='a<=b' c_gt='a>b' c_ge='a>=b' c_eq='a==b' c_ne='a!=b'\n\
+         .param c_tiny='1e-300==0'\nR1 1 0 1k\n.end\n",
+    );
+    for (name, want) in [
+        ("c_lt", 0.0),
+        ("c_le", 1.0),
+        ("c_gt", 0.0),
+        ("c_ge", 1.0),
+        ("c_eq", 1.0),
+        ("c_ne", 0.0),
+        // no absolute margin (deck `eq_edge`)
+        ("c_tiny", 0.0),
+    ] {
+        assert_eq!(
+            net.resolve_param("", name).unwrap().value,
+            Some(want),
+            "{name}"
+        );
+    }
+}
+
+/// Under `parhier=local`, a body `.param` or a default that reads its own
+/// name reads it at the level above, and a value passed whose text leads
+/// back to it is computed, as a whole, at the level above (decks
+/// `q_cycle_*`). A loop at the top level stays an error.
+#[test]
+fn local_self_read_is_no_cycle() {
+    let head = "* t\n.option parhier=local\n.model n nmos level=54\n";
+    let cases: [(&str, &str, &str, f64); 6] = [
+        (
+            "passed_loop",
+            ".param k=2 c=1u\n.subckt s d g a=1u\n.param c='a*3'\nM1 d g 0 0 n l=c w=a\n.ends\nX1 d g s a='c*k'\n",
+            "x1.m1",
+            2e-6,
+        ),
+        (
+            "body_self",
+            ".param w=2u\n.subckt c d g s b\n.param w='w*3'\nM1 d g s b n l=1u w=w\n.ends\nx1 d g s b c\n",
+            "x1.m1",
+            6e-6,
+        ),
+        (
+            "default_self",
+            ".param w=2u\n.subckt c d g s b w='w*3'\nM1 d g s b n l=1u w=w\n.ends\nx1 d g s b c\n",
+            "x1.m1",
+            6e-6,
+        ),
+        (
+            "self_two_levels",
+            ".subckt leaf d g s b\n.param w='w*3'\nM1 d g s b n l=1u w=w\n.ends\n.subckt mid d g s b\n.param w=1u\nx1 d g s b leaf\n.ends\nx1 d g s b mid\n",
+            "x1.x1.m1",
+            3e-6,
+        ),
+        (
+            "passed_loop_other",
+            ".param a=1u k=2\n.subckt c d g s b\n.param q='a*3'\nM1 d g s b n l=1u w=a\n.ends\nx1 d g s b c a='q*k'\n.param q=5u\n",
+            "x1.m1",
+            10e-6,
+        ),
+        (
+            "passed_loop_top",
+            ".param k=2 c=7u\n.subckt cc d g s b\n.param c='a*3'\nM1 d g s b n l=1u w=a\n.ends\nx1 d g s b cc a='c*k'\n",
+            "x1.m1",
+            14e-6,
+        ),
+    ];
+    for (name, body, path, w) in cases {
+        let (_d, net) = load_text(name, &format!("{head}{body}V1 d 0 1\n.end\n"));
+        approx(value(&net, path, "w"), w);
+    }
+    let (_d, net) = load_text(
+        "passed_loop_l",
+        &format!(
+            "{head}.param k=2 c=1u\n.subckt s d g a=1u\n.param c='a*3'\nM1 d g 0 0 n l=c w=a\n.ends\nX1 d g s a='c*k'\nV1 d 0 1\n.end\n"
+        ),
+    );
+    approx(value(&net, "x1.m1", "l"), 6e-6);
+    // a true loop at the top level keeps its error
+    let (_d, net) = load_text(
+        "top_loop",
+        &format!("{head}.param a=b b=a\nR1 1 0 'a'\n.end\n"),
+    );
+    let ep = net.resolve_element("r1").unwrap();
+    assert!(unresolved(param(&ep, "r")).starts_with("cycle:"));
+}
+
+/// `.option wl`, anywhere in the deck: the first value after the model is W
+/// and the second L. Keyed values do not change. HSPICE P-2019.06 on
+/// `M1 d g 0 0 nch 1u 2u`: W=1u, L=2u.
+#[test]
+fn option_wl_swaps_positional_values() {
+    let (_d, net) = load_text(
+        "option_wl",
+        "* t\n.model nch nmos level=54\nM1 d g 0 0 nch 1u 2u\nM2 d g 0 0 nch l=1u w=2u\n\
+         V1 d 0 1\n.subckt z a\n.option wl\n.ends\n.end\n",
+    );
+    approx(value(&net, "m1", "l"), 2e-6);
+    approx(value(&net, "m1", "w"), 1e-6);
+    approx(value(&net, "m2", "l"), 1e-6);
+    approx(value(&net, "m2", "w"), 2e-6);
+    // an `.option wl` of an `.alter` block is not in the first run
+    let (_d, net) = load_text(
+        "option_wl_alter",
+        "* t\n.model nch nmos level=54\nM1 d g 0 0 nch 1u 2u\nV1 d 0 1\n.op\n.alter\n.option wl\n.end\n",
+    );
+    approx(value(&net, "m1", "l"), 1e-6);
+    approx(value(&net, "m1", "w"), 2e-6);
+}
+
+/// Only a top-level `.option parhier` sets the mode, and a bare
+/// `.option parhier` means local (decks `oph_sub`, `oph_flag`).
+#[test]
+fn parhier_option_forms() {
+    let (_d, net) = load_text(
+        "parhier_in_subckt",
+        "* t\n.param k=1u\n.model n nmos level=54\n.subckt z d g\n.option parhier=local\n.ends\n\
+         .subckt s d g k=2u\nM1 d g 0 0 n l=k w=1u\n.ends\nX1 d g s\nV1 d 0 1\n.end\n",
+    );
+    assert_eq!(net.summary().parhier, "global");
+    approx(value(&net, "x1.m1", "l"), 1e-6);
+    let (_d, net) = load_text(
+        "parhier_bare",
+        "* t\n.option parhier\n.param k=1u\n.model n nmos level=54\n\
+         .subckt s d g k=2u\nM1 d g 0 0 n l=k w=1u\n.ends\nX1 d g s\nV1 d 0 1\n.end\n",
+    );
+    assert_eq!(net.summary().parhier, "local");
+    approx(value(&net, "x1.m1", "l"), 2e-6);
+    let d = net.diagnostics(None, &Page::default()).unwrap();
+    assert!(
+        d.items.iter().all(|x| x.code != "bad_option_value"),
+        "{:?}",
+        d.items
+    );
+}
+
+/// The built-in functions that HSPICE P-2019.06 computes in a `.param`
+/// (`ln`, `round`, ...), and a `.param` function of the same name hides one.
+#[test]
+fn more_builtin_functions() {
+    let (_d, net) = load_text(
+        "more_builtins",
+        "* t\n.model n nmos level=54\n.param a='round(2.5)*1u' b='ln(2)'\n\
+         .param trunc(x)='x*10' c='trunc(2.5)'\nM1 d g 0 0 n l=a w=1u\nV1 d 0 1\n.end\n",
+    );
+    approx(value(&net, "m1", "l"), 3e-6);
+    // HSPICE prints ln(2) = 6.9314718056e-01
+    approx(
+        net.resolve_param("", "b").unwrap().value.unwrap(),
+        std::f64::consts::LN_2,
+    );
+    assert_eq!(net.resolve_param("", "c").unwrap().value, Some(25.0));
+    // `limit` is a statistical function: its nominal value in a `.param`, and
+    // HSPICE stops on it inside an expression ("cannot be defined in
+    // expressions directly", as for `agauss`)
+    let (_d, net) = load_text(
+        "limit_func",
+        "* t\n.param pl=limit(1k,0.1k)\nr1 1 0 pl\nr2 1 0 'limit(1k,0.1k)'\nv1 1 0 1\n.end\n",
+    );
+    let ep = net.resolve_element("r1").unwrap();
+    let r = param(&ep, "r");
+    assert_eq!(r.value, Some(1000.0));
+    assert!(caveats_hold(r, "`limit`"), "{:?}", r.caveats);
+    let ep = net.resolve_element("r2").unwrap();
+    let why = unresolved(param(&ep, "r"));
+    assert!(why.contains("limit") && why.contains("directly"), "{why}");
+}
+
+/// `temper`: the first `.temp` value (any spelling that HSPICE reads as
+/// `.temp`), else the last `.option tnom` number, else 25 (decks
+/// `t_tnom_op`, `p_option_tnom`, `ab_temp_*`).
+#[test]
+fn temper_spellings_and_tnom() {
+    let deck = |opt: &str| {
+        format!(
+            "* t\n{opt}\n.model n nmos level=54\nM1 d g 0 0 n l='(1+temper/100)*1u' w=1u\nV1 d 0 1\n.end\n"
+        )
+    };
+    for (name, opt, l) in [
+        ("tnom50", ".option tnom=50", 1.5e-6),
+        ("tnom27", ".options tnom=27", 1.27e-6),
+        ("temperature", ".temperature 75", 1.75e-6),
+        ("te", ".te 75", 1.75e-6),
+        ("temp_tnom", ".temp 75\n.option tnom=50", 1.75e-6),
+    ] {
+        let (_d, net) = load_text(name, &deck(opt));
+        let ep = net.resolve_element("m1").unwrap();
+        let p = param(&ep, "l");
+        approx(p.value.unwrap(), l);
+        if name.starts_with("tnom") {
+            assert!(caveats_hold(p, "`.option tnom`"), "{name}: {:?}", p.caveats);
+        }
+    }
+    // HSPICE: with `.option tnom=27` and no `.temp`, the run is at 27, so a
+    // TC changes nothing and R1 is 1k
+    let (_d, net) = load_text(
+        "tc_tnom27",
+        "* t\n.option tnom=27\nv1 a 0 1\nR1 a 0 1k tc1=0.004\n.op\n.end\n",
+    );
+    let ep = net.resolve_element("r1").unwrap();
+    let r = param(&ep, "r");
+    assert_eq!(r.value, Some(1000.0));
+    assert!(!caveats_hold(r, "992"), "{:?}", r.caveats);
+    // TNOM and the run temperature come from one `.option tnom`: the last
+    // top-level one with a number, as the model selector reads it
+    let (_d, net) = load_text(
+        "tc_tnom_expr",
+        "* t\n.option tnom=30\n.option tnom='20+7'\nv1 a 0 1\nR1 a 0 1k tc1=0.004\n.op\n.end\n",
+    );
+    let ep = net.resolve_element("r1").unwrap();
+    let r = param(&ep, "r");
+    assert!(!caveats_hold(r, "TC1/TC2 are set"), "{:?}", r.caveats);
+}
+
+/// `.temp` values are split at commas, and a `$` right after the number
+/// starts a comment. HSPICE P-2019.06 runs each of these at 50 first.
+#[test]
+fn temp_value_forms() {
+    for (name, line, more) in [
+        ("comma", ".temp 50,75", true),
+        ("comma_space", ".temp 50, 75", true),
+        ("comma_end", ".temp 50,", false),
+        ("dollar_tight", ".temp 50$room", false),
+        ("dollar_space", ".temp 50 $room", false),
+    ] {
+        let (_d, net) = load_text(
+            name,
+            &format!("* t\n{line}\n.param pt='temper*1u'\nR1 1 0 1k\n.end\n"),
+        );
+        let p = net.resolve_param("", "pt").unwrap();
+        approx(p.value.unwrap(), 50e-6);
+        assert_eq!(
+            caveats_hold(&p, "more than one temperature"),
+            more,
+            "{name}: {:?}",
+            p.caveats
+        );
+        let d = net.diagnostics(None, &Page::default()).unwrap();
+        assert!(
+            d.items.iter().all(|x| x.code != "temp_not_read"),
+            "{name}: {:?}",
+            d.items
+        );
+    }
+}
+
+/// `time` and `hertz` with no definition read 0 in a value, as HSPICE gives
+/// them at `.op` (decks `p_time_in_expr`, `sv_hertz*`). A `.param` of the
+/// name wins.
+#[test]
+fn time_and_hertz_read_zero() {
+    let (_d, net) = load_text(
+        "time_hertz",
+        "* t\n.model n nmos level=54\n.param b='time+1u' h='hertz+2u'\n\
+         M2 d g 0 0 n l=b w=h\nV1 d 0 1\n.end\n",
+    );
+    let ep = net.resolve_element("m2").unwrap();
+    for (key, want) in [("l", 1e-6), ("w", 2e-6)] {
+        let p = param(&ep, key);
+        approx(p.value.unwrap(), want);
+        assert!(caveats_hold(p, "`.op`"), "{key}: {:?}", p.caveats);
+    }
+    let (_d, net) = load_text(
+        "time_param",
+        "* t\n.param time=2u b='time+1u'\nR1 1 0 1k\n.end\n",
+    );
+    approx(net.resolve_param("", "b").unwrap().value.unwrap(), 3e-6);
+}
+
+/// A caveat that users read names no internal document.
+#[test]
+fn sweep_caveat_has_no_internal_citation() {
+    let (_d, net) = load_text(
+        "sweep_citation",
+        "* t\n.param pv=1k\nv1 1 0 1\nr1 1 0 pv\n.dc pv 1k 2k 1k\n.end\n",
+    );
+    let ep = net.resolve_element("r1").unwrap();
+    let r = param(&ep, "r");
+    assert!(caveats_hold(r, "`pv` is swept by .dc"), "{:?}", r.caveats);
+    assert!(!caveats_hold(r, "spec"), "{:?}", r.caveats);
 }

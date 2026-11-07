@@ -14,8 +14,8 @@ fn close(a: f64, b: f64) -> bool {
 
 fn kv(k: &'static str, text: &'static str) -> KeyValue<'static> {
     KeyValue {
-        k: Cow::Borrowed(k),
-        v: Value::Expr(Cow::Borrowed(text)),
+        k,
+        v: Value::Expr(text),
     }
 }
 
@@ -377,9 +377,10 @@ fn depth_limits() {
     ));
     assert_eq!(s.eval_str("--1"), Ok(1.0));
     for i in 0..10_000 {
+        let (k, v) = (format!("p{i}"), format!("p{}+1", i + 1));
         let kv = crate::ast::KeyValue {
-            k: format!("p{i}").into(),
-            v: Value::Expr(format!("p{}+1", i + 1).into()),
+            k: &k,
+            v: Value::Expr(&v),
         };
         s.define(&kv);
     }

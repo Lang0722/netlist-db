@@ -163,7 +163,7 @@ pub enum SelectError {
 impl SelectError {
     /// Whether this row stands for a MOSFET: the other ones stand for a line
     /// that holds an unknown number of them, or none
-    fn is_mosfet(&self) -> bool {
+    pub fn is_mosfet(&self) -> bool {
         !matches!(
             self,
             Self::NoSubckt(_)
@@ -318,10 +318,10 @@ fn function_names(ast: &AST<'_>) -> HashSet<String> {
     let mut names = HashSet::default();
     let mut stack = vec![ast];
     while let Some(a) = stack.pop() {
-        names.extend(a.param.iter().filter_map(|kv| function_name(&kv.k)));
+        names.extend(a.param.iter().filter_map(|kv| function_name(kv.k)));
         names.extend(a.param_func.iter().map(|f| f.name.to_ascii_lowercase()));
         for def in a.subckt.values() {
-            names.extend(def.params.iter().filter_map(|kv| function_name(&kv.k)));
+            names.extend(def.params.iter().filter_map(|kv| function_name(kv.k)));
             stack.push(&def.ast);
         }
         for block in &a.cond {
@@ -545,8 +545,7 @@ impl<'a, 's> Selector<'a, 's> {
             .position(|word| names_model(word))
             .map(|k| m.extra_nodes.len() - k)
             .or_else(|| {
-                m.nb.as_deref()
-                    .is_some_and(&mut names_model)
+                m.nb.is_some_and(&mut names_model)
                     .then_some(m.extra_nodes.len() + 1)
             })
             .unwrap_or(0);
@@ -625,7 +624,7 @@ fn instance_scope<'p, 'a, 's>(
     let mut active = Active::default();
     child.activate(&def.ast, &mut active);
     for kv in line() {
-        _ = child.get(&kv.k);
+        _ = child.get(kv.k);
     }
     (child, active)
 }
@@ -808,7 +807,7 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
         on_path: &[&'a AST<'s>],
     ) {
         for e in &active.errors {
-            let path = self.path_of(&e.block.line.name);
+            let path = self.path_of(e.block.line.name);
             (self.f)(MosfetModel {
                 path,
                 instance: &e.block.line,
@@ -847,7 +846,7 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
                 let line = self.sel.read_line(m, on_path);
                 let selection = self.sel.select_line(line, scopes, on_path);
                 let mname = line.name();
-                let path = self.path_of(&inst.name);
+                let path = self.path_of(inst.name);
                 (self.f)(MosfetModel {
                     path,
                     instance: inst,
@@ -856,22 +855,22 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
                 });
             }
             InstanceCtx::Subckt(x) => {
-                let Some(def) = resolve(&x.cktname, on_path) else {
-                    let path = self.path_of(&inst.name);
+                let Some(def) = resolve(x.cktname, on_path) else {
+                    let path = self.path_of(inst.name);
                     (self.f)(MosfetModel {
                         path,
                         instance: inst,
-                        mname: &x.cktname,
+                        mname: x.cktname,
                         selection: Err(SelectError::NoSubckt(x.cktname.to_string())),
                     });
                     return;
                 };
                 if let Some(e) = expansion_error(x, def, &self.expanding) {
-                    let path = self.path_of(&inst.name);
+                    let path = self.path_of(inst.name);
                     (self.f)(MosfetModel {
                         path,
                         instance: inst,
-                        mname: &x.cktname,
+                        mname: x.cktname,
                         selection: Err(e),
                     });
                     return;
@@ -879,7 +878,7 @@ impl<'a, 's, F: FnMut(MosfetModel<'a, 's>)> Walk<'a, 's, F> {
                 let (child, active) = instance_scope(scope, def, &x.params);
                 let inner_scopes = with_scope(scopes, &child, &active);
                 let inner = with_branches(on_path, &def.ast, &active);
-                self.path.push(&inst.name);
+                self.path.push(inst.name);
                 self.expanding.push(def);
                 self.ast(&def.ast, &active, &inner_scopes, &inner);
                 self.expanding.pop();

@@ -22,7 +22,7 @@ mod number;
 mod parse;
 
 pub use builtins::is_builtin;
-pub use eval::{Caveat, Env, EvalError, eval};
+pub use eval::{Caveat, Env, EvalError, eval, near};
 pub use number::{exact_number, scan_number, scan_number_exact};
 pub use parse::{BinOp, Expr, ExprError, UnOp, free_names, parse};
 

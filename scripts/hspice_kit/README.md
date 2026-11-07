@@ -104,8 +104,9 @@ Known gaps, reported by `compare_hspice.py` but not failing it:
   such a deck HSPICE can also stop.
 
 Known gaps not in this kit:
-- a definition instantiated inside itself: HSPICE stops. netlist-db skips that
-  line and reports nothing, so the MOSFETs below it are not counted;
+- a definition instantiated inside itself: HSPICE stops. netlist-db gives an
+  error row for that `X` line ("X line inside the definition of subckt `a`, which
+  it calls"), does not count the MOSFETs below it, and exits with status 1;
 - `.param` functions with the same name at several levels: HSPICE keeps, in
   some cases, mainly under `parhier=local`, the function that an expression found
   in the first instance that evaluated it;

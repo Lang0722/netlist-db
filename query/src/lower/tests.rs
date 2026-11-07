@@ -261,8 +261,11 @@ fn options_globals_temps() {
         opts,
         [("gmindc", "1e-14".to_owned()), ("scale", "0.9".to_owned())]
     );
-    // A `.temp` line whose value is not read gives no temperature, with
-    // a Warning (only the Info `analysis_commands` before). Not probed.
+    // A `.temp` line with no value gives no temperature, with a Warning
+    // (only the Info `analysis_commands` before). Not probed. HSPICE splits
+    // the values of `.temp 25,50` at the comma (decks `t_comma*`), so that
+    // line gives 25. The `=` of `.temp=25` is skipped, as the model
+    // selector does (not probed).
     let deck = write_deck(
         "temp_not_read",
         &[("main.sp", "* t\n.temp=25\n.temp 25,50\n.temp\n.TEMP 30\n")],
@@ -272,12 +275,9 @@ fn options_globals_temps() {
         .into_iter()
         .map(|d| d.1)
         .collect();
-    assert_eq!(
-        lines,
-        (2..=4).map(|n| format!("main.sp:{n}")).collect::<Vec<_>>()
-    );
-    assert_eq!(net.temps.len(), 1);
-    assert_eq!(net.temps[0].num, Some(30.0));
+    assert_eq!(lines, ["main.sp:4"]);
+    let temps: Vec<Option<f64>> = net.temps.iter().map(|p| p.num).collect();
+    assert_eq!(temps, [Some(25.0), Some(25.0), Some(30.0)]);
     // HSPICE reads a value in quotes (probes `.temp "50"` and `.temp '50'`:
     // `temp= 50.000`), and it rejects a group (`.temp (50)`)
     for line in [".temp \"50\"", ".temp '50'"] {
@@ -1275,6 +1275,50 @@ fn non_utf8_warning() {
     let warn = diags_of(&net, "non_utf8");
     assert_eq!(warn.len(), 1, "{:#?}", net.diags);
     assert_eq!(warn[0].1, "m.lib:2");
+}
+
+#[test]
+fn lone_cr_warning() {
+    // A file with only CR line ends: HSPICE on Windows reads it as one
+    // title line, so the loader warns once, at the line the first lone CR
+    // ends.
+    let deck = write_deck(
+        "lone_cr",
+        &[(
+            "main.sp",
+            "* t\r.model n nmos level=54\rM1 d g 0 0 n l=1u w=1u\rV1 d 0 1\r.end\r",
+        )],
+    );
+    let net = load(deck.main.clone());
+    let warn = diags_of(&net, "lone_cr");
+    assert_eq!(warn.len(), 1, "{:#?}", net.diags);
+    assert_eq!(warn[0].0, crate::api::Level::Warning);
+    assert_eq!(warn[0].1, "main.sp:1");
+    assert!(warn[0].2.contains("lone CR"), "{}", warn[0].2);
+    // Once per file, also when the file is included twice.
+    let deck = write_deck(
+        "lone_cr_inc",
+        &[
+            ("main.sp", "* t\n.inc 'a.sp'\n.inc 'a.sp'\n"),
+            ("a.sp", "R1 a b 1\rR2 a b 2\n"),
+        ],
+    );
+    let net = load(deck.main.clone());
+    let warn = diags_of(&net, "lone_cr");
+    assert_eq!(warn.len(), 1, "{:#?}", net.diags);
+    assert_eq!(warn[0].1, "a.sp:1");
+    // A `.lib` section: only a lone CR in the section's own lines.
+    let lib = ".lib tt\nR1 a b 1\n.endl tt\n.lib ff\nR2 a b 2\rR3 a b 3\n.endl ff\n\
+               .lib ss\nR4 a b 4\n.endl ss\n";
+    for (main, want) in [
+        ("* t\n.lib 'm.lib' tt\n.lib 'm.lib' ss\n", vec![]),
+        ("* t\n.lib 'm.lib' ff\n.lib 'm.lib' ss\n", vec!["m.lib:5"]),
+    ] {
+        let deck = write_deck("lone_cr_lib", &[("main.sp", main), ("m.lib", lib)]);
+        let net = load(deck.main.clone());
+        let lines: Vec<String> = diags_of(&net, "lone_cr").into_iter().map(|d| d.1).collect();
+        assert_eq!(lines, want, "{main:?}: {:#?}", net.diags);
+    }
 }
 
 #[test]

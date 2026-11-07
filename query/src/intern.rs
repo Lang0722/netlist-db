@@ -65,6 +65,14 @@ impl Interner {
         i
     }
 
+    /// Makes room for `names` names
+    pub(crate) fn reserve(&mut self, names: usize) {
+        let Self {
+            text, ends, table, ..
+        } = self;
+        table.reserve(names, |&s| hash_lower(spelled(text, ends, s)));
+    }
+
     /// The `Sym` of `name` (a spelling from the deck), in any letter case.
     /// A new name is added in this spelling. A built-in name with no
     /// spelling from the deck yet takes this one.

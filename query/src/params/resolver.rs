@@ -42,6 +42,8 @@ impl<'n> Resolver<'n> {
             by_def: HashMap::new(),
             by_call: HashMap::new(),
             stack: Vec::new(),
+            cycled: false,
+            closed: None,
             calls: Vec::new(),
             frames: Vec::new(),
             height: 0,
@@ -258,11 +260,21 @@ impl<'n> Resolver<'n> {
         if let Some(at) = self
             .stack
             .iter()
-            .position(|&(p, l, _)| (p, l) == (key.0, key.1))
+            .position(|&(p, l, ..)| (p, l) == (key.0, key.1))
         {
+            self.cycled = true;
+            // src/eval.rs computes the values passed on a line in the order
+            // of the line, so the cycle closes at the first one on the line
+            // (the overrides at one level are of one `X` line, and they are
+            // in line order in memory)
+            let cycle = &self.stack[at..];
+            self.closed = cycle.iter().find(|e| e.3).map(|&(_, l, ..)| {
+                let first = cycle.iter().filter(|e| e.3 && e.1 == l).map(|e| e.0);
+                (first.min().expect("one override"), l)
+            });
             let names: Vec<&str> = self.stack[at..]
                 .iter()
-                .map(|&(_, _, s)| net.syms.name(s))
+                .map(|&(_, _, s, _)| net.syms.name(s))
                 .chain([name])
                 .collect();
             // not memoized: each name in the cycle gets this reason
@@ -274,15 +286,26 @@ impl<'n> Resolver<'n> {
                 node: None,
             };
         }
-        self.stack.push((key.0, key.1, n));
         let element = c.kind == StepKind::InstanceOverride;
+        self.stack.push((key.0, key.1, n, element));
         let text = match c.kind {
             StepKind::InstanceOverride => Text::Override(n),
             StepKind::LocalParam | StepKind::SubcktDefault => Text::Default(n),
             _ => Text::Body,
         };
         let limited = self.limited;
-        let (value, mut frame) = self.eval_param(c.p, c.eval_level, element, text);
+        let outer_cycled = std::mem::take(&mut self.cycled);
+        let (mut value, mut frame) = self.eval_param(c.p, c.eval_level, element, text);
+        // A value passed whose text leads back to it through other names
+        // (`a='c*k'` with `.param c='a*3'`) is computed, as a whole, one level
+        // up. This is the measured rule (decks `q_cycle_pass_*`,
+        // `q_cycle_text_*`), as src/eval.rs reads it.
+        if value.is_err() && self.closed == Some(key) && c.eval_level > 0 {
+            self.closed = None;
+            (value, frame) = self.eval_param(c.p, c.eval_level - 1, element, Text::Body);
+        }
+        let cycled = self.cycled;
+        self.cycled |= outer_cycled;
         self.stack.pop();
         // under LOCAL a definition below the top level wins in every run
         // over a top-level `.param` of an `.alter` block
@@ -312,7 +335,7 @@ impl<'n> Resolver<'n> {
             value,
             node: Some(self.node(step, frame)),
         };
-        if self.limited == limited {
+        if self.limited == limited && (v.value.is_ok() || !cycled) {
             self.by_def.insert(key, v.clone());
             self.memo.insert((k, n), v.clone());
         }
@@ -457,10 +480,21 @@ impl<'n> Resolver<'n> {
             ),
             Caveat::Temper => {
                 let t = self.temperature();
-                let source = self.net.temps.iter().find(|p| p.alter.is_none()).map_or(
-                    "HSPICE's default: the first run has no `.temp` line".to_owned(),
-                    |p| format!("the first `.temp` value, at {}", loc_str(self.net, p.loc)),
-                );
+                let source = match (
+                    self.net.temps.iter().find(|p| p.alter.is_none()),
+                    self.tnom_option(),
+                ) {
+                    (Some(p), _) => {
+                        format!("the first `.temp` value, at {}", loc_str(self.net, p.loc))
+                    }
+                    (None, Some(p)) => format!(
+                        "the first run has no `.temp` line, so HSPICE uses `.option tnom`, at {}",
+                        loc_str(self.net, p.loc)
+                    ),
+                    (None, None) => {
+                        "HSPICE's default: the first run has no `.temp` line".to_owned()
+                    }
+                };
                 match t.value {
                     Ok(v) => {
                         format!("uses `temper` = {v} ({source}; golden `temper`, `temper_default`)")
@@ -1167,7 +1201,8 @@ impl<'n> Resolver<'n> {
     }
 
     /// The circuit temperature: the first `.temp` value of the first run,
-    /// else 25 (golden `temper`, `temper_default`).
+    /// else the last `.option tnom` number, else 25 (golden `temper`,
+    /// `temper_default`).
     pub(super) fn temperature(&mut self) -> Val {
         if let Some(t) = &self.temp {
             return t.clone();
@@ -1196,6 +1231,19 @@ impl<'n> Resolver<'n> {
             }
         }
         let v = match temps.first() {
+            // As measured, with no `.temp` HSPICE runs at TNOM: `.option
+            // tnom=27` gives temp=27 (decks `t_tnom_op`, `p_option_tnom`)
+            None if let Some(p) = self.tnom_option() => {
+                let frame = Frame {
+                    caveats: altered,
+                    ..Frame::default()
+                };
+                let step = builtin(param_text(net, p), p.num, Some(net.loc(p.loc)));
+                Val {
+                    value: Ok(p.num.expect("a number")),
+                    node: Some(self.node(step, frame)),
+                }
+            }
             None => {
                 let step = builtin(
                     "25 (no `.temp` line in the first run: HSPICE's default)".to_owned(),
@@ -1235,18 +1283,15 @@ impl<'n> Resolver<'n> {
         v
     }
 
-    /// TNOM: the last `.option tnom` of the first run, else 25.
-    pub(super) fn tnom(&mut self) -> Result<f64, String> {
-        let net = self.net;
-        let tnom = net.syms.get("tnom");
-        match net
-            .options
-            .iter()
-            .rfind(|p| Some(p.name) == tnom && p.alter.is_none())
-        {
-            Some(p) => self.eval_param(p, 0, false, Text::Body).0,
-            None => Ok(25.0),
-        }
+    /// The `.option tnom` of TNOM (see `Netlist::tnom`): also the
+    /// temperature when the first run has no `.temp` line.
+    fn tnom_option(&self) -> Option<&'n ParamDef> {
+        self.net.tnom.as_ref()
+    }
+
+    /// TNOM: the value of `tnom_option`, else 25.
+    pub(super) fn tnom(&self) -> f64 {
+        self.tnom_option().and_then(|p| p.num).unwrap_or(25.0)
     }
 
     /// The value of the word `w` of a source function at level `k`; the
@@ -1544,6 +1589,22 @@ impl Env for Cx<'_, '_> {
         if let Some(&(_, v)) = self.args.iter().find(|(a, _)| a == name) {
             return Ok((v, Vec::new()));
         }
+        // `time` and `hertz` with no `.param` of the name read 0 in a value,
+        // as measured (decks `p_time_in_expr`, `sv_hertz*`)
+        if matches!(name, "time" | "hertz")
+            && self
+                .r
+                .net
+                .syms
+                .get(name)
+                .is_none_or(|s| self.r.find(self.level, s).is_none())
+        {
+            let top = self.r.frames.last_mut().expect("inside an evaluation");
+            top.caveats.push(format!(
+                "`{name}` reads 0: in a value HSPICE gives it the value at the `.op` point"
+            ));
+            return Ok((0.0, Vec::new()));
+        }
         let v = if name == "temper" {
             self.r.temperature()
         } else {
@@ -1560,6 +1621,17 @@ impl Env for Cx<'_, '_> {
                             )));
                         }
                         self.r.resolve(up, sym)
+                    }
+                    // A body `.param` or a default `c='c*2'` reads `c` from
+                    // above, as an override does. This is the measured rule
+                    // (decks `q_cycle_*_self*`), as src/eval.rs reads it. With
+                    // no `c` above, it is a cycle.
+                    Text::Default(own)
+                        if own == sym
+                            && self.level > 0
+                            && self.r.find(self.level - 1, sym).is_some() =>
+                    {
+                        self.r.resolve(self.level - 1, sym)
                     }
                     _ => self.r.resolve(self.level, sym),
                 },

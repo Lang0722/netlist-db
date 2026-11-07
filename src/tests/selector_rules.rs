@@ -51,6 +51,25 @@ async fn option_sizes_are_plain_numbers() {
         let text = format!("* t\n{head}{bins}M1 d g 0 0 b l=2u w=1u\n");
         assert_eq!(one_model(&text).await, want, "{head}");
     }
+    // `scalm` also multiplies `wmin` and `wmax`: W=2u is inside 0.1 to 100
+    // times 1e-6 only. HSPICE chose s.1 and s.2 on the kit decks `q_scalm` and
+    // `q_scale_scalm` (scripts/hspice_kit/make_kit.py).
+    let bins = ".model s.1 nmos level=54 lmin=0.1 lmax=1 wmin=0.1 wmax=100\n\
+                .model s.2 nmos level=54 lmin=1 lmax=100 wmin=0.1 wmax=100\n";
+    for (head, lines) in [
+        (
+            ".option scalm=1e-6\n",
+            "M1 d g 0 0 s l=0.5u w=2u\nM2 d g 0 0 s l=2u w=2u\n",
+        ),
+        (
+            ".option scale=1e-6 scalm=1e-6\n",
+            "M1 d g 0 0 s l=0.5 w=2\nM2 d g 0 0 s l=2 w=2\n",
+        ),
+    ] {
+        let text = format!("* t\n{head}{bins}{lines}");
+        let models: Vec<_> = deck_rows(&text).await.into_iter().map(|r| r.1).collect();
+        assert_eq!(models, ["s.1", "s.2"], "{head}");
+    }
 }
 
 /// `.option wnflag` takes a number, also in quotes. An expression or a name is

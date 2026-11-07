@@ -340,7 +340,7 @@ async fn file_read_twice_keeps_its_statements() {
     ])
     .await;
     let (ast, has_err) = files.build(parsed);
-    let names: Vec<&str> = ast.instance.iter().map(|i| &*i.name).collect();
+    let names: Vec<&str> = ast.instance.iter().map(|i| i.name).collect();
     assert!(!has_err);
     assert_eq!(names, ["R1", "R2", "R3", "R4", "R2", "R3"]);
 }

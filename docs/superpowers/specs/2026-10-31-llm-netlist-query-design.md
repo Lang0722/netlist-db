@@ -1,6 +1,8 @@
 # netlist-db as an LLM query tool for HSPICE netlists — design
 
-Date: 2026-10-31. Status: draft for review.
+Date: 2026-10-31. Status: implemented. This file is history. Section 2
+describes the tree of 2026-10-31. `golden/NOTES.md` and `README.md` hold the
+current behaviour.
 
 ## 1. Intent
 

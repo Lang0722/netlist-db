@@ -45,7 +45,6 @@ mod span;
 #[cfg(test)]
 mod tests;
 
-use alloc::borrow::Cow;
 pub use err::{ParseError, ParseErrorInner};
 use indexmap::IndexMap;
 pub use netlist_build::MAX_DIAGNOSTICS_PER_FILE;
@@ -72,12 +71,11 @@ pub struct Files {
 /// ...
 /// .ends pulvt11ll_ckt
 /// ```
-/// Do NOT support `.include` / `.lib` in `.subckt`
 #[derive(Debug, Clone)]
 pub struct Subckt<'s> {
-    pub name: Cow<'s, str>,
+    pub name: &'s str,
     /// subckt/model name is the last arg
-    pub ports: Vec<Cow<'s, str>>,
+    pub ports: Vec<&'s str>,
     pub params: Vec<ast::KeyValue<'s>>,
     pub ast: AST<'s>,
 }
@@ -87,7 +85,7 @@ pub struct AST<'s> {
     /// The title of the netlist: HSPICE reads the first line of the input
     /// as its title. It is the first line of the (first) top-level file,
     /// unless that line is blank, a comment or a dot-command.
-    pub title: Option<Cow<'s, str>>,
+    pub title: Option<&'s str>,
     pub subckt: IndexMap<String, Subckt<'s>>,
     pub instance: Vec<instance::Instance<'s>>,
     pub model: Vec<ast::Model<'s>>,
@@ -95,7 +93,7 @@ pub struct AST<'s> {
     /// `.param` function definitions
     pub param_func: Vec<ast::ParamFunc<'s>>,
     /// `.global` node names
-    pub global: Vec<Cow<'s, str>>,
+    pub global: Vec<&'s str>,
     /// The first and the last line of each `.prot` … `.unprot` region (the
     /// text in it is not parsed)
     pub protected: Vec<(u32, u32)>,
@@ -103,17 +101,15 @@ pub struct AST<'s> {
     /// statements of the `.alter` blocks are not in this AST: their text is
     /// kept verbatim in one `unknown` entry with the command `alter`.
     pub alter_runs: usize,
-    pub option: Vec<(Cow<'s, str>, Option<ast::Value<'s>>)>,
+    pub option: Vec<(&'s str, Option<ast::Value<'s>>)>,
     /// transient initial conditions
-    /// https://eda-cpu1.eias.junzhuo.site/~junzhuo/hspice/index.htm#page/hspice_14/ic.htm
     ///
     /// `node, val, [subckt]`
-    pub init_condition: Vec<(Cow<'s, str>, ast::Value<'s>, Option<Cow<'s, str>>)>,
+    pub init_condition: Vec<(&'s str, ast::Value<'s>, Option<&'s str>)>,
     /// Initializes specified nodal voltages for DC operating point analysis and corrects convergence problems in DC analysis.
-    /// https://eda-cpu1.eias.junzhuo.site/~junzhuo/hspice/index.htm#page/hspice_14/nodeset.htm
     ///
     /// `node, val, [subckt]`
-    pub nodeset: Vec<(Cow<'s, str>, ast::Value<'s>, Option<Cow<'s, str>>)>,
+    pub nodeset: Vec<(&'s str, ast::Value<'s>, Option<&'s str>)>,
     pub general: Vec<ast::General<'s>>,
     pub data: Vec<ast::Data<'s>>,
     pub unknown: Vec<ast::Unknown<'s>>,
@@ -144,7 +140,7 @@ pub struct CondBlock<'s> {
 #[derive(Debug, Clone, Default)]
 pub struct CondBranch<'s> {
     /// The text in the parentheses; `None` for `.else`
-    pub cond: Option<Cow<'s, str>>,
+    pub cond: Option<&'s str>,
     /// The statements of the branch, as those of a level
     pub ast: AST<'s>,
 }

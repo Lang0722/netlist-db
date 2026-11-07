@@ -819,9 +819,14 @@ impl Netlist {
         for &(at, k) in &w.elems {
             let x = &self.defs[at.idx()].elements[k];
             if self.hier.dup_element(at, x.name) {
+                let why = if self.defs[at.idx()].has_if {
+                    "the lines can be in different `.if` branches"
+                } else {
+                    "HSPICE rejects this deck"
+                };
                 dups.add(|| {
                     format!(
-                        "`{}` names more than one element line in `{}`: HSPICE rejects this deck (diagnostic `duplicate_element`). This answer uses the first line",
+                        "`{}` names more than one element line in `{}`: {why} (diagnostic `duplicate_element`). This answer uses the first line",
                         self.syms.name(x.name),
                         self.def_display(at)
                     )

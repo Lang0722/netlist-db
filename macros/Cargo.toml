@@ -1,4 +1,4 @@
-# cargo publish --registry crates-io -p liberty-macros
+# cargo publish --registry crates-io -p netlist-macros
 [package]
 name = "netlist-macros"
 description = "`netlist` macros"

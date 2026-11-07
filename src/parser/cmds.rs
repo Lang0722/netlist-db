@@ -53,22 +53,10 @@ fn node_volt(i: LocatedSpan) -> IResult<LocatedSpan, (Span, ValueBuilder)> {
     .parse_complete(i)
 }
 
+/// The node voltages of a `.ic` or a `.nodeset` line, each with the
+/// `subckt=` name of the line. The two commands have the same syntax.
 #[inline]
-pub(super) fn init_condition(
-    i: LocatedSpan,
-) -> IResult<LocatedSpan, impl Iterator<Item = (Span, ValueBuilder, Option<Span>)>> {
-    map(
-        (many1(multiline_sep(node_volt)), opt(multiline_sep(subckt))),
-        |(iter, opt_subckt)| {
-            iter.into_iter()
-                .map(move |(node, val)| (node, val, opt_subckt))
-        },
-    )
-    .parse_complete(i)
-}
-
-#[inline]
-pub(super) fn nodeset(
+pub(super) fn node_volts(
     i: LocatedSpan,
 ) -> IResult<LocatedSpan, impl Iterator<Item = (Span, ValueBuilder, Option<Span>)>> {
     map(

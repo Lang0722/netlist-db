@@ -4,41 +4,10 @@ use netlist_query::{
     ChildCall, Diagnostic, ElementInfo, Level, LoadOptions, Netlist, Page, QueryError, SubcktRow,
     SubcktSort,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
-}
-
-/// A deck written by `write_deck`; its directory is removed on drop.
-struct Deck {
-    dir: PathBuf,
-    main: PathBuf,
-}
-
-impl Drop for Deck {
-    fn drop(&mut self) {
-        _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-/// Writes `files` (name, text) into a new directory for test `name`.
-fn write_deck(name: &str, files: &[(&str, &str)]) -> Deck {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("hier")
-        .join(format!("{name}-{}", std::process::id()));
-    _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    for (file, text) in files {
-        std::fs::write(dir.join(file), text).unwrap();
-    }
-    let main = dir.join(files[0].0);
-    Deck { dir, main }
-}
-
-fn load(path: impl AsRef<Path>) -> Netlist {
-    Netlist::load(&LoadOptions::new(path.as_ref().to_path_buf())).unwrap()
-}
+mod common;
+use common::*;
 
 fn load_top(path: impl AsRef<Path>, top: &str) -> Netlist {
     Netlist::load(&LoadOptions {
@@ -46,12 +15,6 @@ fn load_top(path: impl AsRef<Path>, top: &str) -> Netlist {
         ..LoadOptions::new(path.as_ref().to_path_buf())
     })
     .unwrap()
-}
-
-fn load_text(name: &str, text: &str) -> (Deck, Netlist) {
-    let deck = write_deck(name, &[("main.sp", text)]);
-    let net = load(&deck.main);
-    (deck, net)
 }
 
 fn all_page() -> Page {
@@ -2279,6 +2242,34 @@ fn walk_is_polynomial() {
     let t = std::time::Instant::now();
     assert_eq!(info(&net, &path).def, "s");
     assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
+}
+
+/// The query layer reads every branch of an `.if` block, so one name in two
+/// branches is a Warning, not an Error: HSPICE runs such a macro (golden/NOTES.md,
+/// the `.if` macro that has `M0` in each branch).
+#[test]
+fn duplicate_in_if_branches_is_a_warning() {
+    let (_d, net) = load_text(
+        "dup_if",
+        "* t\n.model n nmos level=54\n.subckt mac d g s b ll=1u\n.if (ll<4u)\n\
+         M0 d g s b n l=ll w=1u\n.else\nM0 d g s b n l='ll*2' w=1u\n.endif\n.ends\n\
+         X0 d g s 0 mac ll=5u\nV1 d 0 1\n.end\n",
+    );
+    assert_eq!(net.summary().errors, 0, "{:#?}", all_diags(&net));
+    let ds = with_code(&net, "duplicate_element");
+    assert_eq!(ds.len(), 1, "{ds:#?}");
+    assert_eq!(ds[0].level, Level::Warning);
+    assert!(
+        ds[0].message.contains("`.if` branches"),
+        "{}",
+        ds[0].message
+    );
+    let m0 = info(&net, "x0.m0");
+    assert!(
+        m0.caveats.iter().all(|c| !c.contains("HSPICE rejects")),
+        "{:?}",
+        m0.caveats
+    );
 }
 
 #[test]

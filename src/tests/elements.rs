@@ -19,14 +19,14 @@ async fn resistor_capacitor_inductor_params_and_models() {
     assert!(close(value_of(&r("R1").value), 1e3));
     assert_eq!(r("R1").params.len(), 2);
     assert!(close(value_of(&r("R2").value), 2e3) && r("R2").params.is_empty());
-    assert_eq!(r("R3").model.as_deref(), Some("rmod"));
+    assert_eq!(r("R3").model, Some("rmod"));
     assert!(close(value_of(&r("R3").value), 3e3));
-    assert_eq!(r("R4").model.as_deref(), Some("rmod"));
+    assert_eq!(r("R4").model, Some("rmod"));
     assert!(close(value_of(&r("R4").value), 4e3) && r("R4").params.len() == 1);
     let InstanceCtx::Capacitor(c1) = &inst(&ast, "C1").ctx else {
         panic!()
     };
-    assert_eq!(c1.model.as_deref(), Some("cmod"));
+    assert_eq!(c1.model, Some("cmod"));
     assert!(close(value_of(&c1.value), 1e-15));
     let InstanceCtx::Capacitor(c2) = &inst(&ast, "C2").ctx else {
         panic!()
@@ -35,7 +35,7 @@ async fn resistor_capacitor_inductor_params_and_models() {
     let InstanceCtx::Inductor(l1) = &inst(&ast, "L1").ctx else {
         panic!()
     };
-    assert_eq!(l1.model.as_deref(), Some("lmod"));
+    assert_eq!(l1.model, Some("lmod"));
     assert!(close(value_of(&l1.value), 1e-9));
 }
 
@@ -89,7 +89,7 @@ async fn independent_sources() {
     assert!(close(dc(i("I1")), 1e-3));
     assert!(i("I2").ac_mag.is_some());
     let v7 = v("V7");
-    assert!(matches!(&v7.dc, Some((_, Value::Expr(e))) if e == "vsupply"));
+    assert!(matches!(&v7.dc, Some((_, Value::Expr(e))) if *e == "vsupply"));
     assert_eq!(v7.params.len(), 1);
 }
 
@@ -118,7 +118,7 @@ async fn controlled_sources_and_mutual_inductors() {
     assert_eq!(c("E1").kind, ControlledKind::E);
     assert!(close(num(&c("E1").coeffs[0]), 10.0));
     assert_eq!(nets(inst(&ast, "E1")), ["0", "in", "out"]);
-    assert_eq!(c("G1").keyword.as_deref(), Some("VCCS"));
+    assert_eq!(c("G1").keyword, Some("VCCS"));
     assert!(close(num(&c("G1").coeffs[0]), 1e-3) && c("G1").params.len() == 1);
     assert_eq!(c("E2").poly, Some(2));
     assert_eq!(c("E2").ctrl_nodes.len(), 2);

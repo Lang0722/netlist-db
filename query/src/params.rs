@@ -73,7 +73,7 @@ const MAX_HEIGHT: usize = 2048;
 const REJECTS: &str = "rejects the deck";
 
 /// The statistical functions of `netlist_expr`.
-pub(crate) const STATISTICAL: [&str; 4] = ["agauss", "gauss", "aunif", "unif"];
+pub(crate) const STATISTICAL: [&str; 5] = ["agauss", "gauss", "aunif", "unif", "limit"];
 
 /// The transient functions of a V/I line.
 const SOURCE_FUNCS: [&str; 7] = ["pulse", "sin", "exp", "pwl", "sffm", "am", "pat"];
@@ -361,9 +361,17 @@ struct Resolver<'n> {
     by_def: HashMap<(*const ParamDef, usize), Val>,
     /// By (level of the definition, function, the bits of the arguments).
     by_call: HashMap<(usize, Sym, Vec<u64>), Val>,
-    /// The definitions being evaluated (definition, level, name),
-    /// outermost first: one met again is a cycle.
-    stack: Vec<(*const ParamDef, usize, Sym)>,
+    /// The definitions being evaluated (definition, level, name, an `X`-line
+    /// override), outermost first: one met again is a cycle.
+    stack: Vec<(*const ParamDef, usize, Sym, bool)>,
+    /// A cycle was found inside the evaluation in progress. A value that
+    /// failed after a cycle depends on where the evaluation started, so it is
+    /// not memoized.
+    cycled: bool,
+    /// The `X`-line override of the last cycle found that comes first on its
+    /// line (definition, level). [`Resolver::resolve`] evaluates its text one
+    /// level up.
+    closed: Option<(*const ParamDef, usize)>,
     /// The functions being called (level of the definition, name).
     calls: Vec<(usize, Sym)>,
     /// The frames of the evaluations in progress.
@@ -580,7 +588,9 @@ fn more_on_line(net: &Netlist, p: &ParamDef) -> bool {
     let rest = &text[t.end as usize..];
     let line = rest.split('\n').next().unwrap_or("");
     let line = line.split('$').next().unwrap_or("");
-    !line.trim().trim_start_matches('\'').trim().is_empty()
+    // a comma at the end gives no second value (deck `t_comma_end`)
+    let line = line.trim().trim_start_matches('\'').trim();
+    !line.trim_start_matches(',').trim().is_empty()
 }
 
 #[cfg(test)]

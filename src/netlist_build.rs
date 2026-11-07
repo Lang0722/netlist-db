@@ -6,7 +6,6 @@ use crate::{
     parser::{self, IncludeStep},
     span::{FileId, ParsedId, Pos},
 };
-use alloc::borrow::Cow;
 use indexmap::IndexMap;
 use std::mem;
 
@@ -128,7 +127,7 @@ impl<'a, 's> Target<'a, 's> {
                         ast: AST::default(),
                     }],
                     line: instance::Instance {
-                        name: Cow::Borrowed("if"),
+                        name: "if",
                         ctx: instance::InstanceCtx::Unknown {
                             r#type: b'.',
                             nodes: Vec::new(),
@@ -255,7 +254,7 @@ impl ast::ASTBuilder {
                             };
                             let pos = Pos {
                                 start: s.name.start,
-                                line_num: s.name.line_num,
+                                line_num: s.name.line_num.get(),
                             };
                             cx.reporter.report(&err.with(Some(pos)), file_id, file);
                             continue;
@@ -272,7 +271,7 @@ impl ast::ASTBuilder {
                             .build(&mut body, cx, file_id, parsed_id, depth + 1, once);
                         let end = Some(Pos {
                             start: s.name.start,
-                            line_num: s.name.line_num,
+                            line_num: s.name.line_num.get(),
                         });
                         body.close_all(end, &mut cx.reporter, file, file_id);
                     }
@@ -336,7 +335,8 @@ impl ast::ASTBuilder {
                     ast.alter_runs += 1;
                     if !after_alter {
                         after_alter = true;
-                        ast.unknown.push(builder::Builder::build(stmt, file));
+                        ast.unknown
+                            .push(builder::Builder::build(stmt.clone(), file));
                     }
                 }
             }
@@ -362,7 +362,7 @@ fn new_subckt<'s, 'a>(
     if subckt.contains_key(&key) {
         let e = err::ParseErrorInner::DuplicateSubckt(name.to_string()).with(Some(Pos {
             start: s.name.start,
-            line_num: s.name.line_num,
+            line_num: s.name.line_num.get(),
         }));
         reporter.report(&e, file_id, file);
     }
@@ -370,8 +370,8 @@ fn new_subckt<'s, 'a>(
         key,
         Subckt {
             name,
-            ports: s.ports.build(file),
-            params: s.params.build(file),
+            ports: s.ports.clone().build(file),
+            params: s.params.clone().build(file),
             ast: AST::default(),
         },
     );
@@ -419,14 +419,14 @@ fn build_statements<'s>(
 /// Adds the statements `from` to `to`. With `once`, each one moves out of `from`:
 /// its memory is free when it is built. The first list of a level takes the
 /// memory of `from` (a `Vec` that is collected from its own values reuses it).
-fn add_statements<'s, B: builder::Builder<'s>>(
+fn add_statements<'s, B: builder::Builder<'s> + Clone>(
     to: &mut Vec<B::Out>,
     from: &mut Vec<B>,
     file: &'s str,
     once: bool,
 ) {
     if !once {
-        to.extend(from.iter().map(|b| b.build(file)));
+        to.extend(from.iter().cloned().map(|b| b.build(file)));
     } else if to.is_empty() {
         *to = mem::take(from).into_iter().map(|b| b.build(file)).collect();
     } else {
@@ -488,8 +488,9 @@ impl Files {
             }
         }
         if let Some((top_id, after_end)) = last {
+            // (the error quotes the `.end` line)
             let line = after_end.map(|end| Pos {
-                start: 0,
+                start: end.start,
                 line_num: end.line,
             });
             let (file, file_id) = (&self.inner[top_id.0], &file_ids[top_id.0]);

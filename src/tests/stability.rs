@@ -80,7 +80,9 @@ async fn recursive_subckt_instantiation_is_an_error() {
 #[tokio::test]
 async fn cr_line_ends_bom_and_latin1_are_read() {
     let dir = TempDir::new("encoding");
-    dir.write_bytes("cr.sp", b"R1 a b 1k\rC1 b 0 1p\rV1 a 0 1.8\r");
+    // (with a comment line first, and a `//` comment: `//` is found per line,
+    // after the CR line ends are read)
+    dir.write_bytes("cr.sp", b"* c\rR1 a b 1k // c\rC1 b 0 1p\rV1 a 0 1.8\r");
     // (and one inside the file, as when files are joined)
     dir.write_bytes("bom.sp", b"\xef\xbb\xbfR2 a b 1k\n\xef\xbb\xbfC2 b 0 1p\n");
     dir.write_bytes("latin1.sp", b"* bias 10 \xb5A\nR3 a b 1k\n");
@@ -90,13 +92,15 @@ async fn cr_line_ends_bom_and_latin1_are_read() {
         b"\xef\xbb\xbf* deck\n.inc 'cr.sp'\n.inc 'bom.sp'\n.inc 'latin1.sp'\n",
     );
     let (parsed, files) = parse_files(&[deck]).await;
+    // (one warning for the lone CR line ends of cr.sp, one for latin1.sp)
+    let warning = |kind| Diag {
+        kind,
+        line: None,
+        warning: true,
+    };
     assert_eq!(
         diagnostics(&parsed),
-        [Diag {
-            kind: "Encoding",
-            line: None,
-            warning: true
-        }]
+        [warning("LoneCr"), warning("Encoding")]
     );
     let (ast, has_err) = files.build(parsed);
     assert!(!has_err);
@@ -200,7 +204,7 @@ R2 a b 50 TC=0,0
     let InstanceCtx::Resistor(r) = &inst(&ast, "R1").ctx else {
         panic!()
     };
-    assert!(matches!(&r.value, Some(Value::Expr(e)) if e == "1e999"));
+    assert!(matches!(&r.value, Some(Value::Expr(e)) if *e == "1e999"));
     let first = ast.to_string();
     assert!(first.contains("TC=0,0"), "{first}");
     assert!(first.contains("delay=OPT1 ( 0n, 0n, 5n )"), "{first}");
@@ -259,7 +263,7 @@ R2 a b 50 TC=0,0
     assert_eq!(diagnostics(&parsed), []);
     let (ast, _) = files.build(parsed);
     assert_eq!(ast.param.len(), 2);
-    assert!(matches!(&ast.param[1].v, Value::Expr(e) if e == "max(1k, 3k)"));
+    assert!(matches!(&ast.param[1].v, Value::Expr(e) if *e == "max(1k, 3k)"));
 }
 
 /// HSPICE also delimits expressions with double quotes (2,641 `X` lines in
@@ -277,12 +281,12 @@ async fn double_quoted_values() {
     let InstanceCtx::Subckt(x) = &inst(&ast, "XNAND2_0").ctx else {
         panic!()
     };
-    assert_eq!((x.cktname.as_ref(), x.nodes.len()), ("NAND2", 5));
-    assert!(matches!(&x.params[0].v, Value::Expr(e) if e == "2"));
+    assert_eq!((x.cktname, x.nodes.len()), ("NAND2", 5));
+    assert!(matches!(&x.params[0].v, Value::Expr(e) if *e == "2"));
     let InstanceCtx::Subckt(x) = &inst(&ast, "X2").ctx else {
         panic!()
     };
-    assert!(matches!(&x.params[0].v, Value::Expr(e) if e == "SN_NAND2"));
+    assert!(matches!(&x.params[0].v, Value::Expr(e) if *e == "SN_NAND2"));
 }
 
 /// The rows of a `.data` block may be written without `+` (about 400 rows in
@@ -333,10 +337,7 @@ async fn pwl_controlled_sources() {
     };
     let g = controlled("G_Switch");
     let pwl = g.pwl.as_ref().unwrap();
-    assert_eq!(
-        (pwl.function.as_ref(), pwl.ndim, pwl.points.len()),
-        ("PWL", 1, 2)
-    );
+    assert_eq!((pwl.function, pwl.ndim, pwl.points.len()), ("PWL", 1, 2));
     assert!(close(num(&pwl.points[1].1), 100e9));
     assert_eq!(nets(inst(&ast, "G_Switch")), ["0", "be", "ctrl"]);
     let e = controlled("e1");
@@ -365,7 +366,7 @@ async fn first_line_is_the_title() {
     assert_eq!(diagnostics(&parsed), [diag("TitleIsElement", 1)]);
     let (ast, has_err) = files.build(parsed);
     assert!(!has_err);
-    assert_eq!(ast.title.as_deref(), Some("DIC Lab 7: ring"));
+    assert_eq!(ast.title, Some("DIC Lab 7: ring"));
     assert_eq!(names(&ast), ["R1", "R2"]);
     // the title is printed on the first line, and read back as the title
     let printed = ast.to_string();
@@ -380,10 +381,7 @@ async fn first_line_is_the_title() {
         let (_dir, parsed, files) = parse_deck(&[("top.sp", text)]).await;
         assert_eq!(diagnostics(&parsed), []);
         let (ast, _) = files.build(parsed);
-        assert_eq!(
-            (ast.title.as_deref(), names(&ast)),
-            (None, vec!["R1".to_owned()])
-        );
+        assert_eq!((ast.title, names(&ast)), (None, vec!["R1".to_owned()]));
     }
     // a title that is not an element: no warning
     let (_dir, parsed, files) =
@@ -455,10 +453,10 @@ async fn more_hspice_statements() {
     let InstanceCtx::Voltage(v) = &inst(&ast, "Vsig1").ctx else {
         panic!()
     };
-    assert_eq!(v.source.func.as_ref().map(|f| &*f.name), Some("PWL"));
+    assert_eq!(v.source.func.as_ref().map(|f| f.name), Some("PWL"));
     assert!(func_args(&v.source).is_empty());
     assert_eq!(v.source.params[0].k, "PWLFILE");
-    assert!(matches!(&v.source.params[0].v, Value::Expr(e) if e == "str(wav_left)"));
+    assert!(matches!(&v.source.params[0].v, Value::Expr(e) if *e == "str(wav_left)"));
     assert!(
         ast.to_string()
             .contains("Vsig1 sig1 0 PWL PWLFILE=str(wav_left) TD="),
@@ -582,9 +580,35 @@ async fn fuzzed_round_trip_cases() {
     let InstanceCtx::Subckt(x) = &inst(&ast, "Xcdl").ctx else {
         panic!()
     };
-    assert_eq!((x.nodes.len(), x.cktname.as_ref()), (4, "INV"));
+    assert_eq!((x.nodes.len(), x.cktname), (4, "INV"));
     let first = ast.to_string();
     let (_dir2, parsed2, files2) = parse_deck(&[("top.sp", &first)]).await;
     assert_eq!(diagnostics(&parsed2), []);
     assert_eq!(files2.build(parsed2).0.to_string(), first);
+}
+
+/// A number with more than 8 significant digits prints with as many digits as
+/// it needs, so the printed netlist reads back the same value. A short number
+/// keeps the 8-digit form.
+#[tokio::test]
+async fn long_numbers_print_back_the_same() {
+    const DECK: &str = ".param vth=0.365478912345 short=1k\nR1 a b 1234.56789012\n";
+    let (_dir, parsed, files) = parse_text(&[("top.sp", DECK)]).await;
+    let (ast, _) = files.build(parsed);
+    let first = ast.to_string();
+    assert!(first.contains("short=1.0000000e3"), "{first}");
+    let (_dir2, parsed2, files2) = parse_deck(&[("top.sp", &format!("* t\n{first}"))]).await;
+    let (ast2, _) = files2.build(parsed2);
+    let vth = |ast: &AST<'_>| match ast.param[0].v {
+        Value::Num(x) => x,
+        _ => panic!("{ast}"),
+    };
+    assert_eq!(vth(&ast2), 0.365478912345, "{first}");
+    let InstanceCtx::Resistor(r) = &inst(&ast2, "R1").ctx else {
+        panic!()
+    };
+    assert!(
+        matches!(r.value, Some(Value::Num(x)) if x == 1234.56789012),
+        "{first}"
+    );
 }

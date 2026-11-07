@@ -506,14 +506,14 @@ impl Netlist {
             let set = |t: Option<&Resolved>| t.is_some_and(|t| t.value != Some(0.0));
             if set(tc1) || set(tc2) {
                 let temp = r.temperature().value;
-                let tnom = r.tnom();
+                let tn = r.tnom();
                 // `dtemp=` on the line: the element is that much warmer
                 let (dtemp, shown) = match dtemp.map(|d| d.value) {
                     None => (Some(0.0), String::new()),
                     Some(Some(d)) => (Some(d), format!(" + DTEMP {d}")),
                     Some(None) => (None, " + DTEMP (not resolved)".to_owned()),
                 };
-                if let (Ok(t), Ok(tn)) = (temp, tnom)
+                if let Ok(t) = temp
                     && dtemp.is_none_or(|d| t + d != tn)
                 {
                     let coef = |t: Option<&Resolved>| t.map_or(Some(0.0), |t| t.value);
@@ -583,7 +583,7 @@ impl Netlist {
     /// The caveats of the analyses of the first run that sweep the name
     /// `n` (a parameter, a source, `temp`): the answer gives the value of
     /// the deck, the nominal one, which is the `.op` value (golden
-    /// `sweep_op`; spec 6.2a).
+    /// `sweep_op`).
     pub(super) fn swept_caveats(&self, n: Sym) -> Vec<String> {
         // `swept` is sorted by name
         let at = self.swept.partition_point(|s| s.name < n);
@@ -599,7 +599,7 @@ impl Netlist {
                     )
                 });
                 format!(
-                    "`{}` is swept by .{} at {}{via}; this is the nominal value, the one of the deck, which is the `.op` value (golden `sweep_op`; spec 6.2a)",
+                    "`{}` is swept by .{} at {}{via}; this is the nominal value, the one of the deck, which is the `.op` value",
                     self.syms.name(n),
                     s.cmd,
                     loc_str(self, s.loc)

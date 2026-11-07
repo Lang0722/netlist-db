@@ -15,7 +15,7 @@ pub(super) struct ElemCx<'a> {
 
 impl ElemCx<'_> {
     pub(super) fn sym(&mut self, sp: &Span) -> Sym {
-        self.syms.intern(&self.text[sp.start..sp.end])
+        self.syms.intern(&self.text[sp.start..sp.end()])
     }
 
     pub(super) fn pin(&mut self, sp: &Span) {
@@ -57,21 +57,15 @@ impl ElemCx<'_> {
 
     /// The pins, the value (as `key`), the numbers after the value and the
     /// parameters of an R, C or L line. Returns the model.
-    pub(super) fn rcl<'v>(
-        &mut self,
-        key: &str,
-        nodes: [&Span; 2],
-        model: Option<&Span>,
-        value: Option<&ValueBuilder>,
-        positional: impl Iterator<Item = (&'static str, &'v Span, &'v ValueBuilder)>,
-        params: &[KeyValueBuilder],
-    ) -> Option<Sym> {
+    pub(super) fn rcl(&mut self, key: &str, r: &RclBuilder) -> Option<Sym> {
+        let nodes = [&r.n1, &r.n2];
+        let model = r.model.as_ref();
         for n in nodes {
             self.pin(n);
         }
         let model_sym = model.map(|m| self.sym(m));
-        if let Some(v) = value {
-            let from = model.map_or(nodes[1].end, |m| m.end);
+        if let Some(v) = &r.value {
+            let from = model.map_or(nodes[1].end(), |m| m.end());
             // the `key=` parameters: the first spelling of `key`, and the
             // value of the last one (the parser keeps the winning value
             // only, and a keyword value wins over a value after the nodes)
@@ -84,8 +78,8 @@ impl ElemCx<'_> {
                 ValueBuilder::Num(x) => {
                     keys = keywords(self.text, from, key);
                     keys.and_then(|(_, at)| num_token(self.text, at, x))
-                        .or_else(|| num_token(self.text, nodes[1].end, x))
-                        .or_else(|| model.and_then(|m| num_token(self.text, m.end, x)))
+                        .or_else(|| num_token(self.text, nodes[1].end(), x))
+                        .or_else(|| model.and_then(|m| num_token(self.text, m.end(), x)))
                         .map(|r| (r, x))
                 }
                 ValueBuilder::Expr(sp) => {
@@ -101,7 +95,7 @@ impl ElemCx<'_> {
             let first_key = keys.map(|((s, e), _)| self.syms.intern(&self.text[s..e]));
             match found {
                 Some(((start, end), x)) => {
-                    let lines = self.text.as_bytes()[nodes[1].end..start]
+                    let lines = self.text.as_bytes()[nodes[1].end()..start]
                         .iter()
                         .filter(|&&c| c == b'\n')
                         .count();
@@ -112,7 +106,7 @@ impl ElemCx<'_> {
                         num: Some(x),
                         loc: LocIdx {
                             file: self.file,
-                            line: nodes[1].line_num + lines as u32,
+                            line: nodes[1].line_num.get() + lines as u32,
                         },
                         alter: self.alter,
                     });
@@ -128,8 +122,8 @@ impl ElemCx<'_> {
                 }
             }
         }
-        self.positional(positional);
-        self.kvs(params);
+        self.positional(r.positional_params());
+        self.kvs(&r.params);
         model_sym
     }
 
@@ -142,7 +136,7 @@ impl ElemCx<'_> {
         for (name, sp, v) in values {
             // (`OFF` or a lone `+` on a MOSFET line takes a place and gives no value.
             // So does a parameter between the values: its place holds an empty span.)
-            if sp.start == sp.end || gives_no_value(&self.text[sp.start..sp.end]) {
+            if sp.start == sp.end() || gives_no_value(&self.text[sp.start..sp.end()]) {
                 continue;
             }
             let name = self.syms.builtin(name);
@@ -154,17 +148,25 @@ impl ElemCx<'_> {
     /// next `key=value`. HSPICE assigns the plain numbers first and then the
     /// expressions, each in the order of the line, and the last one stays. So a
     /// plain number gives way to an expression of its name, and a later value of
-    /// one name replaces an earlier one here.
-    pub(super) fn mosfet_values(&mut self, m: &MOSFETBuilder) {
+    /// one name replaces an earlier one here. With `wl` (`.option wl`), the
+    /// first value is W and the second L.
+    pub(super) fn mosfet_values(&mut self, m: &MOSFETBuilder, wl: bool) {
+        let placed = || {
+            m.positional_params().map(move |(n, sp, v)| match n {
+                "l" if wl => ("w", sp, v),
+                "w" if wl => ("l", sp, v),
+                _ => (n, sp, v),
+            })
+        };
         let is_expr = |v: &ValueBuilder| matches!(v, ValueBuilder::Expr(_));
         let text = self.text;
-        let key_text = |kv: &KeyValueBuilder| &text[kv.k.start..kv.k.end];
+        let key_text = |kv: &KeyValueBuilder| &text[kv.k.start..kv.k.end()];
         let has_expr = |name: &str| {
-            let placed = m.positional_params().any(|(n, sp, v)| {
+            let placed = placed().any(|(n, sp, v)| {
                 n.eq_ignore_ascii_case(name)
                     && is_expr(v)
-                    && sp.start != sp.end
-                    && !gives_no_value(&text[sp.start..sp.end])
+                    && sp.start != sp.end()
+                    && !gives_no_value(&text[sp.start..sp.end()])
             });
             placed
                 || m.params
@@ -172,8 +174,8 @@ impl ElemCx<'_> {
                     .any(|kv| is_expr(&kv.v) && key_text(kv).eq_ignore_ascii_case(name))
         };
         let mut keys = m.params.iter();
-        for (name, sp, v) in m.positional_params() {
-            if sp.start == sp.end {
+        for (name, sp, v) in placed() {
+            if sp.start == sp.end() {
                 if let Some(kv) = keys.next()
                     && (is_expr(&kv.v) || !has_expr(key_text(kv)))
                 {
@@ -201,7 +203,7 @@ impl ElemCx<'_> {
         }
         if let Some(f) = &src.func {
             let name = self.sym(&f.name);
-            self.raw(name, f.args.start, f.args.end, f.args.line_num);
+            self.raw(name, f.args.start, f.args.end(), f.args.line_num.get());
         }
         if let Some((sp, v)) = &src.ac_mag {
             let name = self.key_sym("ac", sp.start, false);
@@ -219,17 +221,23 @@ impl ElemCx<'_> {
         let p = match *v {
             ValueBuilder::Num(x) => ParamDef {
                 name,
-                text: Some(tref(self.file, sp.start, sp.end)),
+                text: Some(tref(self.file, sp.start, sp.end())),
                 num: Some(x),
                 loc: LocIdx {
                     file: self.file,
-                    line: sp.line_num,
+                    line: sp.line_num.get(),
                 },
                 alter: self.alter,
             },
-            ValueBuilder::Expr(_) => {
-                value_param(name, v, self.text, self.file, sp.line_num, None, self.alter)
-            }
+            ValueBuilder::Expr(_) => value_param(
+                name,
+                v,
+                self.text,
+                self.file,
+                sp.line_num.get(),
+                None,
+                self.alter,
+            ),
         };
         self.def.elem_params.push(p);
     }
@@ -243,9 +251,9 @@ pub(super) fn kv_param(
     kv: &KeyValueBuilder,
     alter: Option<u32>,
 ) -> ParamDef {
-    let name = syms.intern(&text[kv.k.start..kv.k.end]);
-    let from = value_start(text, kv.k.end);
-    value_param(name, &kv.v, text, file, kv.k.line_num, from, alter)
+    let name = syms.intern(&text[kv.k.start..kv.k.end()]);
+    let from = value_start(text, kv.k.end());
+    value_param(name, &kv.v, text, file, kv.k.line_num.get(), from, alter)
 }
 
 /// The parameter `name` with the value `v`. For a number, its text is
@@ -262,17 +270,17 @@ pub(super) fn value_param(
 ) -> ParamDef {
     match *v {
         ValueBuilder::Expr(sp) => {
-            let s = &text[sp.start..sp.end];
+            let s = &text[sp.start..sp.end()];
             let num = netlist_expr::scan_number(s)
                 .filter(|&(_, n)| n == s.len())
                 .map(|(x, _)| x);
             ParamDef {
                 name,
-                text: Some(tref(file, sp.start, sp.end)),
+                text: Some(tref(file, sp.start, sp.end())),
                 num,
                 loc: LocIdx {
                     file,
-                    line: sp.line_num,
+                    line: sp.line_num.get(),
                 },
                 alter,
             }

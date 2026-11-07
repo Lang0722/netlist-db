@@ -16,9 +16,31 @@ use crate::{
     span::{LocatedSpan, Span},
 };
 
+/// `i` after its first `n` bytes, which hold no line break: as `i.take_from(n)`,
+/// with no count of the line breaks. It is on the path of every word.
+#[inline]
+pub(super) fn past(i: LocatedSpan<'_>, n: usize) -> LocatedSpan<'_> {
+    // The line number stays the same, so the skipped bytes hold no line break.
+    debug_assert!(!i.fragment().as_bytes()[..n].contains(&b'\n'));
+    // SAFETY: the offset and the line are those of the rest of the same text.
+    unsafe {
+        LocatedSpan::new_from_raw_offset(
+            i.location_offset() + n,
+            i.location_line(),
+            &i.fragment()[n..],
+            (),
+        )
+    }
+}
+
 #[inline]
 pub(super) fn space(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
-    take_while(|c: char| matches!(c, '\t' | '\r' | ' ')).parse_complete(i)
+    let s = i.fragment().as_bytes();
+    let n = s
+        .iter()
+        .position(|c| !matches!(c, b'\t' | b'\r' | b' '))
+        .unwrap_or(s.len());
+    Ok((past(i, n), i.take(n)))
 }
 #[inline]
 pub(super) fn space1(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
@@ -126,7 +148,7 @@ pub(super) fn float_unit(i: LocatedSpan) -> IResult<LocatedSpan, f64> {
     match number {
         // A number too large for `f64` (`1e999`) is not a number here: it is
         // kept as written, as an expression.
-        Some((f, len)) if f.is_finite() => Ok((i.take_from(len), f)),
+        Some((f, len)) if f.is_finite() => Ok((past(i, len), f)),
         _ => Err(nom::Err::Error(nom::error::Error::new(i, ErrorKind::Float))),
     }
 }
@@ -230,8 +252,7 @@ fn name_span(i: LocatedSpan) -> IResult<LocatedSpan, LocatedSpan> {
             ErrorKind::TakeWhile1,
         )));
     }
-    let (rest, taken) = i.take_split(end);
-    Ok((rest, taken))
+    Ok((past(i, end), i.take(end)))
 }
 #[inline]
 fn is_formula(c: char) -> bool {
@@ -382,10 +403,10 @@ pub(super) fn separator<const PARENS: bool, const LONE_PLUS: bool>(
                     .iter()
                     .position(|b| !matches!(b, b' ' | b'\t' | b'\r'))
                     .unwrap_or(s.len());
-                j = j.take_from(n);
+                j = past(j, n);
             }
-            Some(b',') => j = j.take_from(1),
-            Some(b'(' | b')') if PARENS => j = j.take_from(1),
+            Some(b',') => j = past(j, 1),
+            Some(b'(' | b')') if PARENS => j = past(j, 1),
             Some(b'+')
                 if LONE_PLUS
                     && s.get(1).is_none_or(|c| {
@@ -880,7 +901,7 @@ fn param_assignment(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
     if i.fragment().starts_with('(')
         && let Some(len) = balanced_group(i.fragment())
     {
-        k.end += len;
+        k.len += len as u32;
         i = i.take_from(len);
     }
     let (i, _) = (loss_sep, char('='), eq_sep).parse_complete(i)?;
@@ -897,10 +918,11 @@ fn param_assignment(i: LocatedSpan) -> IResult<LocatedSpan, KeyValueBuilder> {
                 && let Some(len) = balanced_group(group.fragment())
             {
                 rest = group.take_from(len);
-                v = ValueBuilder::Expr(Span {
-                    end: rest.location_offset(),
-                    ..e
-                });
+                v = ValueBuilder::Expr(Span::new(
+                    e.start,
+                    rest.location_offset(),
+                    e.line_num.get(),
+                ));
             }
         }
     }
@@ -989,11 +1011,13 @@ pub(super) fn option(i: LocatedSpan) -> IResult<LocatedSpan, (Span, Option<Value
     ))
     .parse_complete(i)
 }
+/// `V(name)` or `I(name)`: `letter` (lower case) in either case, then the
+/// name in parentheses. Gives the name.
 #[inline]
-pub(super) fn v(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
+fn probe_node(i: LocatedSpan, letter: char) -> IResult<LocatedSpan, Span> {
     map(
         (
-            alt((char('V'), char('v'))),
+            alt((char(letter.to_ascii_uppercase()), char(letter))),
             loss_sep,
             char('('),
             loss_sep,
@@ -1005,21 +1029,15 @@ pub(super) fn v(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
     )
     .parse_complete(i)
 }
+/// `V(name)` in either case
+#[inline]
+pub(super) fn v(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
+    probe_node(i, 'v')
+}
+/// `I(name)` in either case
 #[inline]
 pub(super) fn i(i: LocatedSpan) -> IResult<LocatedSpan, Span> {
-    map(
-        (
-            alt((char('I'), char('i'))),
-            loss_sep,
-            char('('),
-            loss_sep,
-            name,
-            loss_sep,
-            char(')'),
-        ),
-        |(_, _, _, _, name, _, _)| name,
-    )
-    .parse_complete(i)
+    probe_node(i, 'i')
 }
 
 pub(super) fn many0_dummyfirst<'a, T, F>(
@@ -1055,7 +1073,7 @@ where
 pub(super) fn span_text<'a>(base: LocatedSpan<'a>, span: Span) -> &'a str {
     let offset = base.location_offset();
     let fragment: &'a str = base.fragment();
-    &fragment[span.start - offset..span.end - offset]
+    &fragment[span.start - offset..span.end() - offset]
 }
 
 /// The text from `start` to `end`, without the spaces around it
@@ -1063,9 +1081,7 @@ pub(super) fn raw_span(start: LocatedSpan, end: LocatedSpan) -> Span {
     let text = &start.fragment()[..end.location_offset() - start.location_offset()];
     let lead = text.len() - text.trim_start_matches([' ', '\t']).len();
     let begin = start.location_offset() + lead;
-    Span {
-        start: begin,
-        end: begin + text[lead..].trim_end().len(),
-        line_num: start.location_line(),
-    }
+    // (the rest of a file after `.alter` can pass 4 GiB)
+    let len = Span::capped_len(text[lead..].trim_end());
+    Span::new(begin, begin + len, start.location_line())
 }

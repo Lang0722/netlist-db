@@ -1077,7 +1077,7 @@ impl Build<'_> {
             for &(_, j) in group {
                 let e = &d.elements[j as usize];
                 hier.dup_elems.insert((id, e.name));
-                dup_rejected += usize::from(on_path);
+                dup_rejected += usize::from(on_path && !d.has_if);
                 let earlier = &d.elements[first[&e.name] as usize];
                 diags.push(dup_elem_diag(net, id, e, earlier, on_path));
             }

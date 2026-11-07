@@ -21,7 +21,7 @@ fn statements(text: &str) -> (Vec<Instance<'_>>, usize) {
     let blocks = Blocks::new(i);
     let mut ast = Default::default();
     local_ast(i, None, &blocks, &mut ast);
-    let elements = ast.instance.iter().map(|x| x.build(text)).collect();
+    let elements = ast.instance.into_iter().map(|x| x.build(text)).collect();
     (elements, ast.errors.len())
 }
 
@@ -104,17 +104,14 @@ fn mosfet<'a, 's>(x: &'a Instance<'s>) -> &'a crate::instance::MOSFET<'s> {
 fn mos_extra_nodes() {
     let x = inst("M1 d g s b e1 nch W=1u");
     let m = mosfet(&x);
-    assert_eq!(
-        (&*m.nd, &*m.ng, &*m.ns, m.nb.as_deref()),
-        ("d", "g", "s", Some("b"))
-    );
+    assert_eq!((m.nd, m.ng, m.ns, m.nb), ("d", "g", "s", Some("b")));
     assert_eq!(m.extra_nodes, ["e1"]);
     assert_eq!(m.mname, "nch");
     assert_eq!(keys(&m.params), ["W"]);
     // Up to 7 nodes (BSIM-SOI: d g s e p b t).
     let x = inst("M2 d g s e p b t soi L=1u");
     let m = mosfet(&x);
-    assert_eq!(m.nb.as_deref(), Some("e"));
+    assert_eq!(m.nb, Some("e"));
     assert_eq!(m.extra_nodes, ["p", "b", "t"]);
     assert_eq!(m.mname, "soi");
     // (the parser does not know the models: `nch` can be the model name
@@ -128,14 +125,14 @@ fn mos_extra_nodes() {
 fn mos_three_nodes() {
     let x = inst("M1 d g s nch W=1u L=0.1u");
     let m = mosfet(&x);
-    assert_eq!((&*m.nd, &*m.ng, &*m.ns), ("d", "g", "s"));
+    assert_eq!((m.nd, m.ng, m.ns), ("d", "g", "s"));
     assert_eq!(m.nb, None);
     assert!(m.extra_nodes.is_empty());
     assert_eq!(m.mname, "nch");
     assert_eq!(keys(&m.params), ["W", "L"]);
     let x = inst("M1 d g s b nch");
     let m = mosfet(&x);
-    assert_eq!(m.nb.as_deref(), Some("b"));
+    assert_eq!(m.nb, Some("b"));
     assert!(m.extra_nodes.is_empty());
     assert!(m.params.is_empty());
 }
@@ -248,7 +245,7 @@ fn comment_only_plus_lines() {
     ] {
         let (elements, errors) = statements(text);
         assert_eq!(errors, 0, "{text:?}");
-        let names: Vec<&str> = elements.iter().map(|x| &*x.name).collect();
+        let names: Vec<&str> = elements.iter().map(|x| x.name).collect();
         assert_eq!(names, [&text[..2], "R2"], "{text:?}");
     }
     // Parameters on a `+` line after them still belong to the element.
@@ -280,7 +277,7 @@ fn comment_only_plus_lines() {
     ] {
         let (elements, errors) = statements(text);
         assert_eq!(errors, 0, "{text:?}");
-        let names: Vec<&str> = elements.iter().map(|x| &*x.name).collect();
+        let names: Vec<&str> = elements.iter().map(|x| x.name).collect();
         assert_eq!(names, [&text[..2]], "{text:?}");
     }
     let text = ".param a=1 $c\n+ $d";
@@ -353,11 +350,11 @@ fn bang_in_node_name() {
     let (elements, errors) = statements("r2 1 gnd! 4\nM1 d g vss! vdd! pch\n");
     assert_eq!(errors, 0);
     match &elements[0].ctx {
-        InstanceCtx::Resistor(r) => assert_eq!((&*r.n1, &*r.n2), ("1", "gnd!")),
+        InstanceCtx::Resistor(r) => assert_eq!((r.n1, r.n2), ("1", "gnd!")),
         other => panic!("{other:?}"),
     }
     let m = mosfet(&elements[1]);
-    assert_eq!((&*m.ns, m.nb.as_deref()), ("vss!", Some("vdd!")));
+    assert_eq!((m.ns, m.nb), ("vss!", Some("vdd!")));
 }
 
 /// `(name, value)` of the numbers after the model name of an `M` line.
@@ -368,8 +365,8 @@ fn positional(m: &crate::instance::MOSFET) -> Vec<(&'static str, f64)> {
 }
 
 fn nodes<'a>(m: &'a crate::instance::MOSFET) -> Vec<&'a str> {
-    let mut nodes = vec![&*m.nd, &*m.ng, &*m.ns];
-    nodes.extend(m.nb.as_deref());
+    let mut nodes = vec![m.nd, m.ng, m.ns];
+    nodes.extend(m.nb);
     nodes
 }
 
@@ -483,11 +480,11 @@ fn diode_bjt_positional() {
     };
     let x = inst("D1 a k dmod 2");
     let d = diode(&x);
-    assert_eq!((&*d.nplus, &*d.nminus, &*d.mname), ("a", "k", "dmod"));
+    assert_eq!((d.nplus, d.nminus, d.mname), ("a", "k", "dmod"));
     assert_eq!(pos(d.positional_params().collect()), [("area", 2.0)]);
     let x = inst("D1 1 0 dmod 2p 4u OFF m=2");
     let d = diode(&x);
-    assert_eq!((&*d.nplus, &*d.nminus, &*d.mname), ("1", "0", "dmod"));
+    assert_eq!((d.nplus, d.nminus, d.mname), ("1", "0", "dmod"));
     assert_eq!(
         pos(d.positional_params().collect()),
         [("area", 2e-12), ("pj", 4e-6)]
@@ -498,21 +495,18 @@ fn diode_bjt_positional() {
 
     let x = inst("Q1 c b e qmod 2");
     let q = bjt(&x);
-    assert_eq!(
-        (&*q.nc, &*q.nb, &*q.ne, q.ns.as_deref()),
-        ("c", "b", "e", None)
-    );
+    assert_eq!((q.nc, q.nb, q.ne, q.ns), ("c", "b", "e", None));
     assert_eq!(q.mname, "qmod");
     assert_eq!(pos(q.positional_params().collect()), [("area", 2.0)]);
     let x = inst("Q1 c b e s qmod");
     let q = bjt(&x);
-    assert_eq!(q.ns.as_deref(), Some("s"));
+    assert_eq!(q.ns, Some("s"));
     assert_eq!(q.mname, "qmod");
     assert!(q.positional.is_empty());
     // Numeric node names and `OFF`.
     let x = inst("Q1 1 2 3 4 q2n3904 3 OFF");
     let q = bjt(&x);
-    assert_eq!(q.ns.as_deref(), Some("4"));
+    assert_eq!(q.ns, Some("4"));
     assert_eq!(q.mname, "q2n3904");
     assert_eq!(pos(q.positional_params().collect()), [("area", 3.0)]);
     // A model name that starts with a digit is an error (see
@@ -534,9 +528,9 @@ fn diode_bjt_positional() {
 /// The model, the value and the parameters of an R, C or L element.
 fn rcl_model<'a, 's>(x: &'a Instance<'s>) -> Option<&'a str> {
     match &x.ctx {
-        InstanceCtx::Resistor(r) => r.model.as_deref(),
-        InstanceCtx::Capacitor(c) => c.model.as_deref(),
-        InstanceCtx::Inductor(l) => l.model.as_deref(),
+        InstanceCtx::Resistor(r) => r.model,
+        InstanceCtx::Capacitor(c) => c.model,
+        InstanceCtx::Inductor(l) => l.model,
         other => panic!("not R/C/L: {other:?}"),
     }
 }
@@ -614,7 +608,7 @@ fn rcl_model_and_value() {
     let (elements, errors) =
         statements("L1 a b 1n lmod\nR1 a b 2k rmod\nR2 a b 'rmod' 2k\nC1 a b x*2 cmod\nR3 a b 1\n");
     assert_eq!(errors, 2);
-    let names: Vec<&str> = elements.iter().map(|x| &*x.name).collect();
+    let names: Vec<&str> = elements.iter().map(|x| x.name).collect();
     assert_eq!(names, ["L1", "R2", "R3"]);
     assert_eq!(rcl_model(&elements[0]), Some("lmod"));
     assert_eq!(rcl_model(&elements[1]), None);
@@ -657,7 +651,7 @@ fn source<'a, 's>(x: &'a Instance<'s>) -> &'a crate::instance::Source<'s> {
 /// The function of a V or I element: its name and its arguments as
 /// written.
 fn source_func<'a, 's>(x: &'a Instance<'s>) -> Option<(&'a str, &'a str)> {
-    source(x).func.as_ref().map(|f| (&*f.name, &*f.args))
+    source(x).func.as_ref().map(|f| (f.name, f.args))
 }
 
 /// The numbers after the value of an R, C or L element, by name.
@@ -856,7 +850,7 @@ fn rcl_order() {
             panic!("{text:?}: not R");
         };
         r.positional_params()
-            .map(|(name, sp, _)| format!("{name}={}", &text[sp.start..sp.end]))
+            .map(|(name, sp, _)| format!("{name}={}", &text[sp.start..sp.end()]))
             .collect()
     };
     assert_eq!(
@@ -1207,7 +1201,7 @@ fn source_forms() {
     for &(text, dc, ac, phase, func) in cases {
         let x = inst(text);
         let s = source(&x);
-        let tok = |v: &Option<(std::borrow::Cow<str>, Value)>| v.as_ref().map(|t| t.0.to_string());
+        let tok = |v: &Option<(&str, Value)>| v.as_ref().map(|t| t.0.to_string());
         assert_eq!(tok(&s.dc).as_deref(), dc, "{text:?}");
         assert_eq!(tok(&s.ac_mag).as_deref(), ac, "{text:?}");
         assert_eq!(tok(&s.ac_phase).as_deref(), phase, "{text:?}");
@@ -1375,7 +1369,7 @@ fn ac_then_function() {
     for &(text, dc, phase, func) in cases {
         let x = inst(text);
         let s = source(&x);
-        let tok = |v: &Option<(std::borrow::Cow<str>, Value)>| v.as_ref().map(|t| t.0.to_string());
+        let tok = |v: &Option<(&str, Value)>| v.as_ref().map(|t| t.0.to_string());
         assert_eq!(tok(&s.dc).as_deref(), dc, "{text:?}");
         assert!(s.ac_mag.is_some(), "{text:?}");
         assert_eq!(tok(&s.ac_phase).as_deref(), phase, "{text:?}");

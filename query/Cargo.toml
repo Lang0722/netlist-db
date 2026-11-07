@@ -13,9 +13,9 @@ netlist-expr = { path = "../expr" }
 # `HashTable` for the interner (no default hasher: the interner hashes)
 hashbrown = { version = "0.17", default-features = false }
 serde.workspace = true
-serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 # peak RSS in the perf gate (`getrusage`)
 libc = "0.2"

@@ -240,7 +240,7 @@ pub(super) const MAX_MOSFET_NODES: usize = 7;
 /// first. The parser takes the last word that is not a number, so in
 /// `M1 d g s b nch pl pw` it takes `pw`, with `nch` and `pl` in the place of
 /// nodes.
-fn name_words<'m, 's>(m: &'m MOSFET<'s>) -> impl Iterator<Item = &'m Cow<'s, str>> {
+fn name_words<'m, 's>(m: &'m MOSFET<'s>) -> impl Iterator<Item = &'m &'s str> {
     once(&m.mname)
         .chain(m.extra_nodes.iter().rev())
         .chain(&m.nb)
@@ -275,7 +275,7 @@ impl<'m, 's> MosLine<'m, 's> {
         match self.model.checked_sub(position + 1) {
             Some(word) => name_words(self.m).nth(word).map(|w| match plain_word(w) {
                 Some(number) => Value::Num(number),
-                None => Value::Expr(w.clone()),
+                None => Value::Expr(*w),
             }),
             None => self
                 .m

@@ -493,6 +493,14 @@ async fn short_forms_of_commands() {
         (".param t=75\n.temp t\n", 75.0),
         (".temp 50\n.temp 75\n", 50.0),
         (".temp 75 100\n", 75.0),
+        // HSPICE splits the values at commas, with or without a space, and a
+        // `$` right after the number starts a comment: temper is 50 in the
+        // first run of each (measured on P-2019.06-SP1-1)
+        (".temp 50,75\n", 50.0),
+        (".temp 50, 75\n", 50.0),
+        (".temp 50,\n", 50.0),
+        (".temp 50$room\n", 50.0),
+        (".temp 50 $room\n", 50.0),
         (".option tnom=50\n", 50.0),
         (".option tnom=50\n.option tnom=75\n", 75.0),
         (".option tnom=50\n.temp 75\n", 75.0),

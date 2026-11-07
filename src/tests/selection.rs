@@ -1440,3 +1440,35 @@ async fn model_usage_counts_like_the_list() {
         }
     }
 }
+
+/// Under `parhier=local`, a text that reads its own name reads that name at
+/// the level above, so the counts of the summary depend on the value above.
+/// HSPICE on this deck: x1.m1 has L=1u and nch.1, x2.x1.m1 has L=4u and nch.2.
+/// `deck_rows` also checks the counts of the summary against the list.
+#[tokio::test]
+async fn usage_follows_a_text_that_reads_its_own_name() {
+    let models = ".option parhier=local\n\
+        .model nch.1 nmos level=54 lmin=0 lmax=1.5u wmin=0 wmax=1\n\
+        .model nch.2 nmos level=54 lmin=1.5u lmax=100u wmin=0 wmax=1\n.param w=0.5u\n";
+    let tail = "M1 d d 0 0 nch l=w w=1u\n.ends\n\
+        .subckt big d w=2u\nX1 d leaf\n.ends\nX1 d leaf\nX2 d big\n";
+    let text = format!("* t\n{models}.subckt leaf d\n.param w='w*2'\n{tail}");
+    let rows: Vec<_> = deck_rows(&text)
+        .await
+        .into_iter()
+        .map(|r| (r.0, r.1, r.2))
+        .collect();
+    let want = [
+        ("X1.M1".to_owned(), "nch.1".to_owned(), 1.0),
+        ("X2.X1.M1".to_owned(), "nch.2".to_owned(), 4.0),
+    ];
+    assert_eq!(rows, want, "{text}");
+    // the same read in a default of the subckt, and with both forms on one
+    // level (the counts must agree with the list)
+    for leaf in [
+        ".subckt leaf d w='w*2'\n",
+        ".subckt leaf d w=1u\n.param w='w*2'\n",
+    ] {
+        deck_rows(&format!("* t\n{models}{leaf}{tail}")).await;
+    }
+}

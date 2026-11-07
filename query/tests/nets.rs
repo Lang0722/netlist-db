@@ -1,38 +1,9 @@
 //! Connectivity: `net_info` and `trace_net`.
 
-use netlist_query::{LoadOptions, NetInfo, NetView, Netlist, Page, QueryError, TraceDir};
-use std::path::{Path, PathBuf};
+use netlist_query::{NetInfo, NetView, Netlist, Page, QueryError, TraceDir};
 
-fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
-}
-
-/// A deck written by `load_text`; its directory is removed on drop.
-struct Deck {
-    dir: PathBuf,
-}
-
-impl Drop for Deck {
-    fn drop(&mut self) {
-        _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn load(path: impl AsRef<Path>) -> Netlist {
-    Netlist::load(&LoadOptions::new(path.as_ref().to_path_buf())).unwrap()
-}
-
-fn load_text(name: &str, text: &str) -> (Deck, Netlist) {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("nets")
-        .join(format!("{name}-{}", std::process::id()));
-    _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let main = dir.join("main.sp");
-    std::fs::write(&main, text).unwrap();
-    let net = load(&main);
-    (Deck { dir }, net)
-}
+mod common;
+use common::*;
 
 fn all() -> Page {
     Page {
@@ -44,21 +15,6 @@ fn all() -> Page {
 fn info(net: &Netlist, scope: &str, name: &str) -> NetInfo {
     net.net_info(scope, name, NetView::Logical, &all())
         .unwrap_or_else(|e| panic!("net_info({scope:?}, {name:?}): {e}"))
-}
-
-/// (element, pin role) of each connection.
-fn pins(i: &NetInfo) -> Vec<(String, String)> {
-    i.connections
-        .items
-        .iter()
-        .map(|c| (c.element.to_ascii_lowercase(), c.pin_role.clone()))
-        .collect()
-}
-
-fn owned(v: &[(&str, &str)]) -> Vec<(String, String)> {
-    v.iter()
-        .map(|(a, b)| (a.to_string(), b.to_string()))
-        .collect()
 }
 
 const BUF: &str = "* buffers\n\
@@ -133,6 +89,32 @@ fn trace_down_through_ports() {
     let vdd = net.trace_net("", "vdd", TraceDir::Down, 2, &all()).unwrap();
     let to: Vec<&str> = vdd.hops.items.iter().map(|h| h.to_scope.as_str()).collect();
     assert_eq!(to, ["xb1", "xb2", "xb1.x1", "xb1.x2", "xb2.x1", "xb2.x2"]);
+}
+
+/// A trace stops at 2 * (definitions) + 2 steps: a path with no call cycle
+/// never goes further, and on a call cycle each step has a longer path.
+/// The top level counts as a definition, so this deck stops at
+/// 2 x 2 + 2 = 6 steps.
+#[test]
+fn trace_depth_bounded_on_call_cycle() {
+    let (_deck, net) = load_text(
+        "trace_cycle",
+        "* t\n.subckt aa p\nxa p aa\nR1 p 0 1k\n.ends\nx1 n aa\nV1 n 0 1\n.end\n",
+    );
+    let t = net
+        .trace_net("", "n", TraceDir::Down, 1000, &all())
+        .unwrap();
+    assert!(t.truncated);
+    assert_eq!(t.hops.total, 6);
+    assert!(
+        t.caveats.iter().any(|c| c.contains("call cycle")),
+        "{:?}",
+        t.caveats
+    );
+    // a depth below the bound is not cut
+    let t = net.trace_net("", "n", TraceDir::Down, 3, &all()).unwrap();
+    assert!(!t.truncated);
+    assert_eq!(t.hops.total, 3);
 }
 
 #[test]

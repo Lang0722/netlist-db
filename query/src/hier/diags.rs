@@ -276,7 +276,14 @@ pub(super) fn dup_elem_diag(
             .map_or(l.file.as_str(), |f| f.to_str().unwrap_or(&l.file));
         format!("repeats the name of {file}:{}", l.line)
     };
-    let (level, message) = if on_path {
+    let (level, message) = if on_path && net.defs[def.idx()].has_if {
+        (
+            Level::Warning,
+            format!(
+                "`{x}` {place} {what}: the lines can be in different `.if` branches, which the query layer does not tell apart; HSPICE rejects the deck only when one run reads both"
+            ),
+        )
+    } else if on_path {
         (
             Level::Error,
             format!("`{x}` {place} {what}: HSPICE rejects the deck"),

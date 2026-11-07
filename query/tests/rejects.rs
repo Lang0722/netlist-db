@@ -6,6 +6,9 @@
 use netlist_query::{Diagnostic, Level, LoadOptions, Netlist, Page};
 use std::path::{Path, PathBuf};
 
+mod common;
+use common::*;
+
 /// The codes of the load checks of `query/src/rejects.rs`.
 const CODES: [&str; 5] = [
     "undefined_param",
@@ -14,10 +17,6 @@ const CODES: [&str; 5] = [
     "name_then_model",
     "inductor_model_level",
 ];
-
-fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
-}
 
 fn errors_of(net: &Netlist) -> Vec<Diagnostic> {
     let page = Page {
@@ -150,16 +149,6 @@ fn load_checks_quiet_on_accepted_decks() {
     }
 }
 
-fn load_text(name: &str, text: &str) -> Netlist {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("rejects")
-        .join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("main.sp");
-    std::fs::write(&path, text).unwrap();
-    Netlist::load(&LoadOptions::new(path)).unwrap()
-}
-
 fn codes(net: &Netlist) -> Vec<&'static str> {
     errors_of(net).into_iter().map(|d| d.code).collect()
 }
@@ -173,8 +162,10 @@ fn load_checks_scope() {
             "* t\n.model lmod l\n.subckt s a b\n{body}.ends\n{x}v1 1 0 1\nr0 1 0 1k\n.op\n.end\n"
         )
     };
-    assert_eq!(codes(&load_text("unused", &deck(""))), Vec::<&str>::new());
-    let mut used = codes(&load_text("used", &deck("x1 1 0 s\n")));
+    let (_deck, net) = load_text("unused", &deck(""));
+    assert_eq!(codes(&net), Vec::<&str>::new());
+    let (_deck, net) = load_text("used", &deck("x1 1 0 s\n"));
+    let mut used = codes(&net);
     used.sort_unstable();
     assert_eq!(
         used,
@@ -186,27 +177,27 @@ fn load_checks_scope() {
     );
     // names that HSPICE knows, a name that an X line or a subckt defines,
     // an inductor card with level=3 or a level expression
-    let net = load_text(
+    let (_deck, net) = load_text(
         "fine",
         "* t\n.param lv=3 a='temper*2'\n.model l3 l level=3\n.model lx l level=lv\n.subckt s a b w=1\nrw a b w\nrq a b q\n.ends\nx1 1 0 s q=2\nrt 1 0 'hertz+time+1'\nla 1 0 1n l3\nlb 1 0 1n lx\nv1 1 0 1\n.op\n.end\n",
     );
     assert_eq!(codes(&net), Vec::<&str>::new());
     // a self-naming override in a subckt: no load check (NOTES "Known
     // differences"); at the top level with a top-level `.param`: fine
-    let net = load_text(
+    let (_deck, net) = load_text(
         "ovr",
         "* t\n.param w=1\n.subckt c a b w=2\nr1 a b w\n.ends\n.subckt p a b\nxi a b c w='w*3'\n.ends\nx1 1 0 c w='w*3'\nx2 1 0 p\nv1 1 0 1\n.op\n.end\n",
     );
     assert_eq!(codes(&net), Vec::<&str>::new());
     // the card of an L line can be the word after a name in the value
     // place (`ind_name_model`)
-    let net = load_text(
+    let (_deck, net) = load_text(
         "l_name_model",
         "* t\n.param lval=1n\n.model lmod l level=1\nl1 1 0 lval lmod\nv1 1 0 1\n.op\n.end\n",
     );
     assert_eq!(codes(&net), ["inductor_model_level"]);
     // after a load Error the checks of undefined names are off
-    let net = load_text(
+    let (_deck, net) = load_text(
         "after_error",
         "* t\n.param p='{a}*2'\n.param q='z*2'\nr1 1 0 p\nv1 1 0 1\n.op\n.end\n",
     );

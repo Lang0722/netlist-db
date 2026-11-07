@@ -18,7 +18,7 @@ use crate::{
     err::{ParseError, ParseErrorInner},
     instance::InstanceCtxBuilder,
     parser::{
-        cmds::{init_condition, nodeset},
+        cmds::node_volts,
         instance::{instance, unsupported_controlled_form},
     },
 };
@@ -1009,13 +1009,13 @@ pub(super) fn statement<'a>(
                 }
                 "ic" => {
                     let _init_condition;
-                    (i, _init_condition) = init_condition(i)?;
+                    (i, _init_condition) = node_volts(i)?;
                     i = statement_end(i)?;
                     ast.init_condition.extend(_init_condition);
                 }
                 "nodeset" => {
                     let _nodeset;
-                    (i, _nodeset) = nodeset(i)?;
+                    (i, _nodeset) = node_volts(i)?;
                     i = statement_end(i)?;
                     ast.nodeset.extend(_nodeset);
                 }
@@ -1175,11 +1175,8 @@ fn condition(i: LocatedSpan<'_>) -> Result<(LocatedSpan<'_>, Span), ParseErrorIn
         return Err(bad());
     }
     let inner = i.take_from(1);
-    let cond = Span {
-        start: inner.location_offset(),
-        end: inner.location_offset() + end - 1,
-        line_num: i.location_line(),
-    };
+    let start = inner.location_offset();
+    let cond = Span::new(start, start + end - 1, i.location_line());
     Ok((i.take_from(end + 1), cond))
 }
 

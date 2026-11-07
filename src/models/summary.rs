@@ -310,7 +310,7 @@ impl<'a, 's> Usage<'a, 's> {
         }
         usage
             .models
-            .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name.cmp(&b.0.name)));
+            .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name.cmp(b.0.name)));
         usage
             .errors
             .sort_by_cached_key(|(e, n, path)| (Reverse(*n), path.clone(), e.to_string()));
@@ -378,7 +378,7 @@ impl<'a, 's> Usage<'a, 's> {
             .params
             .iter()
             .chain(&def.ast.param)
-            .filter(|kv| function_name(&kv.k).is_none());
+            .filter(|kv| function_name(kv.k).is_none());
         for kv in definitions.clone() {
             extend(&mut all, &self.sel.names(&kv.v)?);
         }
@@ -388,8 +388,20 @@ impl<'a, 's> Usage<'a, 's> {
         let mut outside: Vec<String> = all.iter().cloned().collect();
         if self.parhier == ParHier::Local {
             // the closest definition is used: one of this level hides those
-            // above
-            let here: HashSet<String> = definitions.map(|kv| kv.k.to_ascii_lowercase()).collect();
+            // above. But a text that reads its own name reads it at the level
+            // above, so that name stays a read from outside. A name that is
+            // defined twice on the level stays outside when one of its texts
+            // reads it: an extra name outside costs only a memo miss.
+            let mut here: HashSet<String> = definitions
+                .clone()
+                .map(|kv| kv.k.to_ascii_lowercase())
+                .collect();
+            for kv in definitions {
+                let k = kv.k.to_ascii_lowercase();
+                if self.sel.names(&kv.v)?.contains(&k) {
+                    here.remove(&k);
+                }
+            }
             outside.retain(|n| !here.contains(n));
         }
         Some(Reads {
@@ -444,7 +456,7 @@ impl<'a, 's> Usage<'a, 's> {
                     for kv in &x.params {
                         extend(all, &self.sel.names(&kv.v)?);
                     }
-                    if let Some(child) = resolve(&x.cktname, inner) {
+                    if let Some(child) = resolve(x.cktname, inner) {
                         extend(all, &self.reads(child, inner, inner_visible)?.outside);
                     }
                 }
@@ -463,7 +475,7 @@ impl<'a, 's> Usage<'a, 's> {
                 for kv in inside
                     .param
                     .iter()
-                    .filter(|kv| function_name(&kv.k).is_none())
+                    .filter(|kv| function_name(kv.k).is_none())
                 {
                     extend(all, &self.sel.names(&kv.v)?);
                 }
@@ -488,7 +500,7 @@ impl<'a, 's> Usage<'a, 's> {
         let scope = *scopes.last().expect("the top level at least");
         let mut counts = Counts::default();
         for e in &active.errors {
-            let used = Use::Error(self.error_number(condition_error(e), &e.block.line.name));
+            let used = Use::Error(self.error_number(condition_error(e), e.block.line.name));
             *counts.entry(used).or_default() += 1;
         }
         if ast.cond.is_empty() {
@@ -525,19 +537,19 @@ impl<'a, 's> Usage<'a, 's> {
                             self.models.entry(addr).or_insert(s.model);
                             Use::Model(addr)
                         }
-                        Err(e) => Use::Error(self.error_number(e, &inst.name)),
+                        Err(e) => Use::Error(self.error_number(e, inst.name)),
                     };
                     *counts.entry(used).or_default() += 1;
                 }
                 InstanceCtx::Subckt(x) => {
-                    let Some(def) = resolve(&x.cktname, on_path) else {
+                    let Some(def) = resolve(x.cktname, on_path) else {
                         let e = SelectError::NoSubckt(x.cktname.to_string());
-                        let used = Use::Error(self.error_number(e, &inst.name));
+                        let used = Use::Error(self.error_number(e, inst.name));
                         *counts.entry(used).or_default() += 1;
                         return;
                     };
                     if let Some(e) = expansion_error(x, def, &self.expanding) {
-                        let used = Use::Error(self.error_number(e, &inst.name));
+                        let used = Use::Error(self.error_number(e, inst.name));
                         *counts.entry(used).or_default() += 1;
                         return;
                     }
@@ -595,7 +607,7 @@ impl<'a, 's> Usage<'a, 's> {
                     let inner_visible = self.visible_with(visible, &def.ast, &active);
                     let inner_scopes = with_scope(scopes, &child, &active);
                     let inner = with_branches(on_path, &def.ast, &active);
-                    self.path.push(&inst.name);
+                    self.path.push(inst.name);
                     self.expanding.push(def);
                     let deepest_before = core::mem::replace(&mut self.deepest, level + 1);
                     let c = self.level(

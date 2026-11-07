@@ -121,7 +121,6 @@ pub enum DataValuesBuilder {
         params: Vec<Span>,
         values: Vec<f64>,
     },
-    /// https://eda-cpu1.eias.junzhuo.site/~junzhuo/hspice/index.htm#page/hspice_14/data.htm
     /// Concatenated (series merging) data files to use.
     MER(DataFilesBuilder),
     /// Column-laminated (parallel merging) data files to use.
@@ -149,7 +148,6 @@ pub struct PnameColNumBuilder {
 /// ...
 /// .ends pulvt11ll_ckt
 /// ```
-/// Do NOT support `.include` / `.lib` in `.subckt`
 #[derive(Debug)]
 pub struct SubcktBuilder {
     pub name: Span,
@@ -273,6 +271,8 @@ pub struct TitleLineInfo {
 pub struct AfterEnd {
     /// The line of `.end`.
     pub line: u32,
+    /// The offset of `.end` in the text of the file.
+    pub start: usize,
     /// The lines after `.end` that are not empty, not comments and not in
     /// a `.lib <section>` block (which a `.lib` call reads).
     pub lines: u32,

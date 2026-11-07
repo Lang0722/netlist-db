@@ -7,7 +7,15 @@ use super::*;
 pub struct FloatDisplay(pub f64);
 impl fmt::Display for FloatDisplay {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:.7e}", self.0)
+        // 8 significant digits when that text reads back the same value.
+        // Else the shortest text that reads back exactly, so that a printed
+        // netlist keeps every value (and every choice of bin).
+        let short = format!("{:.7e}", self.0);
+        if short.parse() == Ok(self.0) {
+            f.write_str(&short)
+        } else {
+            write!(f, "{:e}", self.0)
+        }
     }
 }
 
@@ -209,7 +217,7 @@ pub trait SpiceFmt: Sized {
     }
     fn data_files<W: fmt::Write>(&self, t: &ast::DataFiles<'_>, f: &mut W) -> fmt::Result {
         display_multiline(f, t.files.iter(), |file, f| {
-            write!(f, "+ FILE={}", QuotedPath(&file.file))?;
+            write!(f, "+ FILE={}", QuotedPath(file.file))?;
             display_inline(
                 f,
                 file.pname_col_num.iter(),
@@ -269,9 +277,9 @@ pub trait SpiceFmt: Sized {
     }
     fn instance_ctx<W: fmt::Write>(&self, t: &instance::InstanceCtx<'_>, f: &mut W) -> fmt::Result {
         match t {
-            instance::InstanceCtx::Resistor(t) => self.resistor(t, f),
-            instance::InstanceCtx::Capacitor(t) => self.capacitor(t, f),
-            instance::InstanceCtx::Inductor(t) => self.inductor(t, f),
+            instance::InstanceCtx::Resistor(t)
+            | instance::InstanceCtx::Capacitor(t)
+            | instance::InstanceCtx::Inductor(t) => self.rcl(t, f),
             instance::InstanceCtx::Voltage(t) => self.voltage(t, f),
             instance::InstanceCtx::Current(t) => self.current(t, f),
             instance::InstanceCtx::MOSFET(t) => self.mosfet(t, f),
@@ -317,7 +325,7 @@ pub trait SpiceFmt: Sized {
                 // (`PWL PWLFILE=...`: the file holds the points)
                 write!(f, " {}", func.name)?;
             } else {
-                write!(f, " {}({})", func.name, instance::source_args(&func.args))?;
+                write!(f, " {}({})", func.name, instance::source_args(func.args))?;
             }
         }
         if let Some((_, mag)) = &t.ac_mag {
@@ -343,45 +351,8 @@ pub trait SpiceFmt: Sized {
             false,
         )
     }
-    fn resistor<W: fmt::Write>(&self, t: &instance::Resistor<'_>, f: &mut W) -> fmt::Result {
-        write!(f, "{} {}", t.n1, t.n2)?;
-        if let Some(model) = &t.model {
-            write!(f, " {model}")?;
-        }
-        if let Some(value) = &t.value {
-            write!(f, " ")?;
-            self.value(value, f)?;
-        }
-        // the numbers after the value: `tc1 tc2`
-        display_inline(
-            f,
-            t.positional.iter(),
-            |(_, t), f| self.value(t, f),
-            ' ',
-            false,
-        )?;
-        display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
-    }
-    fn capacitor<W: fmt::Write>(&self, t: &instance::Capacitor<'_>, f: &mut W) -> fmt::Result {
-        write!(f, "{} {}", t.n1, t.n2)?;
-        if let Some(model) = &t.model {
-            write!(f, " {model}")?;
-        }
-        if let Some(value) = &t.value {
-            write!(f, " ")?;
-            self.value(value, f)?;
-        }
-        // the numbers after the value: `tc1 tc2`
-        display_inline(
-            f,
-            t.positional.iter(),
-            |(_, t), f| self.value(t, f),
-            ' ',
-            false,
-        )?;
-        display_inline(f, t.params.iter(), |t, f| self.key_value(t, f), ' ', false)
-    }
-    fn inductor<W: fmt::Write>(&self, t: &instance::Inductor<'_>, f: &mut W) -> fmt::Result {
+    /// An R, C or L line after its name.
+    fn rcl<W: fmt::Write>(&self, t: &instance::Rcl<'_>, f: &mut W) -> fmt::Result {
         write!(f, "{} {}", t.n1, t.n2)?;
         if let Some(model) = &t.model {
             write!(f, " {model}")?;

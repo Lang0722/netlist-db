@@ -80,6 +80,14 @@ pub enum ParseErrorInner {
     /// The file is not valid UTF-8; it was read anyway
     #[error("{0}")]
     Encoding(String),
+    /// The file (or `.lib` section) has lone CR line ends, which were read
+    /// as line ends. `line` is the line that the first one ends.
+    #[error(
+        "Lone CR line ends were read as line ends (the first one ends line {line}). \
+         HSPICE on Windows reads a lone CR as a space: to it these lines are one line, \
+         and a file with only CR line ends is one title line"
+    )]
+    LoneCr { line: u32 },
     /// The first line of a top-level file, read as its title (as in HSPICE),
     /// is also a well-formed element
     #[error("The title line is also an element")]
@@ -316,6 +324,7 @@ impl ParseErrorInner {
                 | Self::NonHspice(_)
                 | Self::Encrypted { .. }
                 | Self::Encoding(_)
+                | Self::LoneCr { .. }
                 | Self::TitleIsElement
         )
     }
@@ -452,6 +461,7 @@ impl ParseError {
                         ),
                     ),
                     ParseErrorInner::Encoding(msg) => ("Warning", msg.clone()),
+                    ParseErrorInner::LoneCr { .. } => ("Warning", self.err.err.to_string()),
                     ParseErrorInner::TitleIsElement => (
                         "Warning",
                         "HSPICE reads the first line of the netlist as its title, so this \

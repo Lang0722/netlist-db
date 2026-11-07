@@ -85,6 +85,9 @@ pub struct Netlist {
     pub(crate) parhier: Parhier,
     /// Every `.option` item, in document order.
     pub(crate) options: Vec<ParamDef>,
+    /// The last `.option tnom` with a number at the top level of the first
+    /// run. The model selector reads TNOM so (`AST::top_level`).
+    pub(crate) tnom: Option<ParamDef>,
     /// The `.global` node names.
     pub(crate) globals: Vec<Sym>,
     /// The first value of each `.temp` line.

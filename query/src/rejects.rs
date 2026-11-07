@@ -16,7 +16,7 @@ use crate::api::Level;
 use crate::hier::FxSet;
 use crate::intern::Sym;
 use crate::model::{Def, DefId, Diag, ElemKind, Element, LocIdx, ModelDef, ROOT};
-use crate::params::statistical;
+use crate::params::{STATISTICAL, statistical};
 use netlist_expr::{Expr, is_builtin, parse};
 
 /// Names that an expression can use with no `.param`. Only `temper` was
@@ -326,7 +326,7 @@ fn element<'n>(
         }
         // a `.param` function hides a built-in function of its name
         // (golden `func_shadow_top`, `stat_user_func`)
-        if (has(&text, "gauss") || has(&text, "unif"))
+        if STATISTICAL.iter().any(|f| has(&text, f))
             && let Ok(expr) = parse(&text)
             && let Some(f) = statistical(&expr, &mut |n| {
                 net.syms.get(n).is_some_and(|s| sets.funcs.contains(&s))

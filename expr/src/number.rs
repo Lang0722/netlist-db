@@ -19,9 +19,15 @@ enum Scale {
 /// `ME` (mega, also `MEG`) before `M` (milli). Golden cases `units` and
 /// `units2`.
 const SCALES: [(&[u8], Scale); 19] = [
+    (b"N", Scale::Pow10(-9)),
+    (b"U", Scale::Pow10(-6)),
+    (b"P", Scale::Pow10(-12)),
+    (b"F", Scale::Pow10(-15)),
+    (b"K", Scale::Pow10(3)),
     (b"MIN", Scale::Times(60.0)),
     (b"MI", Scale::Times(25.4e-6)),
     (b"ME", Scale::Pow10(6)),
+    (b"M", Scale::Pow10(-3)),
     (b"HR", Scale::Times(3600.0)),
     (b"DAY", Scale::Times(86_400.0)),
     (b"YR", Scale::Times(31_536_000.0)),
@@ -29,12 +35,6 @@ const SCALES: [(&[u8], Scale); 19] = [
     (b"T", Scale::Pow10(12)),
     (b"G", Scale::Pow10(9)),
     (b"X", Scale::Pow10(6)),
-    (b"K", Scale::Pow10(3)),
-    (b"M", Scale::Pow10(-3)),
-    (b"U", Scale::Pow10(-6)),
-    (b"N", Scale::Pow10(-9)),
-    (b"P", Scale::Pow10(-12)),
-    (b"F", Scale::Pow10(-15)),
     (b"A", Scale::Pow10(-18)),
     (b"Z", Scale::Pow10(-21)),
     (b"Y", Scale::Pow10(-24)),
@@ -182,9 +182,45 @@ fn scale(b: &[u8]) -> (Scale, usize) {
         .map_or((Scale::Pow10(0), 0), |&(name, scale)| (scale, name.len()))
 }
 
+/// The powers of ten that `f64` holds exactly.
+const EXACT_POW10: [f64; 23] = [
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+    1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+];
+
+/// `mantissa` times `10^exp10` when one multiplication or division of exact
+/// values gives it: at most 15 digits and a power of ten in [`EXACT_POW10`].
+/// IEEE rounds that one operation correctly (Clinger 1990), so the result is
+/// the value that a full conversion gives. Most numbers of a netlist are so.
+fn quick_decimal(mantissa: &str, exp10: i64) -> Option<f64> {
+    let (mut digits, mut count, mut fraction) = (0_u64, 0_u32, None);
+    for &c in mantissa.as_bytes() {
+        if c == b'.' {
+            fraction = Some(0_i64);
+            continue;
+        }
+        if count == 15 {
+            return None;
+        }
+        digits = digits * 10 + u64::from(c - b'0');
+        count += 1;
+        fraction = fraction.map(|f| f + 1);
+    }
+    let exp = exp10 - fraction.unwrap_or(0);
+    let pow = *EXACT_POW10.get(usize::try_from(exp.unsigned_abs()).ok()?)?;
+    Some(if exp < 0 {
+        digits as f64 / pow
+    } else {
+        digits as f64 * pow
+    })
+}
+
 /// Parses the unsigned `mantissa` times `10^exp10` with one correctly
 /// rounded conversion, so `10p` gives exactly the double nearest to `1e-11`.
 fn parse_decimal(mantissa: &str, exp10: i64) -> f64 {
+    if let Some(value) = quick_decimal(mantissa, exp10) {
+        return value;
+    }
     let parsed = if exp10 == 0 {
         mantissa.parse()
     } else {
@@ -205,8 +241,37 @@ fn parse_decimal(mantissa: &str, exp10: i64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::scan_number;
+    use super::{parse_decimal, scan_number};
     use crate::test_env::close;
+
+    /// The quick path gives the very value of the full parser.
+    #[test]
+    fn decimal_as_std() {
+        let mantissas = [
+            "0",
+            "1",
+            "9",
+            "45",
+            "0.1",
+            "1.5",
+            "2.2",
+            "0.07",
+            "33.3",
+            "123456",
+            "0.000123",
+            "1.23456789012345",
+            "999999999999999",
+            "9999999999999999",
+            "0.3",
+            "6.02214076",
+        ];
+        for m in mantissas {
+            for e in -40..=40 {
+                let full: f64 = format!("{m}e{e}").parse().unwrap();
+                assert_eq!(parse_decimal(m, e).to_bits(), full.to_bits(), "{m}e{e}");
+            }
+        }
+    }
 
     fn value(s: &str) -> f64 {
         scan_number(s)

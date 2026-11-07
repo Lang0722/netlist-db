@@ -122,6 +122,7 @@ fn kind(e: &ParseErrorInner) -> &'static str {
         ParseErrorInner::NestingTooDeep { .. } => "TooDeep",
         ParseErrorInner::Encrypted { .. } => "Encrypted",
         ParseErrorInner::Encoding(_) => "Encoding",
+        ParseErrorInner::LoneCr { .. } => "LoneCr",
         ParseErrorInner::TitleIsElement => "TitleIsElement",
         ParseErrorInner::AlterInSubckt => "AlterInSubckt",
         ParseErrorInner::MissingUnprot => "MissingUnprot",
@@ -189,6 +190,7 @@ fn diag(kind: &'static str, line: u32) -> Diag {
                 | "NonHspice"
                 | "Encrypted"
                 | "Encoding"
+                | "LoneCr"
                 | "TitleIsElement"
         ),
     }
@@ -241,7 +243,7 @@ fn value_of(v: &Option<Value<'_>>) -> f64 {
 /// The arguments of a source function, each on its own
 fn func_args(s: &Source<'_>) -> Vec<String> {
     let f = s.func.as_ref().expect("a function");
-    source_args(&f.args)
+    source_args(f.args)
         .split([' ', ','])
         .filter(|w| !w.is_empty())
         .map(str::to_owned)

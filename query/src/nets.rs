@@ -749,6 +749,12 @@ impl Netlist {
             TraceDir::Up => (false, true),
             TraceDir::Both => (true, true),
         };
+        // A path with no call cycle holds each definition at most once, so it
+        // goes at most this far up and then down. Only a call cycle (which
+        // HSPICE rejects, diagnostic `subckt_cycle`) goes further, with a
+        // longer path at each step: the cap bounds the memory.
+        let cap = u32::try_from(2 * self.defs.len() + 2).unwrap_or(u32::MAX);
+        let mut cut = false;
         let mut hops: Vec<Hop> = Vec::new();
         let mut truncated = false;
         let mut incomplete: Vec<String> = Vec::new();
@@ -793,6 +799,10 @@ impl Netlist {
             let mut renamed = Capped::new("step");
             'search: while let Some((node, key, at)) = queue.pop_front() {
                 if at >= depth {
+                    continue;
+                }
+                if at >= cap {
+                    cut = true;
                     continue;
                 }
                 let from_net = self.syms.name(Sym(key)).to_owned();
@@ -919,6 +929,12 @@ impl Netlist {
             if truncated {
                 caveats.push(format!(
                     "the trace stopped at {MAX_HOPS} steps before depth {depth}: trace from a deeper scope or with a smaller depth"
+                ));
+            }
+            if cut {
+                truncated = true;
+                caveats.push(format!(
+                    "the trace stopped at depth {cap}: only a call cycle (diagnostic `subckt_cycle`, which HSPICE rejects) goes deeper"
                 ));
             }
         }

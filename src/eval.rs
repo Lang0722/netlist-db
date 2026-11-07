@@ -69,6 +69,7 @@ use crate::{
     parser::is_raw_byte,
 };
 use core::fmt;
+use netlist_expr::near;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::{
     borrow::Cow,
@@ -136,9 +137,6 @@ const STACK_BUDGET: usize = 512 * 1024;
 /// can compute
 const MAX_CALLS: usize = if cfg!(test) { 1 << 12 } else { 1 << 22 };
 
-/// Two values within this relative distance are equal
-const EQUAL_TOLERANCE: f64 = 1e-13;
-
 /// In an expression, a value is true from this absolute size
 const TRUE_FROM: f64 = 1e-28;
 
@@ -157,11 +155,6 @@ type Calls = HashMap<(usize, Vec<u64>), Result<f64, EvalError>>;
 fn stack_address() -> usize {
     let probe = 0u8;
     core::ptr::from_ref(&probe) as usize
-}
-
-/// Whether two values count as equal in a comparison
-fn near(x: f64, y: f64) -> bool {
-    (x - y).abs() <= EQUAL_TOLERANCE * x.abs().max(y.abs())
 }
 
 impl fmt::Display for EvalError {
@@ -368,10 +361,10 @@ impl<'p> Scope<'p> {
     /// later definition of the same name replaces an earlier one.
     pub fn define(&mut self, kv: &KeyValue<'_>) {
         let body = Def::from(&kv.v);
-        if let Some((name, args)) = function_key(&kv.k) {
+        if let Some((name, args)) = function_key(kv.k) {
             Rc::make_mut(&mut self.funcs).insert(name, Func { args, body });
         } else {
-            Rc::make_mut(&mut self.defs).insert(Rc::from(&*lower(&kv.k)), body);
+            Rc::make_mut(&mut self.defs).insert(Rc::from(&*lower(kv.k)), body);
         }
         self.clear_values();
     }
@@ -379,7 +372,7 @@ impl<'p> Scope<'p> {
     /// Define a function, as `.param f(x)='...'` does
     pub fn define_func(&mut self, f: &ParamFunc<'_>) {
         let args = f.args.iter().map(|a| a.to_ascii_lowercase()).collect();
-        let body = Def::from(&Value::Expr(f.body.clone()));
+        let body = Def::from(&Value::Expr(f.body));
         Rc::make_mut(&mut self.funcs).insert(f.name.to_ascii_lowercase(), Func { args, body });
         self.clear_values();
     }
@@ -395,7 +388,7 @@ impl<'p> Scope<'p> {
     /// (`X1 a b inv w='2*p'`). It is evaluated at this level (see the module's
     /// documentation).
     pub fn pass(&mut self, kv: &KeyValue<'_>) {
-        self.passed.insert(Rc::from(&*lower(&kv.k)), (&kv.v).into());
+        self.passed.insert(Rc::from(&*lower(kv.k)), (&kv.v).into());
         self.clear_values();
     }
 
@@ -446,7 +439,7 @@ impl<'p> Scope<'p> {
     pub(crate) fn activate<'a, 's>(&mut self, ast: &'a AST<'s>, active: &mut Active<'a, 's>) {
         for block in &ast.cond {
             for branch in &block.branches {
-                let holds = match branch.cond.as_deref() {
+                let holds = match branch.cond {
                     Some(text) => self.condition(text),
                     None => Ok(true),
                 };
@@ -470,7 +463,7 @@ impl<'p> Scope<'p> {
                     }
                     Err(error) => active.errors.push(CondError {
                         block,
-                        cond: branch.cond.as_deref().unwrap_or_default(),
+                        cond: branch.cond.unwrap_or_default(),
                         error,
                     }),
                 }
@@ -844,11 +837,15 @@ impl<'p> Scope<'p> {
                 if is_simulation_function(name) {
                     return Err(EvalError::NotStatic(format!("{name}(...)")));
                 }
-                // statistical functions: the nominal value (first argument)
+                // statistical functions: the nominal value (first argument).
+                // A `.param` function of the same name hides it, as measured in
+                // HSPICE (golden `stat_user_func`; `l='unif(1u,3u)'` with
+                // `.param unif(a,b)='(a+b)/2'` gives L=2u).
                 if matches!(
                     name.as_str(),
                     "agauss" | "gauss" | "aunif" | "unif" | "limit"
-                ) {
+                ) && self.func(name).is_none()
+                {
                     return match args.first() {
                         Some(nominal) => eval(nominal),
                         None => Err(EvalError::Arguments {
@@ -968,15 +965,23 @@ fn is_temp(cmd: &str) -> bool {
     crate::parser::canonical_cmd(&cmd.to_ascii_lowercase()) == "temp"
 }
 
-/// The first value of the text after a `.temp`: `75`, `=75`, `'50+25'`, `t`
-fn first_temp(raw: &str) -> &str {
+/// The first value of the text after a `.temp`: `75`, `=75`, `'50+25'`, `t`.
+/// As measured on HSPICE P-2019.06-SP1-1, a comma also ends a value (`50,75`,
+/// `50, 75`, `50,`), and a `$` right after a number starts a comment
+/// (`50$room`). The query tool reads `.temp` with this function too.
+pub fn first_temp(raw: &str) -> &str {
     let text = raw.trim_start().trim_start_matches('=').trim_start();
     match text.chars().next() {
         Some(q @ ('\'' | '"')) => {
             let close = text[1..].find(q).map_or(text.len(), |n| n + 2);
             &text[..close]
         }
-        _ => text.split_whitespace().next().unwrap_or_default(),
+        _ => {
+            // (a `$` inside a name is a part of the name)
+            let number = text.starts_with(|c: char| c.is_ascii_digit() || ".+-".contains(c));
+            let end = |c: char| c.is_whitespace() || c == ',' || (number && c == '$');
+            text.split(end).next().unwrap_or_default()
+        }
     }
 }
 
@@ -1017,13 +1022,13 @@ impl<'s> AST<'s> {
             ParHier::Global
         };
         let commands = in_order(self, &active.branches, &|a| &a.unknown, &|b| b.unknown_at);
-        let temp = commands.iter().find(|u| is_temp(&u.cmd));
+        let temp = commands.iter().find(|u| is_temp(u.cmd));
         let tnom = options
             .iter()
             .rev()
             .find(|(k, v)| k.eq_ignore_ascii_case("tnom") && matches!(v, Some(Value::Num(_))));
         let temper = match (temp, tnom) {
-            (Some(u), _) => scope.eval_str(first_temp(&u.raw)).ok(),
+            (Some(u), _) => scope.eval_str(first_temp(u.raw)).ok(),
             (None, Some((_, Some(Value::Num(t))))) => Some(*t),
             _ => None,
         };
@@ -1038,7 +1043,7 @@ impl<'s> AST<'s> {
     pub(crate) fn top_options<'a>(
         &'a self,
         active: &[&'a AST<'s>],
-    ) -> Vec<&'a (Cow<'s, str>, Option<Value<'s>>)> {
+    ) -> Vec<&'a (&'s str, Option<Value<'s>>)> {
         in_order(self, active, &|a| &a.option, &|b| b.option_at)
     }
 

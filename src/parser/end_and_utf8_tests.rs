@@ -144,6 +144,66 @@ async fn non_utf8() {
     assert_eq!(top(&parsed).non_utf8, None);
 }
 
+/// A lone CR is read as a line end, and one warning says that HSPICE reads it
+/// otherwise: HSPICE on Windows reads a lone CR as a space, so to it a file
+/// with only CR line ends is one title line (measured on P-2019.06-SP1-1 win64).
+#[tokio::test]
+async fn lone_cr_line_ends() {
+    let tmp = TempDir::new("lone_cr");
+    let main = tmp.0.join("main.sp");
+    for (text, line, rows) in [
+        (&b"* t\rR1 a b 1\rR2 a b 2\r"[..], Some(1), ["R1", "R2"]),
+        (b"* t\nR1 a b 1\rR2 a b 2\n", Some(2), ["R1", "R2"]),
+        (b"* t\r\nR1 a b 1\r\nR2 a b 2\r\n", None, ["R1", "R2"]),
+    ] {
+        std::fs::write(&main, text).unwrap();
+        let (parsed, files) = parse_path(&main, TitleLine::Auto).await;
+        assert!(errors(&parsed).iter().all(|e| e.is_warning()), "{text:?}");
+        let msgs = error_msgs(&parsed);
+        let lone: Vec<_> = msgs
+            .iter()
+            .filter(|m| m.contains("HSPICE on Windows reads a lone CR as a space"))
+            .collect();
+        match line {
+            Some(n) => {
+                assert_eq!(lone.len(), 1, "{text:?}: {msgs:?}");
+                let at = format!("(the first one ends line {n})");
+                assert!(lone[0].contains(&at), "{text:?}: {msgs:?}");
+            }
+            None => assert!(lone.is_empty(), "{text:?}: {msgs:?}"),
+        }
+        let (ast, _) = files.build(parsed);
+        assert_eq!(names(&ast.instance), rows, "{text:?}");
+    }
+    // A `.lib` section: the first lone CR in the section's own lines, and
+    // none when the lone CRs are outside the sections that were read.
+    std::fs::write(
+        tmp.0.join("m.lib"),
+        b".lib tt\nR1 a b 1\n.endl tt\n.lib ff\nR2 a b 2\rR3 a b 3\n.endl ff\n\
+          .lib ss\nR4 a b 4\n.endl ss\n",
+    )
+    .unwrap();
+    for (text, want) in [
+        ("* t\n.lib 'm.lib' tt\n.lib 'm.lib' ss\n", vec![]),
+        (
+            "* t\n.lib 'm.lib' ff\n",
+            vec!["(the first one ends line 5)"],
+        ),
+    ] {
+        std::fs::write(&main, text).unwrap();
+        let (parsed, _) = parse_path(&main, TitleLine::Auto).await;
+        let msgs = error_msgs(&parsed);
+        let lone: Vec<_> = msgs
+            .iter()
+            .filter(|m| m.contains("HSPICE on Windows reads a lone CR as a space"))
+            .collect();
+        assert_eq!(lone.len(), want.len(), "{text:?}: {msgs:?}");
+        for (m, at) in lone.iter().zip(&want) {
+            assert!(m.contains(at), "{text:?}: {msgs:?}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn include_cycles() {
     // a -> b -> c -> a, and the top file includes `a` and `c`. The parse

@@ -6,7 +6,7 @@
 [![Docs](https://docs.rs/netlist-db/badge.svg)](https://docs.rs/netlist-db)
 [![codecov](https://codecov.io/github/zao111222333/netlist-db/graph/badge.svg)](https://codecov.io/github/zao111222333/netlist-db)
 
-Concurrent/Parallel SPICE (HSPICE) parser, under building.
+Concurrent/Parallel SPICE (HSPICE) parser.
 
 ## Features
 + Concurrent/Parallel parse multi SPICE files (`.inc` and `.lib`) command
@@ -103,98 +103,84 @@ rows are then those that could be read, so a count can be too low.
 Download the [releases/latest/examples.zip](https://github.com/zao111222333/netlist-db/releases/latest/download/examples.zip), then
 ``` shell
 cd examples_x86_64-unknown-linux-musl
-./parser tests/top.sp
+./parser_multi tests/top.sp
 ```
 
 Or you can compile & run this example by
 
 ``` shell
-cargo run --example parser --release -- tests/top.sp
+cargo run --example parser_multi --release -- tests/top.sp
 ```
 <details>
 <summary>The output should be</summary>
-<?xml version="1.0" encoding="UTF-8" ?>
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
-<!-- This file was created with the aha Ansi HTML Adapter. https://github.com/theZiz/aha -->
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-<meta http-equiv="Content-Type" content="application/xml+xhtml; charset=UTF-8"/>
-</head>
-<body>
-<pre style="color:white; background-color:black">
-cargo run --example parser --release -- tests/top.sp | aha --black > output.html
-2025-01-27T01:40:43.135Z DEBUG [netlist_db::file] load File &quot;tests/inc/inc0.sp&quot;
-2025-01-27T01:40:43.135Z DEBUG [netlist_db::file] load File &quot;tests/inc/inc1.sp&quot;
-2025-01-27T01:40:43.135Z DEBUG [netlist_db::file] load File &quot;tests/lib.sp&quot;, section tt
-2025-01-27T01:40:43.135Z DEBUG [netlist_db::file] load File &quot;tests/units.sp&quot;
-2025-01-27T01:40:43.135Z DEBUG [netlist_db::file] load File &quot;tests/inc/inc2.sp&quot;
-2025-01-27T01:40:43.135Z DEBUG [netlist_db::file] load File &quot;tests/inc/../lib.sp&quot;, section pre_layout
-2025-01-27T01:40:43.136Z DEBUG [netlist_db::file] load File &quot;tests/inc/../cycle_ref0.sp&quot;
-2025-01-27T01:40:43.136Z DEBUG [netlist_db::file] load File &quot;tests/inc/../cycle_ref1.sp&quot;
-2025-01-27T01:40:43.137Z ERROR [netlist_db::lexer] 
-File <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">&quot;tests/top.sp&quot;</span>, line <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">5</span>
+
+`tests/top.sp` has errors on purpose: an include file that does not exist,
+a circular include and a `.lib` section that does not exist. So the exit
+status is 1. Here the `INFO` line for each file that is loaded is left out.
+The times change from run to run.
+
+``` text
+2026-11-07T10:06:26.057Z ERROR [netlist_db::err] 
+File "tests/top.sp", line 5
 .inc 'inc/inc0.sp'
-                  <span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:red;">&lt;-</span>
-<span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:fuchsia;">Error</span>: <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">No such file or directory (os error 2)</span>
+                  <-
+Error: No such file or directory (os error 2)
 
-2025-01-27T01:40:43.137Z ERROR [netlist_db::lexer] 
-File <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">&quot;tests/inc/../cycle_ref1.sp&quot;</span>, line <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">2</span>
+2026-11-07T10:06:26.057Z ERROR [netlist_db::err] 
+File "tests/inc/../cycle_ref1.sp", line 2
 .inc 'cycle_ref0.sp'
-                    <span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:red;">&lt;-</span>
-<span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:fuchsia;">CircularDefinition</span>: <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">Detect circular definition in File &quot;tests/inc/../cycle_ref0.sp&quot;, line 2</span>
-   File &quot;tests/top.sp&quot;, line 6
+                    <-
+CircularDefinition: Detect circular definition in File "tests/inc/../cycle_ref0.sp", line 2
+   File "tests/top.sp", line 6
      ↓
-   File &quot;tests/inc/inc2.sp&quot;, line 2
+   File "tests/inc/inc2.sp", line 2
      ↓
-   File &quot;tests/inc/../lib.sp&quot;, line 3, section pre_layout
+   File "tests/inc/../lib.sp", line 3, section pre_layout
      ↓
-<span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:red;"> * File &quot;tests/inc/../cycle_ref0.sp&quot;, line 2</span>
+ * File "tests/inc/../cycle_ref0.sp", line 2
      ↓
-   File &quot;tests/inc/../cycle_ref1.sp&quot;, line 2
+   File "tests/inc/../cycle_ref1.sp", line 2
      ↓
-<span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:red;"> * File &quot;tests/inc/../cycle_ref0.sp&quot;, line 2</span>
+ * File "tests/inc/../cycle_ref0.sp", line 2
 
-2025-01-27T01:40:43.137Z ERROR [netlist_db::lexer] 
-File <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">&quot;tests/inc/../lib.sp&quot;</span>, line <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">7</span>
+2026-11-07T10:06:26.057Z WARN  [netlist_db::err] 
+File "tests/inc/../lib.sp", line 7
 .params flag=1
-       <span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:red;">&lt;-</span>
-<span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:fuchsia;">SyntaxError</span>: <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">Unknwon command `params`</span>
+       <-
+Warning: Unknown command `params`, kept as-is
 
-2025-01-27T01:40:43.137Z ERROR [netlist_db::lexer] 
-File <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">&quot;tests/top.sp&quot;</span>, line <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">8</span>
+2026-11-07T10:06:26.057Z ERROR [netlist_db::err] 
+File "tests/top.sp", line 8
 .lib 'lib.sp' tt
-                <span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:red;">&lt;-</span>
-<span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:fuchsia;">Error</span>: <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">Can NOT find section `tt` in file &quot;tests/lib.sp&quot;</span>
-
-2025-01-27T01:40:43.137Z ERROR [netlist_db::lexer] 
-File <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">&quot;tests/units.sp&quot;</span>, line <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">7</span>
-+ micr?o=1u
-<span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:red;">&lt;-</span>
-<span style="font-weight:bold;"></span><span style="font-weight:bold;filter: contrast(70%) brightness(190%);color:fuchsia;">ParserError</span>: <span style="filter: contrast(70%) brightness(190%);color:fuchsia;">TakeWhile1</span>
+                <-
+Error: Can NOT find section `tt` in file "tests/lib.sp"
 
 ======= AST ===========
 
-.subckt DEMO A1 A2 var1=1 var2=2.option 
-+ gmindc=0.00000000000001 scale=0.9
-.param 
-+ prelayout=1 flag_cc=1
-X0.CCC net8 net23 VSS VPW NHVT11LL_CKT W=0.000000135 L=0.00000004
+.SUBCKT DEMO A1 A2 var1=1.0000000e0 var2=2.0000000e0
+.OPTION 
++ gmindc=1.0000000e-14 scale=9.0000000e-1
+.PARAM 
++ prelayout=1.0000000e0 flag_cc=1.0000000e0
+X0.CCC net8 net23 VSS VPW NHVT11LL_CKT W=1.3500000e-7 L=4.0000000e-8
 .params flag=1
-.ends DEMO
-.subckt UNITS A
-.ends UNITS
-X0.BBB net8 net23 VSS VPW NHVT11LL_CKT W=0.000000135 L=0.00000004
-X0.AAA net8 net23 VSS VPW NHVT11LL_CKT W=0.000000135 L=0.00000004
-======= ERR ===========
-true
+.ENDS DEMO
+.SUBCKT UNITS A
+.PARAM 
++ tera=1.0000000e12 giga=1.0000000e9 mega=1.0000000e6 kilo=1.0000000e3
++ mil=2.5400000e-5 micro=1.0000000e-6 nano=1.0000000e-9 pico=1.0000000e-12
++ femto=1.0000000e-15 atto=1.0000000e-18 db0=1.0000000e0 db20=1.0000000e1
++ db40=1.0000000e2 min=6.0000000e1 hr=3.6000000e3 day=8.6400000e4
++ yr=3.1536000e7
+.ENDS UNITS
+X0.BBB net8 net23 VSS VPW NHVT11LL_CKT W=1.3500000e-7 L=4.0000000e-8
+X0.AAA net8 net23 VSS VPW NHVT11LL_CKT W=1.3500000e-7 L=4.0000000e-8
 ======= stats =========
-parse: 2.200291ms
-build: 40.833µs
-print: 11.334µs
+parse: 3.149916ms
+build: 132.542µs
+print: 106.25µs
 =======================
-</pre>
-</body>
-</html>
+```
 </details>
 
 ## LLM query tool
@@ -336,25 +322,46 @@ MOSFETs) loads in 0.84 s. The same text with no `*|DSPF` line loads in
 
 | To find | Look in |
 |---|---|
+| The types of parsed statements: values, `key=value`, `.model`, `.subckt`, `.data` | `src/ast.rs` |
+| Element lines as parsed: R, C, L, sources, M, Q, D, X, E/F/G/H, K | `src/instance.rs` |
+| Spans, file ids and file storage | `src/span.rs` |
+| Parse errors and how they are printed | `src/err.rs` |
 | The text of a file before the parse: bytes, comments, joined lines | `src/parser/source.rs` |
+| The parallel parse of the included files (`ParseManager`) | `src/parser/manager.rs` |
 | Include lines: search, read, limits (`IncludeLimits`) | `src/parser/include.rs` |
 | Words of a line: separators, numbers, names, values | `src/parser/tokens.rs` |
 | Statements: dot commands, `.subckt` headers | `src/parser/statement.rs` |
 | Blocks that a failed statement skips | `src/parser/blocks.rs` |
 | Element lines (M, X, R, C, sources) | `src/parser/instance.rs` |
+| `.ic` and `.nodeset` node voltages | `src/parser/cmds.rs` |
+| Readers of HSPICE output files (`.mc0`, `.mt0`, `.sw0`) | `src/parser/data_mc.rs`, `src/parser/data_meas.rs`, `src/parser/data_sweep.rs` |
 | The walk from a parse to a netlist (`Files::build`) | `src/netlist_build.rs` |
 | Printing a netlist back as text | `src/display.rs` |
+| The walk down the subckt hierarchy (`Subckt::append`) | `src/hierarchy.rs` |
 | The selector's parameters and scopes | `src/eval.rs` |
 | The selector's expression parser and built-in functions | `src/eval/expr.rs` |
 | Model selection for each MOSFET | `src/models.rs` |
 | Bin rules: limits, L and W of a line | `src/models/bins.rs` |
 | Model counts through the hierarchy (`--summary`) | `src/models/summary.rs` |
+| Query tool: the output types and paging | `query/src/api.rs` |
+| Query tool: the owned model that the queries read | `query/src/model.rs` |
+| Query tool: names in any letter case (`Sym`) | `query/src/intern.rs` |
 | Query tool: from a parse to its data | `query/src/lower.rs`, `query/src/lower/` |
 | Query tool: instances and their counts | `query/src/hier.rs`, `query/src/hier/` |
+| Query tool: instance paths (`x1.x2.m3`) | `query/src/paths.rs` |
+| Query tool: nets (`net_info`, `trace_net`) | `query/src/nets.rs` |
+| Query tool: DSPF parasitic files | `query/src/dspf.rs` |
+| Query tool: load checks for forms that HSPICE rejects | `query/src/rejects.rs` |
 | Query tool: parameters | `query/src/params.rs`, `query/src/params/` |
 | Query tool: expressions | `expr/src/` |
 
-The tests of a file are in a `tests.rs` beside it or in a folder named after it. `src/tests/` holds the tests of the whole crate, a file for each topic.
+Some files keep their tests in a `tests.rs` in the folder named after the
+file: the tests of `src/models.rs` are in `src/models/tests.rs`. The others
+have an inline `mod tests` at the end of the file (`src/span.rs`,
+`query/src/paths.rs`). The parser tests that parse whole decks are in
+`src/parser/*_tests.rs`, a file for each topic. `src/tests/` holds the
+tests of the whole crate, a file for each topic. `query/tests/` holds the
+tests of the query tool that load decks through its public API.
 
 ## Regression
 ``` bash
@@ -364,7 +371,6 @@ cargo regression ./tests/
 ```
 
 ## TODO
-+ Fully expression system
 + Support commands
   + tran
   + meas

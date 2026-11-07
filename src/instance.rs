@@ -19,9 +19,9 @@ pub struct InstanceBuilder {
 
 #[derive(Debug, Clone, Builder)]
 pub enum InstanceCtxBuilder {
-    Resistor(ResistorBuilder),
-    Capacitor(CapacitorBuilder),
-    Inductor(InductorBuilder),
+    Resistor(RclBuilder),
+    Capacitor(RclBuilder),
+    Inductor(RclBuilder),
     Voltage(VoltageBuilder),
     Current(CurrentBuilder),
     MOSFET(MOSFETBuilder),
@@ -39,16 +39,10 @@ pub enum InstanceCtxBuilder {
     },
 }
 impl<'s> InstanceCtx<'s> {
-    pub fn append_nodes<'a>(&'a self, nodes: &mut HashMap<String, &'a Cow<'s, str>>) {
+    pub fn append_nodes<'a>(&'a self, nodes: &mut HashMap<String, &'a &'s str>) {
         match self {
-            InstanceCtx::Resistor(r) => {
+            InstanceCtx::Resistor(r) | InstanceCtx::Capacitor(r) | InstanceCtx::Inductor(r) => {
                 nodes.extend([(r.n1.to_lowercase(), &r.n1), (r.n2.to_lowercase(), &r.n2)])
-            }
-            InstanceCtx::Capacitor(c) => {
-                nodes.extend([(c.n1.to_lowercase(), &c.n1), (c.n2.to_lowercase(), &c.n2)])
-            }
-            InstanceCtx::Inductor(i) => {
-                nodes.extend([(i.n1.to_lowercase(), &i.n1), (i.n2.to_lowercase(), &i.n2)])
             }
             InstanceCtx::Voltage(v) => {
                 nodes.extend([(v.n1.to_lowercase(), &v.n1), (v.n2.to_lowercase(), &v.n2)])
@@ -123,42 +117,16 @@ impl<'s> InstanceCtx<'s> {
 /// value after the nodes (golden `elem_dup_kw`), and it is not in
 /// `params`. Then a plain word after the nodes is the model
 /// (`R2 2 0 rmod r=3k`).
+///
+/// A C line has the same fields, with `c=`. An L line has them with `l=`,
+/// and its model name may also come after the value (`L1 a b 1n lmod`).
 #[derive(Debug, Clone, Builder)]
-pub struct ResistorBuilder {
+pub struct RclBuilder {
     pub n1: Span,
     pub n2: Span,
-    /// The model name; see [`ResistorBuilder`].
+    /// The model name; see [`RclBuilder`].
     pub model: Option<Span>,
-    /// The value; see [`ResistorBuilder`]. `None`: no value.
-    pub value: Option<ValueBuilder>,
-    /// The numbers after the value, as written and read: the values of
-    /// [`RCL_POSITIONAL`] in that order.
-    pub positional: Vec<(Span, ValueBuilder)>,
-    pub params: Vec<KeyValueBuilder>,
-}
-/// A C line: as an R line (see [`ResistorBuilder`]), with `c=`.
-#[derive(Debug, Clone, Builder)]
-pub struct CapacitorBuilder {
-    pub n1: Span,
-    pub n2: Span,
-    /// The model name; see [`ResistorBuilder`].
-    pub model: Option<Span>,
-    /// The value; see [`ResistorBuilder`]. `None`: no value.
-    pub value: Option<ValueBuilder>,
-    /// The numbers after the value, as written and read: the values of
-    /// [`RCL_POSITIONAL`] in that order.
-    pub positional: Vec<(Span, ValueBuilder)>,
-    pub params: Vec<KeyValueBuilder>,
-}
-/// An L line: as an R line (see [`ResistorBuilder`]), with `l=`, and the
-/// model name may also come after the value (`L1 a b 1n lmod`).
-#[derive(Debug, Clone, Builder)]
-pub struct InductorBuilder {
-    pub n1: Span,
-    pub n2: Span,
-    /// The model name; see [`ResistorBuilder`].
-    pub model: Option<Span>,
-    /// The value; see [`ResistorBuilder`]. `None`: no value.
+    /// The value; see [`RclBuilder`]. `None`: no value.
     pub value: Option<ValueBuilder>,
     /// The numbers after the value, as written and read: the values of
     /// [`RCL_POSITIONAL`] in that order.
@@ -171,33 +139,26 @@ pub struct InductorBuilder {
 /// syntax in the HSPICE manual, `[[TC1=]val] [[TC2=]val]`, not probed).
 pub const RCL_POSITIONAL: [&str; 2] = ["tc1", "tc2"];
 
-macro_rules! rcl_positional {
-    ($($builder:ident $built:ident),*) => {$(
-        impl $builder {
-            /// The numbers after the value, with their parameter names
-            /// (`tc1`, `tc2`) and their tokens as written.
-            pub fn positional_params(
-                &self,
-            ) -> impl Iterator<Item = (&'static str, &Span, &ValueBuilder)> {
-                RCL_POSITIONAL
-                    .into_iter()
-                    .zip(&self.positional)
-                    .map(|(name, (sp, v))| (name, sp, v))
-            }
-        }
-        impl<'s> $built<'s> {
-            /// The numbers after the value, with their parameter names
-            /// (`tc1`, `tc2`).
-            pub fn positional_params(&self) -> impl Iterator<Item = (&'static str, &Value<'s>)> {
-                RCL_POSITIONAL
-                    .into_iter()
-                    .zip(&self.positional)
-                    .map(|(name, (_, v))| (name, v))
-            }
-        }
-    )*};
+impl RclBuilder {
+    /// The numbers after the value, with their parameter names
+    /// (`tc1`, `tc2`) and their tokens as written.
+    pub fn positional_params(&self) -> impl Iterator<Item = (&'static str, &Span, &ValueBuilder)> {
+        RCL_POSITIONAL
+            .into_iter()
+            .zip(&self.positional)
+            .map(|(name, (sp, v))| (name, sp, v))
+    }
 }
-rcl_positional!(ResistorBuilder Resistor, CapacitorBuilder Capacitor, InductorBuilder Inductor);
+impl<'s> Rcl<'s> {
+    /// The numbers after the value, with their parameter names
+    /// (`tc1`, `tc2`).
+    pub fn positional_params(&self) -> impl Iterator<Item = (&'static str, &Value<'s>)> {
+        RCL_POSITIONAL
+            .into_iter()
+            .zip(&self.positional)
+            .map(|(name, (_, v))| (name, v))
+    }
+}
 
 #[derive(Debug, Clone, Builder)]
 pub struct SubcktBuilder {
@@ -205,7 +166,7 @@ pub struct SubcktBuilder {
     pub cktname: Span,
     pub params: Vec<KeyValueBuilder>,
 }
-/// https://eda-cpu1.eias.junzhuo.site/~junzhuo/hspice/index.htm#page/hspice_11/bipolar_junction_transistor_bjt_element.htm
+/// A `Q` (BJT) element line.
 #[derive(Debug, Clone, Builder)]
 pub struct BJTBuilder {
     pub nc: Span,
@@ -326,7 +287,7 @@ impl<'s> MOSFET<'s> {
             .filter(|(_, v)| !is_off(v))
     }
 }
-/// https://eda-cpu1.eias.junzhuo.site/~junzhuo/hspice/index.htm#page/hspice_11/diode_element.htm
+/// A `D` (diode) element line.
 #[derive(Debug, Clone, Builder)]
 pub struct DiodeBuilder {
     pub nplus: Span,

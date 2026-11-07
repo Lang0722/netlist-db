@@ -17,27 +17,30 @@
 // shown subckt by subckt.
 //
 // An X line with no definition on its instance path gets an `error:` row, and
-// a note on stderr says that the count can be too low. So does a `.if` condition
-// that cannot be computed.
+// a note on stderr says that the count can be too low. So does an X line that
+// cannot be followed (a wrong node count, a call of its own subckt, too deep a
+// hierarchy) and a `.if` condition that cannot be computed.
 //
 // Each error and warning in the text of the netlist goes to stderr, with its
-// file and line. The exit status is 1 when the netlist has an error or a MOSFET
-// has no model, and the rows on stdout are those that could be read. Warnings do
-// not change the exit status.
+// file and line. The exit status is 1 when the netlist has an error, a MOSFET
+// has no model or a line hides MOSFETs, and the rows on stdout are those that
+// could be read. Warnings do not change the exit status. With no file, or with
+// `--subckt` and no name, the tool prints its usage and exits with 2.
 //
 // The parameters follow the last `.option parhier` of the netlist. Without one
-// they follow HSPICE's default, `global`, and a note on stderr says so. A
-// netlist that a `parhier=local` testbench includes has no such line: pass a
-// file that holds it as one more file.
+// they follow HSPICE's default, `global`, and a note on stderr says so. One with
+// no value means `local`, and a note says that too. A netlist that a
+// `parhier=local` testbench includes has no such line: pass a file that holds
+// it as one more file.
 use netlist_db::{
     AST, FileId,
-    eval::FarRead,
-    models::{ModelUsage, MosfetModel, SelectError, Short},
+    eval::{FarRead, ParHier},
+    models::{ModelUsage, MosfetModel, Short},
     parser::parse_top_multi,
 };
 use std::{
     env,
-    io::{BufWriter, Write, stdout},
+    io::{BufWriter, ErrorKind, Write, stdout},
     path::PathBuf,
     time::Instant,
 };
@@ -80,6 +83,25 @@ fn with_messages<T>(build: impl FnOnce() -> T) -> T {
     }
 }
 
+/// Prints how to call the tool, and ends it with the status 2
+fn exit_with_usage() -> ! {
+    eprintln!("usage: model_select [--summary] [--subckt NAME] deck.sp [more files...]");
+    std::process::exit(2);
+}
+
+/// Checks a write to stdout. When the reader has gone (`model_select deck.sp |
+/// head`), the tool ends quietly. Another error ends it with a message.
+fn written(result: std::io::Result<()>) {
+    match result {
+        Ok(()) => {}
+        Err(e) if e.kind() == ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(e) => {
+            eprintln!("error: cannot write the rows: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn print(out: &mut impl Write, prefix: &str, m: &MosfetModel<'_, '_>) -> std::io::Result<()> {
     match &m.selection {
         Ok(s) => writeln!(
@@ -111,10 +133,11 @@ fn print_usage(
         )?;
     }
     for (e, n, path) in &usage.errors {
-        // (an X line is not a share of the MOSFETs)
-        let share = match e {
-            SelectError::NoSubckt(_) => "-".to_owned(),
-            _ => format!("{:.3}%", 100.0 * *n as f64 / total),
+        // (an X line or a `.if` block is not a share of the MOSFETs)
+        let share = if e.is_mosfet() {
+            format!("{:.3}%", 100.0 * *n as f64 / total)
+        } else {
+            "-".to_owned()
         };
         writeln!(out, "{prefix}error: {e}\t{n}\t{share}\te.g. {path}")?;
     }
@@ -123,7 +146,7 @@ fn print_usage(
 
 /// The MOSFETs of `ast`, or of its subckt `name`: listed (as they are
 /// found, not kept), or counted. Returns the MOSFETs, those with a model, and
-/// the X lines with no definition.
+/// the X lines and `.if` blocks that hide MOSFETs.
 fn report(
     out: &mut impl Write,
     ast: &AST<'_>,
@@ -148,26 +171,27 @@ fn report(
             Some(name) => ast.model_usage_of(name).unwrap_or_else(|| no_subckt()),
             None => ast.model_usage(),
         };
-        print_usage(out, &prefix, &usage).expect("write");
+        written(print_usage(out, &prefix, &usage));
         warn(&usage.far_reads);
         let chosen = usage.models.iter().map(|(_, n)| n).sum();
         let missing = usage
             .errors
             .iter()
-            .filter(|(e, ..)| matches!(e, SelectError::NoSubckt(_)))
+            .filter(|(e, ..)| !e.is_mosfet())
             .map(|(_, n, _)| n)
             .sum();
         (usage.mosfets, chosen, missing)
     } else {
         let (mut mosfets, mut chosen, mut missing) = (0, 0, 0);
         let mut each = |m: MosfetModel<'_, '_>| {
-            if matches!(m.selection, Err(SelectError::NoSubckt(_))) {
+            // (a row that stands for a line that hides MOSFETs is not one)
+            if m.selection.as_ref().is_err_and(|e| !e.is_mosfet()) {
                 missing += 1;
             } else {
                 mosfets += 1;
                 chosen += u64::from(m.selection.is_ok());
             }
-            print(out, &prefix, &m).expect("write");
+            written(print(out, &prefix, &m));
         };
         let far_reads = match subckt {
             Some(name) => ast
@@ -190,10 +214,17 @@ async fn main() {
             .is_some()
     };
     let summary = flag("--summary");
-    let subckt = args.iter().position(|a| a == "--subckt").map(|i| {
-        args.remove(i);
-        args.remove(i)
-    });
+    let subckt = match args.iter().position(|a| a == "--subckt") {
+        Some(i) if i + 1 < args.len() => {
+            args.remove(i);
+            Some(args.remove(i))
+        }
+        Some(_) => exit_with_usage(),
+        None => None,
+    };
+    if args.is_empty() {
+        exit_with_usage();
+    }
     let start = Instant::now();
     let (parsed, files) = parse_top_multi(args.iter().map(|path| FileId::Include {
         path: PathBuf::from(path),
@@ -204,21 +235,37 @@ async fn main() {
     if has_err {
         eprintln!("(the netlist has errors: see the messages above)");
     }
-    if ast.option_value("parhier").is_none() {
-        eprintln!("(no `.option parhier` in the netlist: parhier=global, HSPICE's default)");
+    // The mode is the selector's (`AST::scope`), which also reads the active
+    // `.if` branches. The last `.option parhier` decides, and one with no
+    // value means local, as measured in HSPICE (deck `oph_flag`). The notes
+    // look at the top-level `.option` lines only.
+    let local = ast.scope().parhier() == ParHier::Local;
+    let parhier = ast
+        .option
+        .iter()
+        .rev()
+        .find(|(k, _)| k.eq_ignore_ascii_case("parhier"));
+    match (parhier, local) {
+        (None, false) => {
+            eprintln!("(no `.option parhier` in the netlist: parhier=global, HSPICE's default)");
+        }
+        (Some((_, None)), true) => {
+            eprintln!("(`.option parhier` with no value: parhier=local, as HSPICE reads it)");
+        }
+        _ => {}
     }
     let mut out = BufWriter::new(stdout().lock());
     if summary {
-        writeln!(out, "model\tMOSFETs\tshare").expect("write");
+        written(writeln!(out, "model\tMOSFETs\tshare"));
     } else {
-        writeln!(out, "path\tmodel name\tL\tW\tNF\tmodel").expect("write");
+        written(writeln!(out, "path\tmodel name\tL\tW\tNF\tmodel"));
     }
     let start = Instant::now();
     let (mut mosfets, mut chosen, mut missing) = (0, 0, 0);
     if subckt.is_none() && ast.is_library() {
         // a library: each subckt, with its default parameters
         for def in ast.subckt.values() {
-            let (n, c, x) = report(&mut out, &ast, Some(&def.name), summary);
+            let (n, c, x) = report(&mut out, &ast, Some(def.name), summary);
             mosfets += n;
             chosen += c;
             missing += x;
@@ -226,9 +273,12 @@ async fn main() {
     } else {
         (mosfets, chosen, missing) = report(&mut out, &ast, subckt.as_deref(), summary);
     }
-    out.flush().expect("write");
+    written(out.flush());
     if missing > 0 {
-        eprintln!("error: {missing} X line(s) have no definition, so the count can be too low");
+        eprintln!(
+            "error: {missing} X line(s) or `.if` block(s) have no definition or cannot be \
+             followed, so the count can be too low"
+        );
     }
     eprintln!(
         "{mosfets} MOSFET(s), a model chosen for {chosen}; parsed in {:.2} s, models chosen in {:.2} s",

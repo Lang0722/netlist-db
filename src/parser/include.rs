@@ -1,7 +1,7 @@
 //! The files of a netlist: its include lines, their limits, and how a file is found and read.
 use super::blocks::Blocks;
 use super::manager::{Include, ParseManager};
-use super::source::{decode, is_raw_byte, join_continued_lines, skip_comment_lines};
+use super::source::{Decoded, decode, is_raw_byte, join_continued_lines, skip_comment_lines};
 use super::statement::skip_statement;
 use super::{TitleLine, ast, title_line};
 use crate::err::{ParseError, ParseErrorInner};
@@ -155,10 +155,10 @@ fn search_folders(storage: &FileStorage<ASTBuilder>, tops: &[ParsedId]) -> Vec<P
         match segment {
             Segment::Local(local) => {
                 for (k, v) in &local.option {
-                    if text[k.start..k.end].eq_ignore_ascii_case("search")
+                    if text[k].eq_ignore_ascii_case("search")
                         && let Some(ValueBuilder::Expr(folder)) = v
                     {
-                        folders.push(PathBuf::from(&text[folder.start..folder.end]));
+                        folders.push(PathBuf::from(&text[folder]));
                     }
                 }
                 for subckt in local.subckt.iter().rev() {
@@ -241,31 +241,38 @@ fn path_in(work_dir: &Path, file_name: &Path) -> PathBuf {
     path
 }
 
-/// The text of a file read (and its first line that is not UTF-8, if any):
-/// its own, or shared by the sections loaded from a library file
+/// The text of a file read, as [`decode`] gives it: its own, or shared by the
+/// sections loaded from a library file
 enum LibText {
-    Own((String, Option<u32>)),
-    Shared(Arc<(String, Option<u32>)>),
+    Own(Decoded),
+    Shared(Arc<Decoded>),
 }
 
 impl LibText {
     fn text(&self) -> &str {
         match self {
-            Self::Own((text, _)) => text,
+            Self::Own((text, ..)) => text,
             Self::Shared(shared) => &shared.0,
         }
     }
 
     fn non_utf8(&self) -> Option<u32> {
         match self {
-            Self::Own((_, line)) => *line,
+            Self::Own((_, line, _)) => *line,
             Self::Shared(shared) => shared.1,
+        }
+    }
+
+    fn lone_cr(&self) -> &[u32] {
+        match self {
+            Self::Own((.., lines)) => lines,
+            Self::Shared(shared) => &shared.2,
         }
     }
 
     fn into_text(self) -> String {
         match self {
-            Self::Own((text, _)) => text,
+            Self::Own((text, ..)) => text,
             Self::Shared(shared) => shared.0.clone(),
         }
     }
@@ -353,23 +360,35 @@ pub(super) async fn read_include(
         }
     };
     let non_utf8 = text.non_utf8();
-    let (line_off_set, file_ctx) = if let FileId::Section { path: _, section } = file_id.clone() {
-        if let Some((file_ctx, line_off_set)) = match_lib(text.text(), &section) {
-            (line_off_set, without_section_lines(file_ctx))
+    let (line_off_set, file_ctx, lone_cr) =
+        if let FileId::Section { path: _, section } = file_id.clone() {
+            if let Some((file_ctx, line_off_set)) = match_lib(text.text(), &section) {
+                // in a `.lib` section, its first lone CR (the lines outside the
+                // section are not read)
+                let first = line_off_set.saturating_add(1);
+                let all = text.lone_cr();
+                let lone_cr = all.get(all.partition_point(|&l| l < first)).copied();
+                let lone_cr = lone_cr.filter(|&l| {
+                    let lines = file_ctx.matches('\n').count();
+                    l as usize <= first as usize + lines
+                });
+                (line_off_set, without_section_lines(file_ctx), lone_cr)
+            } else {
+                release(&file_id).await;
+                return Err(Box::new((
+                    file_id,
+                    ParseErrorInner::NoLibSection {
+                        path: file_path,
+                        section,
+                    }
+                    .with(include_pos),
+                )));
+            }
         } else {
-            release(&file_id).await;
-            return Err(Box::new((
-                file_id,
-                ParseErrorInner::NoLibSection {
-                    path: file_path,
-                    section,
-                }
-                .with(include_pos),
-            )));
-        }
-    } else {
-        (0, text.into_text())
-    };
+            let lone_cr = text.lone_cr().first().copied();
+            (0, text.into_text(), lone_cr)
+        };
+    let lone_cr_note = lone_cr.map(|line| ParseErrorInner::LoneCr { line }.with(None));
     // in a `.lib` section, its first bad line (the bytes outside the
     // section are not read)
     let non_utf8 = match &file_id {
@@ -414,6 +433,7 @@ pub(super) async fn read_include(
 
     let mut head = LocalAST::default();
     head.errors.extend(encoding_note);
+    head.errors.extend(lone_cr_note);
     head.errors.extend(plus_after_title);
     if not_dot_title && let Some((rest, title, element)) = super::statement::title_line(i) {
         if element {

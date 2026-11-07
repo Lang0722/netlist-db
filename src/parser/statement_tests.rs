@@ -244,7 +244,7 @@ async fn titled(text: &str, title_line: TitleLine) -> Titled {
     let (parsed, files) = parse_with("title", text, &opts(title_line)).await;
     let file = top_text(&parsed, &files);
     let title = top(&parsed).title.as_ref().map(|t| {
-        assert_eq!(t.line.line_num, 1);
+        assert_eq!(t.line.line_num.get(), 1);
         assert!(!t.message.is_empty());
         (t.skipped, file[&t.line].to_owned())
     });

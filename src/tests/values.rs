@@ -32,8 +32,8 @@ async fn scale_factors_follow_hspice() {
         assert!(close(num(param(k)), v), "{k}: {:?} != {v}", param(k));
     }
     // names are not NaN or infinity
-    assert!(matches!(param("e"), Value::Expr(e) if e == "nand"));
-    assert!(matches!(param("i"), Value::Expr(e) if e == "info"));
+    assert!(matches!(param("e"), Value::Expr(e) if *e == "nand"));
+    assert!(matches!(param("i"), Value::Expr(e) if *e == "info"));
 }
 
 #[tokio::test]
@@ -45,12 +45,12 @@ async fn unquoted_function_calls_are_expressions() {
     .await;
     assert_eq!(diagnostics(&parsed), []);
     let (ast, _) = files.build(parsed);
-    assert!(matches!(&ast.param[0].v, Value::Expr(e) if e == "agauss(0,1,3)"));
-    assert!(matches!(&ast.param[1].v, Value::Expr(e) if e == "2*(x+y)"));
+    assert!(matches!(&ast.param[0].v, Value::Expr(e) if *e == "agauss(0,1,3)"));
+    assert!(matches!(&ast.param[1].v, Value::Expr(e) if *e == "2*(x+y)"));
     let InstanceCtx::Subckt(x) = &inst(&ast, "X1").ctx else {
         panic!()
     };
-    assert!(matches!(&x.params[0].v, Value::Expr(e) if e == "max(1u,2u)"));
+    assert!(matches!(&x.params[0].v, Value::Expr(e) if *e == "max(1u,2u)"));
 }
 
 /// CDL bus bits (`A<0>`), global nets (`VDD!`) and `/` before the subckt
@@ -110,11 +110,7 @@ async fn ic_and_nodeset_forms() {
     let nodes: Vec<_> = ast.nodeset.iter().map(|n| n.0.to_string()).collect();
     assert_eq!(nodes, ["out", "a", "b"]);
     assert_eq!(ast.init_condition.len(), 2);
-    assert!(
-        ast.init_condition
-            .iter()
-            .all(|ic| ic.2.as_deref() == Some("INV"))
-    );
+    assert!(ast.init_condition.iter().all(|ic| ic.2 == Some("INV")));
 }
 
 #[tokio::test]
@@ -128,4 +124,18 @@ async fn double_quoted_include() {
     let (ast, has_err) = files.build(parsed);
     assert!(!has_err);
     assert_eq!(names(&ast), ["R0"]);
+}
+
+/// A `.param` function hides the statistical function of its name. HSPICE on
+/// `.param unif(a,b)='(a+b)/2'` with `l='unif(1u,3u)'` gives L=2u, and the same
+/// for `agauss` and `limit` (golden `stat_user_func` measures it on an R line).
+#[tokio::test]
+async fn a_param_function_hides_a_statistical_function() {
+    for name in ["unif", "agauss", "limit"] {
+        let text = format!(
+            "* t\n.param {name}(a,b)='(a+b)/2'\n.model nch nmos level=54\n\
+             M1 d g 0 0 nch l='{name}(1u,3u)' w=1u\n"
+        );
+        assert_eq!(one_size(&text).await, (2.0, 1.0), "{text}");
+    }
 }

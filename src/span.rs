@@ -1,4 +1,4 @@
-use core::{fmt, ops::Index};
+use core::{fmt, num::NonZeroU32, ops::Index};
 use std::{
     collections::{HashMap, hash_map::Entry},
     path::{Path, PathBuf},
@@ -9,12 +9,56 @@ pub fn span(file_ctx: &str, line_offset: u32) -> LocatedSpan<'_> {
 }
 pub type LocatedSpan<'a> = nom_locate::LocatedSpan<&'a str>;
 
-#[derive(Debug, Clone, Default, Copy)]
+/// A text in a file. Make one with [`Span::new`]: the end is `start + len`, so
+/// a change of `start` alone moves the end too.
+#[derive(Debug, Clone, Copy)]
 pub struct Span {
     pub start: usize,
-    pub end: usize,
+    pub len: u32,
     /// The line number of the fragment relatively to the input of the parser. It starts at line 1.
-    pub line_num: u32,
+    pub line_num: NonZeroU32,
+}
+
+// A big deck is mostly spans. As `&str` has this size, a built list takes the
+// memory of its builder list.
+const _: () = assert!(size_of::<Span>() == size_of::<&str>());
+
+impl Default for Span {
+    fn default() -> Self {
+        Self::new(0, 0, 1)
+    }
+}
+
+impl Span {
+    /// The text from byte `start` to byte `end`, on the line `line_num` (the
+    /// first line is 1). A span holds at most 4 GiB. Only two texts can be
+    /// longer, and only in a file over 4 GiB: the text of a `.subckt` and the
+    /// rest of the file after `.alter`. The parser cuts them with
+    /// [`Span::capped_len`].
+    #[inline]
+    pub fn new(start: usize, end: usize, line_num: u32) -> Self {
+        Self {
+            start,
+            len: u32::try_from(end - start).unwrap_or(u32::MAX),
+            line_num: NonZeroU32::new(line_num).unwrap_or(NonZeroU32::MIN),
+        }
+    }
+
+    /// Where the text ends
+    #[inline]
+    pub fn end(&self) -> usize {
+        self.start + self.len as usize
+    }
+
+    /// The length of `text`, cut at 4 GiB (the most that a span holds) and
+    /// moved back to a char boundary, so that the text can be sliced there.
+    pub fn capped_len(text: &str) -> usize {
+        let mut len = text.len().min(u32::MAX as usize);
+        while !text.is_char_boundary(len) {
+            len -= 1;
+        }
+        len
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -144,7 +188,7 @@ impl Index<&Span> for str {
     type Output = str;
     #[inline]
     fn index(&self, index: &Span) -> &Self::Output {
-        &self[index.start..index.end]
+        &self[index.start..index.end()]
     }
 }
 
@@ -152,7 +196,7 @@ impl Index<&Span> for String {
     type Output = str;
     #[inline]
     fn index(&self, index: &Span) -> &Self::Output {
-        &self[index.start..index.end]
+        &self[index.start..index.end()]
     }
 }
 
@@ -160,11 +204,7 @@ impl From<LocatedSpan<'_>> for Span {
     #[inline]
     fn from(s: LocatedSpan<'_>) -> Self {
         let start = s.location_offset();
-        Self {
-            start,
-            end: start + s.fragment().len(),
-            line_num: s.location_line(),
-        }
+        Self::new(start, start + s.fragment().len(), s.location_line())
     }
 }
 
@@ -186,6 +226,14 @@ mod test {
         IResult,
         bytes::complete::{tag, take_until},
     };
+
+    /// A text longer than 4 GiB is cut at 4 GiB, and does not wrap round.
+    #[test]
+    fn long_span_is_cut() {
+        let span = Span::new(10, 10 + (5 << 30), 1);
+        assert_eq!(span.end(), 10 + u32::MAX as usize);
+        assert_eq!(Span::new(3, 7, 2).end(), 7);
+    }
 
     #[derive(Debug, Default)]
     struct Token {

@@ -141,12 +141,12 @@ fn eval_into(e: &Expr, env: &mut dyn Env, caveats: &mut Vec<Caveat>) -> Result<f
                 BinOp::Div => a / b,
                 BinOp::Add => a + b,
                 BinOp::Sub => a - b,
-                BinOp::Lt => truth(a < b),
-                BinOp::Le => truth(a <= b),
-                BinOp::Gt => truth(a > b),
-                BinOp::Ge => truth(a >= b),
-                BinOp::Eq => truth(a == b),
-                BinOp::Ne => truth(a != b),
+                BinOp::Lt => truth(a < b && !near(a, b)),
+                BinOp::Le => truth(a < b || near(a, b)),
+                BinOp::Gt => truth(a > b && !near(a, b)),
+                BinOp::Ge => truth(a > b || near(a, b)),
+                BinOp::Eq => truth(near(a, b)),
+                BinOp::Ne => truth(!near(a, b)),
                 BinOp::And | BinOp::Or => unreachable!("handled above"),
             };
             finite(v, || format!("{a} {op} {b} is not a finite number"))
@@ -159,6 +159,15 @@ fn eval_into(e: &Expr, env: &mut dyn Env, caveats: &mut Vec<Caveat>) -> Result<f
             }
         }
     }
+}
+
+/// Whether two values count as equal in a comparison. As measured, HSPICE
+/// treats two values within a relative 1e-13 as equal, for all six
+/// comparisons, with no absolute margin: `1e-300==0` is false (decks `cmp_*`,
+/// `eq_edge`). The model selector uses it too.
+#[inline]
+pub fn near(x: f64, y: f64) -> bool {
+    (x - y).abs() <= 1e-13 * x.abs().max(y.abs())
 }
 
 /// `x**y` as the HSPICE built-in function table defines it: for x < 0 the

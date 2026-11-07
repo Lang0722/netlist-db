@@ -7,15 +7,18 @@
 //! trigonometric and hyperbolic functions use radians. The statistical
 //! functions return their nominal (first) argument, as `.op` without Monte
 //! Carlo does. Golden cases `funcs`, `funcs_neg` and `funcs_extra` check
-//! these against HSPICE.
+//! these against HSPICE. `ln`, `trunc`, `round` (half away from zero),
+//! `fmod`, `atan2`, `hypot`, `asinh`, `acosh`, `atanh` and `limit` give the
+//! values that HSPICE P-2019.06 gives in a `.param`.
 
 use crate::eval::{Caveat, EvalError};
 
 /// The names of the built-in functions, lowercase.
-pub(crate) const NAMES: [&str; 29] = [
-    "sqrt", "log", "log10", "exp", "abs", "db", "int", "nint", "floor", "ceil", "sin", "cos",
-    "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "sgn", "pow", "pwr", "sign", "min",
-    "max", "agauss", "gauss", "aunif", "unif",
+pub(crate) const NAMES: [&str; 39] = [
+    "sqrt", "log", "ln", "log10", "exp", "abs", "db", "int", "trunc", "nint", "round", "floor",
+    "ceil", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "asinh",
+    "acosh", "atanh", "sgn", "pow", "pwr", "sign", "fmod", "hypot", "min", "max", "agauss",
+    "gauss", "aunif", "unif", "limit",
 ];
 
 /// `name` (any letter case) is a built-in function. A `.param` function
@@ -31,13 +34,13 @@ pub(crate) fn call(name: &str, args: &[f64]) -> Option<Result<(f64, Option<Cavea
     let signed = |x: f64, f: fn(f64) -> f64| x.signum() * f(x.abs());
     let v = match name {
         "sqrt" => one(name, args, |x| signed(x, f64::sqrt)),
-        "log" => one(name, args, |x| signed(x, f64::ln)),
+        "log" | "ln" => one(name, args, |x| signed(x, f64::ln)),
         "log10" => one(name, args, |x| signed(x, f64::log10)),
         "exp" => one(name, args, f64::exp),
         "abs" => one(name, args, f64::abs),
         "db" => one(name, args, |x| signed(x, |a| 20.0 * a.log10())),
-        "int" => one(name, args, f64::trunc),
-        "nint" => one(name, args, f64::round),
+        "int" | "trunc" => one(name, args, f64::trunc),
+        "nint" | "round" => one(name, args, f64::round),
         "floor" => one(name, args, f64::floor),
         "ceil" => one(name, args, f64::ceil),
         "sin" => one(name, args, f64::sin),
@@ -46,19 +49,27 @@ pub(crate) fn call(name: &str, args: &[f64]) -> Option<Result<(f64, Option<Cavea
         "asin" => one(name, args, f64::asin),
         "acos" => one(name, args, f64::acos),
         "atan" => one(name, args, f64::atan),
+        "atan2" => two(name, args, f64::atan2),
         "sinh" => one(name, args, f64::sinh),
         "cosh" => one(name, args, f64::cosh),
         "tanh" => one(name, args, f64::tanh),
+        "asinh" => one(name, args, f64::asinh),
+        "acosh" => one(name, args, f64::acosh),
+        "atanh" => one(name, args, f64::atanh),
         "sgn" => one(name, args, |x| if x == 0.0 { 0.0 } else { x.signum() }),
         "pow" => two(name, args, |x, y| x.powf(y.trunc())),
         "pwr" => two(name, args, |x, y| x.signum() * x.abs().powf(y)),
         "sign" => two(name, args, |x, y| if y < 0.0 { -x.abs() } else { x.abs() }),
+        "fmod" => two(name, args, |x, y| x % y),
+        "hypot" => two(name, args, f64::hypot),
         "min" => two(name, args, f64::min),
         "max" => two(name, args, f64::max),
         // (nominal, abs or rel variation, sigma [, multiplier])
         "agauss" | "gauss" => return Some(statistical(name, args, 3, 4)),
         // (nominal, abs or rel variation [, multiplier])
         "aunif" | "unif" => return Some(statistical(name, args, 2, 3)),
+        // (nominal, variation)
+        "limit" => return Some(statistical(name, args, 2, 2)),
         _ => return None,
     };
     Some(v.map(|v| (v, None)))
@@ -234,6 +245,33 @@ mod tests {
                 "{src}"
             );
         }
+    }
+
+    #[test]
+    fn builtins_measured_on_hspice() {
+        // `.meas` of `.param x='f(...)'` on HSPICE P-2019.06, 11 digits
+        let cases: &[(&str, f64)] = &[
+            ("ln(2)", 6.9314718056e-01),
+            ("trunc(2.7)", 2.0),
+            ("round(2.5)", 3.0),
+            ("round(-2.5)", -3.0),
+            ("fmod(5,3)", 2.0),
+            ("atan2(1,1)", 7.8539816340e-01),
+            ("hypot(3,4)", 5.0),
+            ("asinh(1)", 8.8137358702e-01),
+            ("acosh(2)", 1.3169578969e+00),
+            ("atanh(0.5)", 5.4930614433e-01),
+        ];
+        for &(src, want) in cases {
+            let got = val(src);
+            assert!(
+                (got - want).abs() <= 1e-10 * want.abs(),
+                "{src}: got {got}, want {want}"
+            );
+        }
+        // `limit` gives its nominal value, as the other statistical functions
+        let got = eval_str("limit(1,0.1)", &[]).unwrap();
+        assert_eq!(got, (1.0, vec![Caveat::StatisticalNominal("limit".into())]));
     }
 
     #[test]

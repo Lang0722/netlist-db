@@ -25,12 +25,17 @@ fn with_raw_bytes(bytes: &[u8]) -> String {
     text
 }
 
+/// A file as text, as [`decode`] reads it: the text, its first line with bytes
+/// that are not UTF-8, and the lines that a lone CR ends, in order
+pub(super) type Decoded = (String, Option<u32>, Vec<u32>);
+
 /// Read a netlist as text: remove UTF-8 byte order marks (also from inside a
 /// file, e.g. one made by joining files), and turn lone CR line ends (classic
 /// Mac OS) into LF. Bytes that are not UTF-8 (e.g. a `µ` written in Latin-1)
 /// are read with [`raw_byte`], instead of rejecting the whole file. Also returns
-/// the first line with such bytes.
-pub(super) fn decode(bytes: Vec<u8>) -> (String, Option<u32>) {
+/// the first line with such bytes, and the lines that a lone CR ends (the
+/// lines of the text that this gives).
+pub(super) fn decode(bytes: Vec<u8>) -> Decoded {
     let (mut text, lossy) = match String::from_utf8(bytes) {
         Ok(text) => (text, false),
         Err(e) => (with_raw_bytes(e.as_bytes()), true),
@@ -42,14 +47,22 @@ pub(super) fn decode(bytes: Vec<u8>) -> (String, Option<u32>) {
     if text.contains('\u{c}') {
         text = text.replace('\u{c}', " ");
     }
-    if text.contains("//") {
-        text = slash_comments(text);
-    }
+    // HSPICE on Windows reads a lone CR as a space, so a file with only CR line
+    // ends is one title line to it (measured on P-2019.06-SP1-1 win64). This
+    // keeps the logical lines, and the caller gives a warning.
+    // (all of them: a `.lib` section reports the first one in its own lines)
     let bytes = text.as_bytes();
-    if text
-        .match_indices('\r')
-        .any(|(idx, _)| bytes.get(idx + 1) != Some(&b'\n'))
-    {
+    let mut lone_cr = Vec::new();
+    let (mut line, mut from) = (1, 0);
+    for (idx, _) in text.match_indices('\r') {
+        if bytes.get(idx + 1) != Some(&b'\n') {
+            line += text[from..idx].matches('\n').count();
+            lone_cr.push(u32::try_from(line).unwrap_or(u32::MAX));
+            line += 1;
+            from = idx + 1;
+        }
+    }
+    if !lone_cr.is_empty() {
         let mut out = String::with_capacity(text.len());
         let mut chars = text.chars().peekable();
         while let Some(c) = chars.next() {
@@ -61,11 +74,15 @@ pub(super) fn decode(bytes: Vec<u8>) -> (String, Option<u32>) {
         }
         text = out;
     }
+    // (after the CR line ends are LF: `slash_comments` splits the text at LF)
+    if text.contains("//") {
+        text = slash_comments(text);
+    }
     let line = lossy.then(|| {
         let at = text.find(is_raw_byte).unwrap_or(0);
         u32::try_from(text[..at].matches('\n').count() + 1).unwrap_or(u32::MAX)
     });
-    (text, line)
+    (text, line, lone_cr)
 }
 
 /// HSPICE reads a word that starts with `//` as the start of a comment, on every

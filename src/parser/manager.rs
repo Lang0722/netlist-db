@@ -20,8 +20,8 @@ pub struct ParseManager {
     done_tx: StdMutex<Option<oneshot::Sender<()>>>,
     pub file_storage: Mutex<FileStorage<ASTBuilder>>,
     /// The text of each library file whose sections are loaded (read once
-    /// for all its sections), and its first line that is not UTF-8; or why it
-    /// could not be read
+    /// for all its sections), with what [`decode`](super::source::decode)
+    /// found in it; or why it could not be read
     pub(super) lib_text: Mutex<HashMap<PathBuf, Arc<OnceCell<SharedText>>>>,
     /// a permit for each file that is open
     pub(super) open_files: Semaphore,
@@ -54,7 +54,7 @@ pub(super) struct Include {
     pub(super) res: Arc<std::sync::OnceLock<Result<ParsedId, ParseError>>>,
 }
 
-pub(super) type SharedText = Result<Arc<(String, Option<u32>)>, (std::io::ErrorKind, String)>;
+pub(super) type SharedText = Result<Arc<super::source::Decoded>, (std::io::ErrorKind, String)>;
 
 /// One unit of outstanding work: [`ParseManager::wait`] does not return while
 /// a guard is alive. It is released on drop, so a task that panics still

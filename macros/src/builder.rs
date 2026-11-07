@@ -83,7 +83,7 @@ fn impl_enum(
         impl<'s> crate::builder::Builder<'s> for #builder_ident {
             type Out = #ident<'s>;
             #[inline]
-            fn build(&self, file: &'s str) -> Self::Out {
+            fn build(self, file: &'s str) -> Self::Out {
                 match self {
                     #builds
                 }
@@ -119,7 +119,7 @@ fn impl_struct(
                 impl<'s> crate::builder::Builder<'s> for #builder_ident {
                     type Out = #ident<'s>;
                     #[inline]
-                    fn build(&self, file: &'s str) -> Self::Out {
+                    fn build(self, file: &'s str) -> Self::Out {
                         #ident {
                             #builds
                         }

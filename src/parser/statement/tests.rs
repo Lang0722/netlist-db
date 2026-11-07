@@ -426,7 +426,7 @@ fn model_without_params() {
         .model
         .iter()
         .map(|m| {
-            let m = m.build(text);
+            let m = m.clone().build(text);
             (
                 m.name.to_string(),
                 format!("{:?}", m.model_type),

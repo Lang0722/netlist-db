@@ -3,57 +3,10 @@
 use netlist_query::{
     Diagnostic, Level, LibOverride, LoadError, LoadOptions, Netlist, Page, QueryError, TitleLine,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel)
-}
-
-/// A deck written by `write_deck`. It derefs to the path of its first
-/// file. Its directory belongs to this process, so two test runs at the
-/// same time (in one target directory) do not share it, and it is removed
-/// on drop.
-struct Deck {
-    dir: PathBuf,
-    main: PathBuf,
-}
-
-impl Drop for Deck {
-    fn drop(&mut self) {
-        _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-impl std::ops::Deref for Deck {
-    type Target = Path;
-    fn deref(&self) -> &Path {
-        &self.main
-    }
-}
-
-impl AsRef<Path> for Deck {
-    fn as_ref(&self) -> &Path {
-        &self.main
-    }
-}
-
-/// Writes `files` (name, text) into a new directory for test `name`.
-fn write_deck(name: &str, files: &[(&str, &str)]) -> Deck {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("load")
-        .join(format!("{name}-{}", std::process::id()));
-    _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    for (file, text) in files {
-        std::fs::write(dir.join(file), text).unwrap();
-    }
-    let main = dir.join(files[0].0);
-    Deck { dir, main }
-}
-
-fn load(path: impl AsRef<Path>) -> Netlist {
-    Netlist::load(&LoadOptions::new(path.as_ref().to_path_buf())).unwrap()
-}
+mod common;
+use common::*;
 
 fn all_diags(net: &Netlist, level: Option<Level>) -> Vec<Diagnostic> {
     let page = Page {
@@ -263,7 +216,12 @@ fn paging_limits() {
     assert_eq!(second.next_cursor, None);
     assert!(second.items[0].message.contains(".bad50"));
     // the limit is at most 500
-    let big = net
+    let mut text = String::from("* paging\n");
+    for n in 0..600 {
+        text.push_str(&format!(".bad{n} 1\n"));
+    }
+    let many = load(write_deck("paging_cap", &[("main.sp", &text)]));
+    let big = many
         .diagnostics(
             Some(Level::Error),
             &Page {
@@ -272,7 +230,8 @@ fn paging_limits() {
             },
         )
         .unwrap();
-    assert_eq!(big.items.len(), 75);
+    assert_eq!((big.total, big.items.len()), (600, 500));
+    assert_eq!(big.next_cursor.as_deref(), Some("500"));
     // a cursor that is not a decimal offset is an error, not a guess
     let bad = net.diagnostics(
         None,

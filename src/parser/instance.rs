@@ -8,11 +8,10 @@ use crate::{
     ast::{KeyValueBuilder, ValueBuilder},
     err::ParseErrorInner,
     instance::{
-        BJT_POSITIONAL, BJTBuilder, CapacitorBuilder, ControlledKind, ControlledPwlBuilder,
-        ControlledSourceBuilder, CurrentBuilder, DIODE_POSITIONAL, DiodeBuilder, InductorBuilder,
-        InstanceBuilder, InstanceCtxBuilder, MOSFETBuilder, MutualInductorBuilder, RCL_POSITIONAL,
-        ResistorBuilder, SourceBuilder, SourceFuncBuilder, SubcktBuilder, VoltageBuilder,
-        gives_no_value, plain_word,
+        BJT_POSITIONAL, BJTBuilder, ControlledKind, ControlledPwlBuilder, ControlledSourceBuilder,
+        CurrentBuilder, DIODE_POSITIONAL, DiodeBuilder, InstanceBuilder, InstanceCtxBuilder,
+        MOSFETBuilder, MutualInductorBuilder, RCL_POSITIONAL, RclBuilder, SourceBuilder,
+        SourceFuncBuilder, SubcktBuilder, VoltageBuilder, gives_no_value, plain_word,
     },
     span::{LocatedSpan, Span},
 };
@@ -74,16 +73,6 @@ pub(super) fn instance(i: LocatedSpan) -> Result<(LocatedSpan, InstanceBuilder),
     Ok((i, InstanceBuilder { name, ctx }))
 }
 
-/// The parts of an R, C or L element.
-struct Rcl {
-    n1: Span,
-    n2: Span,
-    model: Option<Span>,
-    value: Option<ValueBuilder>,
-    positional: Vec<(Span, ValueBuilder)>,
-    params: Vec<KeyValueBuilder>,
-}
-
 /// A value with its text as written (a quoted expression with its
 /// quotes). A token that starts with `*` is not one: ` *` starts a
 /// comment.
@@ -123,7 +112,7 @@ fn bare_token(i: LocatedSpan) -> IResult<LocatedSpan, (Span, ValueBuilder)> {
 #[inline]
 fn text_of<'a>(src: &LocatedSpan<'a>, sp: &Span) -> &'a str {
     let from = src.location_offset();
-    &src.fragment()[sp.start - from..sp.end - from]
+    &src.fragment()[sp.start - from..sp.end() - from]
 }
 
 /// What a bare token after the nodes of an R, C or L line can be.
@@ -190,7 +179,7 @@ fn rcl_item(i: LocatedSpan) -> IResult<LocatedSpan, RclItem> {
 }
 
 /// The two nodes, the model, the value, the numbers after the value and
-/// the parameters of an R, C or L element (see `ResistorBuilder` for the
+/// the parameters of an R, C or L element (see `RclBuilder` for the
 /// orders that are read). `key` is the element's letter (`r`, `c`, `l`),
 /// and `element` names the element in an error (`a resistor`).
 /// `value_then_model` is what HSPICE does with a value before the model
@@ -201,7 +190,7 @@ fn _rcl<'a>(
     key: &'static str,
     element: &'static str,
     value_then_model: Option<&'static str>,
-) -> Result<(LocatedSpan<'a>, Rcl), ParseErrorInner> {
+) -> Result<(LocatedSpan<'a>, RclBuilder), ParseErrorInner> {
     // (the nodes may be in parentheses: `R1 (a b) 1k`)
     let (i, (n1, n2, _)) = (
         preceded(node_sep, name),
@@ -218,7 +207,7 @@ fn _rcl<'a>(
         // follow
         return Ok((
             i,
-            Rcl {
+            RclBuilder {
                 n1,
                 n2,
                 model: None,
@@ -375,7 +364,7 @@ fn _rcl<'a>(
     }
     Ok((
         i,
-        Rcl {
+        RclBuilder {
             n1,
             n2,
             model,
@@ -453,50 +442,20 @@ fn _resistor(i: LocatedSpan<'_>) -> CtxResult<'_> {
     // golden `res_value_model`
     let what = "reads the value as a third node and rejects the line";
     let (i, r) = _rcl(i, "r", "a resistor", Some(what))?;
-    Ok((
-        i,
-        InstanceCtxBuilder::Resistor(ResistorBuilder {
-            n1: r.n1,
-            n2: r.n2,
-            model: r.model,
-            value: r.value,
-            positional: r.positional,
-            params: r.params,
-        }),
-    ))
+    Ok((i, InstanceCtxBuilder::Resistor(r)))
 }
 #[inline]
 fn _capacitor(i: LocatedSpan<'_>) -> CtxResult<'_> {
     // golden `cap_value_model`
     let what = "does not read the value in this order and uses a capacitance of 0";
     let (i, c) = _rcl(i, "c", "a capacitor", Some(what))?;
-    Ok((
-        i,
-        InstanceCtxBuilder::Capacitor(CapacitorBuilder {
-            n1: c.n1,
-            n2: c.n2,
-            model: c.model,
-            value: c.value,
-            positional: c.positional,
-            params: c.params,
-        }),
-    ))
+    Ok((i, InstanceCtxBuilder::Capacitor(c)))
 }
 #[inline]
 fn _inductor(i: LocatedSpan<'_>) -> CtxResult<'_> {
     // golden `ind_value_model`: L reads "value, then model"
     let (i, l) = _rcl(i, "l", "an inductor", None)?;
-    Ok((
-        i,
-        InstanceCtxBuilder::Inductor(InductorBuilder {
-            n1: l.n1,
-            n2: l.n2,
-            model: l.model,
-            value: l.value,
-            positional: l.positional,
-            params: l.params,
-        }),
-    ))
+    Ok((i, InstanceCtxBuilder::Inductor(l)))
 }
 
 /// A positional value or a `key=value` parameter
@@ -893,7 +852,7 @@ fn _subckt(i: LocatedSpan<'_>) -> CtxResult<'_> {
     // CDL puts a `/` before the subckt name: `XI0 A B / INV` or `XI0 A B /INV`
     let text = span_text(base, cktname);
     if text.len() > 1 && text.starts_with('/') {
-        cktname.start += 1;
+        cktname = Span::new(cktname.start + 1, cktname.end(), cktname.line_num.get());
     }
     if nodes.last().is_some_and(|n| span_text(base, *n) == "/") {
         nodes.pop();
@@ -1051,11 +1010,7 @@ fn func_args<'a>(
     }
     Ok((
         rest,
-        Span {
-            start: first.start,
-            end: last.end,
-            line_num: first.line_num,
-        },
+        Span::new(first.start, last.end(), first.line_num.get()),
     ))
 }
 

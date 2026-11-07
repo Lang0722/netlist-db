@@ -159,11 +159,7 @@ fn title_line(text: &str, mode: TitleLine) -> Option<TitleLineInfo> {
         }
     };
     Some(TitleLineInfo {
-        line: Span {
-            start: 0,
-            end: line.len(),
-            line_num: 1,
-        },
+        line: Span::new(0, line.len(), 1),
         skipped,
         message,
     })
@@ -203,16 +199,15 @@ impl<'a> Level<'a> {
         self.flush();
         let open = self.open.expect("a body level");
         let header = open.body.header;
+        let start = header.location_offset();
+        // (`header` holds the rest of the text from the `.subckt`)
+        let len = Span::capped_len(&header.fragment()[..end - start]);
         SubcktBuilder {
             name: open.name,
             ports: open.ports,
             params: open.params,
             ast: self.ast,
-            text: Span {
-                start: header.location_offset(),
-                end,
-                line_num: header.location_line(),
-            },
+            text: Span::new(start, start + len, header.location_line()),
         }
     }
 }
@@ -295,11 +290,12 @@ pub fn ast<'a>(
                 level.local.ignored_end.push(pos.map_or(0, |p| p.line_num))
             }
             Step::End { pos } => {
+                let end = pos.map_or(i.location_offset(), |p| p.start);
                 let after_end = AfterEnd {
                     line: pos.map_or(0, |p| p.line_num),
+                    start: end,
                     lines: statement_lines(i.fragment()),
                 };
-                let end = pos.map_or(i.location_offset(), |p| p.start);
                 return finish(levels, Some(after_end), end);
             }
             Step::Eof => return finish(levels, None, i.location_offset()),
@@ -429,24 +425,7 @@ pub async fn parse_top_multi_with<I: Iterator<Item = FileId>>(
 
 #[tokio::test]
 async fn test_top() {
-    #[cfg(not(feature = "tracing"))]
-    {
-        _ = simple_logger::SimpleLogger::new().init();
-    }
-    #[cfg(feature = "tracing")]
-    {
-        let subscriber = tracing_subscriber::FmtSubscriber::builder()
-            // .with_ansi(colored::control::SHOULD_COLORIZE.should_colorize())
-            .with_max_level(tracing::Level::DEBUG)
-            .with_target(false)
-            .with_file(true)
-            .with_line_number(true)
-            .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
-                "%FT%T".to_owned(),
-            ))
-            .finish();
-        _ = tracing::subscriber::set_global_default(subscriber);
-    }
+    crate::hierarchy::test::init_logger();
     let (parsed, files) = parse_top_multi(
         [FileId::Include {
             path: PathBuf::from("tests/top.sp"),
@@ -469,7 +448,7 @@ mod statement_tests;
 /// `.lib` override triples, `.endl` in
 /// comments, deep `.subckt` nesting, `.macro`/`.eom`, and the title line.
 #[cfg(test)]
-mod follow_up_tests;
+mod lib_nesting_title_tests;
 
 /// The lines after `.end`, and files that are not valid UTF-8.
 #[cfg(test)]
