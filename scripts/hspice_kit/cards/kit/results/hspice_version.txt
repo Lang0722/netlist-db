@@ -1,0 +1,2 @@
+****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******
+(hspice -v printed nothing when run through prlctl exec; this line is the header of each .lis)

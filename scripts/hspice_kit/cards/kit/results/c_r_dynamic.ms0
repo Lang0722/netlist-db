@@ -1,0 +1,6 @@
+$DATA1 SOURCE='HSPICE' VERSION='P-2019.06-SP1-1 win64' PARAM_COUNT=0
+.TITLE '* c_r_dynamic: an r card: the one on the instance path (mid's), or the one that the line's definition sees (the top level)?'
+ ctl              p0               p1               temper          
+ alter#          
+  1.000000000e-03  3.333333333e-04  5.000000000e-04  2.500000000e+01
+1               

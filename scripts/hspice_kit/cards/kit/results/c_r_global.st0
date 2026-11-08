@@ -1,0 +1,21 @@
+****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******
+Input File: c_r_global.sp
+
+ init: begin read circuit files, cpu clock= 1.16E+00
+       option parhier = global
+       option post =     0.00
+       option ingold =     2.00
+       option numdgt =     10.0
+       option measdgt =     10.0
+ init: end read circuit files, cpu clock= 1.16E+00 peak memory=      82 mb
+ init: begin check errors, cpu clock= 1.16E+00
+ init: end check errors, cpu clock= 1.16E+00 peak memory=      82 mb
+ init: begin setup matrix, pivot=     0 cpu clock= 1.16E+00
+       establish matrix -- done, cpu clock= 1.16E+00 peak memory=      82 mb
+       re-order matrix -- done, cpu clock= 1.16E+00 peak memory=      82 mb
+ init: end setup matrix, cpu clock= 1.16E+00 peak memory=      82 mb
+ sweep: dc dc0    begin, #sweeps=   1 cpu clock= 1.16E+00
+ sweep: dc dc0    end, cpu clock= 1.16E+00 peak memory=      82 mb
+ dcop: begin dcop, cpu clock= 1.17E+00
+ dcop: end dcop, cpu clock= 1.17E+00 peak memory=      82 mb tot_iter=       1
+>info:         ***** hspice job concluded

@@ -1,0 +1,4 @@
+$DATA1 SOURCE='HSPICE' VERSION='P-2019.06-SP1-1 win64' PARAM_COUNT=0
+.TITLE '* c_dup_key: a card that sets vth0 twice: which one does hspice use? (netlist-db lists both)'
+ ctl              p0               temper           alter#          
+  3.000000000e-01  3.200000000e-01  2.500000000e+01 1               

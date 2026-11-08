@@ -1,0 +1,14 @@
+* "simulator" "HSPICE" 
+* "version" "P-2019.06-SP1-1 win64"
+* "format" "HSP"
+* "rundate" "17:30:17 11/08/2026 "
+* "netlist" "c_r_global.sp "
+* "runtitle" "* c_r_global: r cards: one at the top level, one inside a subckt read by its instances (parhier=global)"
+* time =  0.000000000e+00 
+* temperature =  2.500000000e+01 
+*** BEGIN: Saved Operating Point ***                     
+.option 
++ gmindc= 1.000000000e-12 
+.nodeset
++ a = 1.000000000e+00 
+***   END: Saved Operating Point ***                     

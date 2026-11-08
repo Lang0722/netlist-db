@@ -1,0 +1,187 @@
+ ****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+  Copyright (c) 1986 - 2026 by Synopsys, Inc. All Rights Reserved.              
+  This software and the associated documentation are proprietary
+  to Synopsys, Inc. This software may only be used in accordance
+  with the terms and conditions of a written license agreement with
+  Synopsys, Inc. All other use, reproduction, or distribution of
+  this software is strictly prohibited.
+  Input File: c_r_local.sp                                                      
+  Command line options: C:\synopsys\Hspice_P-2019.06-SP1-1\WIN64\hspice.com -i c_r_local.sp -o ..\results\c_r_local
+  Start time: Sun Nov  8 17:30:19 2026
+1****** HSPICE -- P-2019.06-SP1-1 win64 (Sep 27 2019) ******                    
+ ******  
+ * c_r_local: the same, parhier=local
+
+ ****** circuit name directory
+ circuit number to circuit name directory
+   number circuitname                     definition         multiplier
+        0 main circuit
+        1 x1.                             rcell              1.00 
+        2 x2.                             rcell              1.00 
+ ******  
+ * c_r_local: the same, parhier=local
+
+ ****** res model parameters tnom=  25.000 temp=  25.000 ******
+ *********************************
+ ***  model name:   0:rtop    ****
+ *********************************
+
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+    level=   0.                   w=   0.    meters        dw=   0.    meters 
+        l=   0.    meters       dlr=   0.    meters      tc1r=   0.    /deg   
+     tc2r=   0.    /deg2       tref=  25.00  deg k       tc1c=   0.    /deg   
+     tc2c=   0.    /deg2       bulk=  gnd              shrink=   1.00         
+    scale=   1.00               res=   0.    ohms         cap=   0.    farad  
+      rac=   0.    ohms         rsh= 100.00  ohm/sq       cox=   0.    f/m**2 
+    capsw=   0.    f/m        thick=   0.    meters    cratio= 500.00m        
+       di=   0.               noise=   1.00              wmin=   0.    meters 
+     wmax=   1.00m meters      lmin=   0.    meters      lmax=   1.00m meters 
+       kf=   0.                  af=   2.00                lf=   1.00         
+       wf=   1.00                ef=   1.00         
+  
+ *********************************
+ ***  model name:   0:rc      ****
+ *********************************
+
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+    level=   0.                   w=   0.    meters        dw=   0.    meters 
+        l=   0.    meters       dlr=   0.    meters      tc1r=   0.    /deg   
+     tc2r=   0.    /deg2       tref=  25.00  deg k       tc1c=   0.    /deg   
+     tc2c=   0.    /deg2       bulk=  gnd              shrink=   1.00         
+    scale=   1.00               res=   0.    ohms         cap=   0.    farad  
+      rac=   0.    ohms         rsh= 100.00  ohm/sq       cox=   0.    f/m**2 
+    capsw=   0.    f/m        thick=   0.    meters    cratio= 500.00m        
+       di=   0.               noise=   1.00              wmin=   0.    meters 
+     wmax=   1.00m meters      lmin=   0.    meters      lmax=   1.00m meters 
+       kf=   0.                  af=   2.00                lf=   1.00         
+       wf=   1.00                ef=   1.00         
+  
+ *********************************
+ ***  model name:   1:rloc    ****
+ *********************************
+
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+    level=   0.                   w=   0.    meters        dw=   0.    meters 
+        l=   0.    meters       dlr=   0.    meters      tc1r=   0.    /deg   
+     tc2r=   0.    /deg2       tref=  25.00  deg k       tc1c=   0.    /deg   
+     tc2c=   0.    /deg2       bulk=  gnd              shrink=   1.00         
+    scale=   1.00               res=   0.    ohms         cap=   0.    farad  
+      rac=   0.    ohms         rsh=  30.00  ohm/sq       cox=   0.    f/m**2 
+    capsw=   0.    f/m        thick=   0.    meters    cratio= 500.00m        
+       di=   0.               noise=   1.00              wmin=   0.    meters 
+     wmax=   1.00m meters      lmin=   0.    meters      lmax=   1.00m meters 
+       kf=   0.                  af=   2.00                lf=   1.00         
+       wf=   1.00                ef=   1.00         
+  
+ *********************************
+ ***  model name:   2:rloc    ****
+ *********************************
+
+     names  values   units     names  values   units     names  values   units
+     -----  ------   -----     -----  ------   -----     -----  ------   -----
+    level=   0.                   w=   0.    meters        dw=   0.    meters 
+        l=   0.    meters       dlr=   0.    meters      tc1r=   0.    /deg   
+     tc2r=   0.    /deg2       tref=  25.00  deg k       tc1c=   0.    /deg   
+     tc2c=   0.    /deg2       bulk=  gnd              shrink=   1.00         
+    scale=   1.00               res=   0.    ohms         cap=   0.    farad  
+      rac=   0.    ohms         rsh=  60.00  ohm/sq       cox=   0.    f/m**2 
+    capsw=   0.    f/m        thick=   0.    meters    cratio= 500.00m        
+       di=   0.               noise=   1.00              wmin=   0.    meters 
+     wmax=   1.00m meters      lmin=   0.    meters      lmax=   1.00m meters 
+       kf=   0.                  af=   2.00                lf=   1.00         
+       wf=   1.00                ef=   1.00         
+  
+  
+      
+ *****************************************************************
+ ******  option summary
+ ******
+ runlvl  = 3         bypass  = 2.0000000000  
+ ******
+ * c_r_local: the same, parhier=local
+
+ ****** dc transfer curves tnom=  25.000 temp=  25.000 ******
+ ctl= 1.0000000000e-03
+ p0= 3.3333333333e-03
+ p1= 1.6666666667e-03
+ p2= 1.0000000000e-03
+ **info** dc convergence successful at Newton-Raphson method 
+ ******  
+ * c_r_local: the same, parhier=local
+
+ ****** operating point information tnom=  25.000 temp=  25.000 ******
+ ****** operating point status is all       simulation time is   0.000000000e+00
+    node    =voltage
+
+ +0:a       = 1.000000000e+00
+
+
+ **** voltage sources
+
+ subckt                   
+ element        0:va      
+  volts    1.000000000e+00
+  current -7.000000000e-03
+  power    7.000000000e-03
+
+     total voltage source power dissipation=  7.000000000e-03 watts
+
+
+
+ **** resistors
+
+ subckt                                     x1               x2              
+ element        0:r0             0:rctl           1:r1             2:r1      
+  r value  1.000000000e+03  1.000000000e+03  3.000000000e+02  6.000000000e+02
+  v drop   1.000000000e+00  1.000000000e+00  1.000000000e+00  1.000000000e+00
+  current  1.000000000e-03  1.000000000e-03  3.333333333e-03  1.666666667e-03
+  power    1.000000000e-03  1.000000000e-03  3.333333333e-03  1.666666667e-03
+
+
+          ***** job concluded
+ ******  
+ * c_r_local: the same, parhier=local
+
+ ****** job statistics summary tnom=  25.000 temp=  25.000 ******
+
+  ******  HSPICE Threads Information  ******
+
+  Command Line Threads Count :     1
+  Available CPU Count        :     4
+  Actual Threads Count       :     1
+
+
+  ******  Circuit Statistics  ******
+  # nodes       =       2 # elements   =       5
+  # resistors   =       4 # capacitors =       0 # inductors   =       0
+  # mutual_inds =       0 # vccs       =       0 # vcvs        =       0
+  # cccs        =       0 # ccvs       =       0 # volt_srcs   =       1
+  # curr_srcs   =       0 # diodes     =       0 # bjts        =       0
+  # jfets       =       0 # mosfets    =       0 # U elements  =       0
+  # T elements  =       0 # W elements =       0 # B elements  =       0
+  # S elements  =       0 # P elements =       0 # va device   =       0
+  # vector_srcs =       0 # N elements =       0
+
+
+  ******  Runtime Statistics (seconds)  ******
+
+  analysis           time    # points   tot. iter  conv.iter
+  op point           0.00           1           1
+  dc sweep           0.00           1           1
+  readin             0.01
+  errchk             0.00
+  setup              0.00
+  output             0.00
+
+
+           peak memory used         86.00 megabytes
+           total cpu time            0.02 seconds
+           total elapsed time        1.19 seconds
+           job started at     17:30:19 11/08/2026
+           job ended   at     17:30:21 11/08/2026
+           job total runtime         1.19 seconds
+
+

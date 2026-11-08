@@ -1,0 +1,4 @@
+$DATA1 SOURCE='HSPICE' VERSION='P-2019.06-SP1-1 win64' PARAM_COUNT=0
+.TITLE '* c_dynamic_local: a card in mid, found along the instance path by a mosfet of the top-level subckt leaf, which defines dv too'
+ ctl              p0               temper           alter#          
+  3.000000000e-01  2.300000000e-01  2.500000000e+01 1               

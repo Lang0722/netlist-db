@@ -1,0 +1,6 @@
+$DATA1 SOURCE='HSPICE' VERSION='P-2019.06-SP1-1 win64' PARAM_COUNT=0
+.TITLE '* c_diode: a diode card inside a subckt, evaluated for each instance?'
+ ctl              p0               p1               temper          
+ alter#          
+  1.387999339e-04  1.387999339e-04  5.551997337e-04  2.500000000e+01
+1               

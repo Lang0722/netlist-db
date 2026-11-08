@@ -1,0 +1,6 @@
+$DATA1 SOURCE='HSPICE' VERSION='P-2019.06-SP1-1 win64' PARAM_COUNT=0
+.TITLE '* c_r_global: r cards: one at the top level, one inside a subckt read by its instances (parhier=global)'
+ ctl              p0               p1               p2              
+ temper           alter#          
+  1.000000000e-03  6.666666667e-04  6.666666667e-04  1.000000000e-03
+  2.500000000e+01 1               

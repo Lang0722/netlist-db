@@ -1,0 +1,6 @@
+$DATA1 SOURCE='HSPICE' VERSION='P-2019.06-SP1-1 win64' PARAM_COUNT=0
+.TITLE '* c_corner_ff: the same library, corner ff (dvg=-0.05)'
+ ctl              p0               p1               temper          
+ alter#          
+  3.000000000e-01  4.499447304e-01  4.199999982e-01  2.500000000e+01
+1               

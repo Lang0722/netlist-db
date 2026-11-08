@@ -1,0 +1,15 @@
+* "simulator" "HSPICE" 
+* "version" "P-2019.06-SP1-1 win64"
+* "format" "HSP"
+* "rundate" "17:30:03 11/08/2026 "
+* "netlist" "c_mac_global_top.sp "
+* "runtitle" "* c_mac_global_top: a card inside a subckt, parhier=global, with a top-level dv: does the top level win, as for an element?"
+* time =  0.000000000e+00 
+* temperature =  2.500000000e+01 
+*** BEGIN: Saved Operating Point ***                     
+.option 
++ gmindc= 1.000000000e-12 
+.nodeset
++ d = 1.000000000e+00 
++ g = 1.000000000e+00 
+***   END: Saved Operating Point ***                     

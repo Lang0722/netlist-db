@@ -1,0 +1,15 @@
+* "simulator" "HSPICE" 
+* "version" "P-2019.06-SP1-1 win64"
+* "format" "HSP"
+* "rundate" "17:29:59 11/08/2026 "
+* "netlist" "c_dynamic_local.sp "
+* "runtitle" "* c_dynamic_local: a card in mid, found along the instance path by a mosfet of the top-level subckt leaf, which defines dv too"
+* time =  0.000000000e+00 
+* temperature =  2.500000000e+01 
+*** BEGIN: Saved Operating Point ***                     
+.option 
++ gmindc= 1.000000000e-12 
+.nodeset
++ d = 1.000000000e+00 
++ g = 1.000000000e+00 
+***   END: Saved Operating Point ***                     

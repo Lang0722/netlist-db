@@ -1,0 +1,14 @@
+* "simulator" "HSPICE" 
+* "version" "P-2019.06-SP1-1 win64"
+* "format" "HSP"
+* "rundate" "17:30:15 11/08/2026 "
+* "netlist" "c_r_dynamic.sp "
+* "runtitle" "* c_r_dynamic: an r card: the one on the instance path (mid's), or the one that the line's definition sees (the top level)?"
+* time =  0.000000000e+00 
+* temperature =  2.500000000e+01 
+*** BEGIN: Saved Operating Point ***                     
+.option 
++ gmindc= 1.000000000e-12 
+.nodeset
++ a = 1.000000000e+00 
+***   END: Saved Operating Point ***                     
