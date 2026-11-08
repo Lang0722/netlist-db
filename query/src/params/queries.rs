@@ -823,7 +823,7 @@ impl Netlist {
     /// The parameters of an R, C or L line, read as HSPICE reads the tokens
     /// after the nodes (see [`Netlist::resolve_element`]), the model, and
     /// caveats on the element. The value is named `r`, `c` or `l`.
-    fn rcl_items<'n>(
+    pub(super) fn rcl_items<'n>(
         &'n self,
         holder: DefId,
         i: ElemIdx,

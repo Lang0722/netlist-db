@@ -1,0 +1,21 @@
+deck	probes	what it asks
+c_mac_global	2	a card inside a subckt: is it evaluated for each instance? (parhier=global, no top-level dv)
+c_mac_local	2	a card inside a subckt, parhier=local, with a top-level dv
+c_mac_global_top	2	a card inside a subckt, parhier=global, with a top-level dv: does the top level win, as for an element?
+c_top_card_local	2	a top-level card used only by MOSFETs in subckts that define dv too (parhier=local): the known gap of the bin limits
+c_top_card_notop	2	a top-level card that reads a name only the MOSFETs' subckts define (parhier=global)
+c_nested_local	1	a card in outer, read by a MOSFET in inner, which defines dv too (parhier=local)
+c_nested_global	1	the same, parhier=global
+c_dynamic_local	1	a card in mid, found along the instance path by a MOSFET of the top-level subckt leaf, which defines dv too
+c_body_param	3	a card that reads a body .param computed from the instance's L, as a PDK macro model does
+c_corner_tt	2	a PDK library (cards_pdk.lib): corner tt, binned cards in the wrapper subckt nch_mac
+c_corner_ff	2	the same library, corner ff (dvg=-0.05)
+c_func_global	2	a card that calls a top-level .param function with a subckt parameter
+c_temper	1	a card that reads temper, at .temp 50 (the temperature terms zeroed)
+c_stat_param	1	a card that reads a .param with agauss (no Monte Carlo: the nominal value)
+c_stat_direct	1	agauss directly in a card (HSPICE rejects it directly in an element expression: does it in a card?)
+c_dup_key	1	a card that sets vth0 twice: which one does HSPICE use? (netlist-db lists both)
+c_r_global	3	R cards: one at the top level, one inside a subckt read by its instances (parhier=global)
+c_r_local	3	the same, parhier=local
+c_r_dynamic	2	an R card: the one on the instance path (mid's), or the one that the line's definition sees (the top level)?
+c_diode	2	a diode card inside a subckt, evaluated for each instance?

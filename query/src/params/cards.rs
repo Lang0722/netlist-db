@@ -317,16 +317,18 @@ impl Netlist {
     }
 
     /// The model name of element `i` of `holder` (at `path`), as HSPICE
-    /// reads the line: for an R, C or L line, the reading of
-    /// [`Netlist::elem_model`] (a word is a model only when a card of that
-    /// name is visible). A bad argument for an element with none.
+    /// reads the line: for an R, C or L line, the reading of the tokens
+    /// after its nodes that `resolve_element` and `element_info` make (a word
+    /// is a model only when a card of that name is visible, also when it is
+    /// the only word: `R1 a b rmod l=10u w=1u`, golden `res_model`). A bad
+    /// argument for an element with none.
     fn line_model(&self, path: &str, holder: DefId, i: ElemIdx) -> Result<Sym, QueryError> {
         let e = &self.defs[holder.idx()].elements[i];
         let kind = e.kind.name();
         let model = match e.kind {
             ElemKind::Mosfet | ElemKind::Diode | ElemKind::Bjt => e.model,
             ElemKind::Resistor | ElemKind::Capacitor | ElemKind::Inductor => {
-                self.elem_model(holder, i)
+                self.rcl_items(holder, i).1
             }
             _ => None,
         };

@@ -302,6 +302,17 @@ fn other_elements() {
         (c.card.as_ref().unwrap().params_total, c.params.total),
         (0, 0)
     );
+    // the model as the only word after the nodes, with L and W: the wire
+    // model, as `element_info` reads the line (golden `res_model`)
+    let wire = "* t\n.param rs=50\n.model rw r rsh='rs*2'\nR1 a 0 rw l=10u w=1u\nV1 a 0 1\n.end\n";
+    let (_wire_deck, wire_net) = load_text("others_wire", wire);
+    assert_eq!(
+        wire_net.element_info("r1").unwrap().model.as_deref(),
+        Some("rw")
+    );
+    let w = all(&wire_net, "r1");
+    assert_eq!(w.card.as_ref().unwrap().name, "rw");
+    assert!(close(value(&w, "rsh"), 100.0));
     // elements with no card
     for path in ["r2", "v1", "x1", "x1.r3"] {
         assert!(

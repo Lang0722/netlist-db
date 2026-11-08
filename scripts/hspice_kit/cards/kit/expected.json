@@ -1,0 +1,1053 @@
+{
+ "decks": [
+  {
+   "deck": "c_mac_global",
+   "kind": "lv9",
+   "what": "a card inside a subckt: is it evaluated for each instance? (parhier=global, no top-level dv)",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance: its default dv=0.03",
+       0.23
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mn",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.23
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance: dv=0.07 on its X line",
+       0.27
+      ],
+      [
+       "once for the subckt, in its first instance",
+       0.23
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mn",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       0.27
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_mac_local",
+   "kind": "lv9",
+   "what": "a card inside a subckt, parhier=local, with a top-level dv",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance: its default dv=0.03",
+       0.23
+      ],
+      [
+       "the top-level dv=0.01",
+       0.21
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mn",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.23
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance: dv=0.07 on its X line",
+       0.27
+      ],
+      [
+       "once for the subckt, in its first instance",
+       0.23
+      ],
+      [
+       "the top-level dv=0.01",
+       0.21
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mn",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       0.27
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_mac_global_top",
+   "kind": "lv9",
+   "what": "a card inside a subckt, parhier=global, with a top-level dv: does the top level win, as for an element?",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "the top-level dv=0.01 (parhier=global)",
+       0.21
+      ],
+      [
+       "this instance's default dv=0.03",
+       0.23
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mn",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.21000000000000002
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "the top-level dv=0.01 (parhier=global)",
+       0.21
+      ],
+      [
+       "this instance: dv=0.07",
+       0.27
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mn",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       0.21000000000000002
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_top_card_local",
+   "kind": "lv9",
+   "what": "a top-level card used only by MOSFETs in subckts that define dv too (parhier=local): the known gap of the bin limits",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "where the card is defined: the top-level dv=0.01",
+       0.21
+      ],
+      [
+       "the MOSFET's own instance: dv=0.05 (the first MOSFET, as for the limits of a bin)",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mt",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       0.21000000000000002
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "where the card is defined: the top-level dv=0.01",
+       0.21
+      ],
+      [
+       "the MOSFET's own instance: dv=0.07",
+       0.27
+      ],
+      [
+       "the value of the first MOSFET, x1.m1",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mt",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       0.21000000000000002
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_top_card_notop",
+   "kind": "lv9",
+   "what": "a top-level card that reads a name only the MOSFETs' subckts define (parhier=global)",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "the MOSFET's own instance: dv=0.05",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mt",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       null
+      ],
+      "unresolved": [
+       "`dv` is not defined on this path: HSPICE rejects a deck with an expression that names a parameter not defined where the expression is evaluated (golden `pe_scope_global`: \"Undefined parameter or function definition\")"
+      ]
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "the MOSFET's own instance: dv=0.07",
+       0.27
+      ],
+      [
+       "the value of the first MOSFET, x1.m1",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mt",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       null
+      ],
+      "unresolved": [
+       "`dv` is not defined on this path: HSPICE rejects a deck with an expression that names a parameter not defined where the expression is evaluated (golden `pe_scope_global`: \"Undefined parameter or function definition\")"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_nested_local",
+   "kind": "lv9",
+   "what": "a card in outer, read by a MOSFET in inner, which defines dv too (parhier=local)",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.x1.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "where the card is defined: outer's dv=0.03",
+       0.23
+      ],
+      [
+       "the MOSFET's own instance: inner's dv=0.05",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mo",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.23
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_nested_global",
+   "kind": "lv9",
+   "what": "the same, parhier=global",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.x1.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "outer's dv=0.03 (where the card is defined, and the outermost)",
+       0.23
+      ],
+      [
+       "inner's dv=0.05",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mo",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.23
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_dynamic_local",
+   "kind": "lv9",
+   "what": "a card in mid, found along the instance path by a MOSFET of the top-level subckt leaf, which defines dv too",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.x1.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "where the card is defined: mid's dv=0.03",
+       0.23
+      ],
+      [
+       "the MOSFET's own instance: leaf's dv=0.05",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "md",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.23
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_body_param",
+   "kind": "lv9",
+   "what": "a card that reads a body .param computed from the instance's L, as a PDK macro model does",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.m0",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance: l=0.5u",
+       0.3
+      ],
+      [
+       "the defaults: l=1u",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "nm",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.30000000000000004
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.m0",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance: l=2u",
+       0.225
+      ],
+      [
+       "the defaults: l=1u",
+       0.25
+      ],
+      [
+       "once for the subckt, in its first instance",
+       0.3
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "nm",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       0.225
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p2",
+     "path": "x3.m0",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance: the defaults, l=1u",
+       0.25
+      ],
+      [
+       "once for the subckt, in its first instance",
+       0.3
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "nm",
+      "scope": "x3",
+      "card_unresolved": null,
+      "values": [
+       0.25
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_corner_tt",
+   "kind": "lv9",
+   "what": "a PDK library (cards_pdk.lib): corner tt, binned cards in the wrapper subckt nch_mac",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.m0",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance (l=50n) in corner tt",
+       0.5
+      ],
+      [
+       "the defaults (l=100n)",
+       0.4
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "nch.1",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.5
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.m0",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance (l=500n) in corner tt",
+       0.47
+      ],
+      [
+       "the defaults (l=100n)",
+       0.55
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "nch.2",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       0.47000000000000003
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_corner_ff",
+   "kind": "lv9",
+   "what": "the same library, corner ff (dvg=-0.05)",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.m0",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance (l=50n) in corner ff",
+       0.45
+      ],
+      [
+       "this instance in corner tt",
+       0.5
+      ],
+      [
+       "the defaults (l=100n) in corner ff",
+       0.35
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "nch.1",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.45
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.m0",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance (l=500n) in corner ff",
+       0.42
+      ],
+      [
+       "this instance in corner tt",
+       0.47
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "nch.2",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       0.42000000000000004
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_func_global",
+   "kind": "lv9",
+   "what": "a card that calls a top-level .param function with a subckt parameter",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance: f(0.02)",
+       0.24
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mf",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       0.24000000000000002
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "this instance: f(0.05)",
+       0.3
+      ],
+      [
+       "once for the subckt, in its first instance",
+       0.24
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mf",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       0.30000000000000004
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_temper",
+   "kind": "lv9",
+   "what": "a card that reads temper, at .temp 50 (the temperature terms zeroed)",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "temper is the .temp value, 50",
+       0.3
+      ],
+      [
+       "temper is TNOM, 25",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "mtp",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       0.30000000000000004
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_stat_param",
+   "kind": "lv9",
+   "what": "a card that reads a .param with agauss (no Monte Carlo: the nominal value)",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "the nominal value of agauss, 0",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "ms",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       0.25
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_stat_direct",
+   "kind": "lv9",
+   "what": "agauss directly in a card (HSPICE rejects it directly in an element expression: does it in a card?)",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "the nominal value of agauss, 0",
+       0.25
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "ms",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       0.25
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_dup_key",
+   "kind": "lv9",
+   "what": "a card that sets vth0 twice: which one does HSPICE use? (netlist-db lists both)",
+   "control": 0.3,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "m1",
+     "param": "vth0",
+     "hypotheses": [
+      [
+       "the first vth0",
+       0.24
+      ],
+      [
+       "the last vth0",
+       0.32
+      ]
+     ],
+     "check": "probe",
+     "netlist_db": {
+      "card": "md2",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       0.24,
+       0.32
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_r_global",
+   "kind": "r",
+   "what": "R cards: one at the top level, one inside a subckt read by its instances (parhier=global)",
+   "control": 100.0,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.r1",
+     "param": "rsh",
+     "hypotheses": [
+      [
+       "the top-level rs=50 (parhier=global)",
+       150
+      ],
+      [
+       "this instance's default rs=10",
+       30
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "rloc",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       150.0
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.r1",
+     "param": "rsh",
+     "hypotheses": [
+      [
+       "the top-level rs=50 (parhier=global)",
+       150
+      ],
+      [
+       "this instance: rs=20",
+       60
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "rloc",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       150.0
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p2",
+     "path": "r0",
+     "param": "rsh",
+     "hypotheses": [
+      [
+       "the top-level rs=50",
+       100
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "rtop",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       100.0
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_r_local",
+   "kind": "r",
+   "what": "the same, parhier=local",
+   "control": 100.0,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.r1",
+     "param": "rsh",
+     "hypotheses": [
+      [
+       "this instance's default rs=10",
+       30
+      ],
+      [
+       "the top-level rs=50",
+       150
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "rloc",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       30.0
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.r1",
+     "param": "rsh",
+     "hypotheses": [
+      [
+       "this instance: rs=20",
+       60
+      ],
+      [
+       "once for the subckt, in its first instance",
+       30
+      ],
+      [
+       "the top-level rs=50",
+       150
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "rloc",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       60.0
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p2",
+     "path": "r0",
+     "param": "rsh",
+     "hypotheses": [
+      [
+       "the top-level rs=50",
+       100
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "rtop",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       100.0
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_r_dynamic",
+   "kind": "r",
+   "what": "an R card: the one on the instance path (mid's), or the one that the line's definition sees (the top level)?",
+   "control": 100.0,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.x1.r1",
+     "param": "rsh",
+     "hypotheses": [
+      [
+       "the card on the instance path: mid's",
+       300
+      ],
+      [
+       "the card that the line's definition sees: the top-level one",
+       200
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "rm",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       300.0
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.r1",
+     "param": "rsh",
+     "hypotheses": [
+      [
+       "the top-level card",
+       200
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "rm",
+      "scope": "",
+      "card_unresolved": null,
+      "values": [
+       200.0
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  },
+  {
+   "deck": "c_diode",
+   "kind": "d",
+   "what": "a diode card inside a subckt, evaluated for each instance?",
+   "control": 1e-14,
+   "probes": [
+    {
+     "measure": "p0",
+     "path": "x1.d1",
+     "param": "is",
+     "hypotheses": [
+      [
+       "this instance: k=1",
+       1e-14
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "dm",
+      "scope": "x1",
+      "card_unresolved": null,
+      "values": [
+       1e-14
+      ],
+      "unresolved": []
+     }
+    },
+    {
+     "measure": "p1",
+     "path": "x2.d1",
+     "param": "is",
+     "hypotheses": [
+      [
+       "this instance: k=4",
+       4e-14
+      ],
+      [
+       "once for the subckt, in its first instance",
+       1e-14
+      ]
+     ],
+     "check": "value",
+     "netlist_db": {
+      "card": "dm",
+      "scope": "x2",
+      "card_unresolved": null,
+      "values": [
+       4e-14
+      ],
+      "unresolved": []
+     }
+    }
+   ]
+  }
+ ]
+}

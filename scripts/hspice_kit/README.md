@@ -7,6 +7,11 @@ netlist-db's answers (made when the kit was, in `expected/`).
 The VM needs only HSPICE and bash. Python and netlist-db are needed only
 where the results are compared (the netlist-db session).
 
+A second kit, `cards/`, checks the values of the parameters of `.model`
+cards (`resolve_model`): where HSPICE evaluates `vth0`, `rsh`, `is` of a
+card inside a subckt or at the top level. Its decks and answers are in the
+repository (`cards/kit/`), and `cards/HANDOFF.md` says how to run them.
+
 ## Where things stand
 
 Branch `main` of the fork (`VERSION` gives the commit the answers come from).

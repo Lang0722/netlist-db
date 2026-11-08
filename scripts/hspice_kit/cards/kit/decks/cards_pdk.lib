@@ -1,0 +1,21 @@
+* cards kit: a PDK library in the macro-model style: corner sections set
+* a global shift and load the core section, whose wrapper subckt passes its
+* size to the binned cards inside it
+.lib tt
+.param dvg=0
+.lib 'cards_pdk.lib' core
+.endl tt
+.lib ff
+.param dvg=-0.05
+.lib 'cards_pdk.lib' core
+.endl ff
+.lib core
+.subckt nch_mac d g s b l=100n w=1u nf=1
+.param dvl='1e-8/l'
+.model nch.1 nmos level=54 lmin=1e-8 lmax=2e-7 wmin=1e-8 wmax=1e-4 vth0='0.30+dvg+dvl'
++ k1=0 k2=0 k3=0 dvt0=0 dvt0w=0 eta0=0 etab=0 dvtp0=0 lpe0=0 lpeb=0 lint=0 wint=0 xl=0 xw=0
+.model nch.2 nmos level=54 lmin=2e-7 lmax=1e-4 wmin=1e-8 wmax=1e-4 vth0='0.45+dvg+dvl'
++ k1=0 k2=0 k3=0 dvt0=0 dvt0w=0 eta0=0 etab=0 dvtp0=0 lpe0=0 lpeb=0 lint=0 wint=0 xl=0 xw=0
+M0 d g s b nch l=l w=w nf=nf
+.ends nch_mac
+.endl core
