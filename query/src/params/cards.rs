@@ -161,13 +161,26 @@ fn not_set(name: &str) -> String {
     )
 }
 
-/// The caveat on a key that the card sets more than once, on `lines`.
+/// The caveat on a key that the card sets more than once, on `lines`: a
+/// limit of a bin uses the first item, any other key the last one.
 fn twice(name: &str, lines: &[u32]) -> String {
     let shown: Vec<String> = lines.iter().map(u32::to_string).collect();
+    let rule = if LIMITS.iter().any(|l| l.eq_ignore_ascii_case(name)) {
+        "HSPICE uses the first one for a limit of a bin (deck `mdl_dup_keys`)"
+    } else {
+        "HSPICE uses the last one (card kit deck `c_dup_key`, probed for `vth0`; golden `ind_level_twice` for the `level` of an `L` card)"
+    };
     format!(
-        "the card sets `{name}` {} times (lines {}): HSPICE uses the first one for a limit of a bin (deck `mdl_dup_keys`) and the last `level` of an `L` card (golden `ind_level_twice`); for this parameter it was not probed",
+        "the card sets `{name}` {} times (lines {}): {rule}",
         lines.len(),
         shown.join(", ")
+    )
+}
+
+/// Why an item of a key that the card sets again later has no value.
+fn set_again(name: &str, line: u32) -> String {
+    format!(
+        "the card sets `{name}` again, on line {line}: HSPICE uses the last one (card kit deck `c_dup_key`, probed for `vth0`)"
     )
 }
 
@@ -277,20 +290,30 @@ impl Netlist {
         let card = d.card_params(md);
         let params: Vec<ParamDef> = card.iter().map(|cp| cp.param(md)).collect();
         caveats.extend(self.card_caveats(d, card_def, md));
-        let mut lines: HashMap<Sym, Vec<u32>> = HashMap::new();
-        for p in &params {
-            lines.entry(p.name).or_default().push(p.loc.line);
+        // the items of each key, in card order
+        let mut items_of: HashMap<Sym, Vec<usize>> = HashMap::new();
+        for (at, p) in params.iter().enumerate() {
+            items_of.entry(p.name).or_default().push(at);
         }
         let entries = self.card_entries(&params, names);
         let items = page(entries.into_iter(), page_req)?.map(|entry| match entry {
             Entry::Param(at) => {
                 let p = &params[at];
+                let name = self.syms.name(p.name);
+                let same = &items_of[&p.name];
                 let mut more = Vec::new();
-                if let Some(on) = lines.get(&p.name).filter(|on| on.len() > 1) {
-                    more.push(twice(self.syms.name(p.name), on));
+                if same.len() > 1 {
+                    let on: Vec<u32> = same.iter().map(|&s| params[s].loc.line).collect();
+                    more.push(twice(name, &on));
                 }
                 more.extend(self.below_caveats(&r, p, j, k));
                 let mut res = r.resolve_card_param(p, j, more);
+                // HSPICE uses the last item of a key that is not a limit
+                let last = *same.last().expect("the key of this item");
+                if at != last && !LIMITS.iter().any(|l| l.eq_ignore_ascii_case(name)) {
+                    res.value = None;
+                    res.unresolved = Some(set_again(name, params[last].loc.line));
+                }
                 cap_caveats(&mut res.caveats);
                 res
             }

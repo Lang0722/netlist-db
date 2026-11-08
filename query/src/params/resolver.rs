@@ -367,7 +367,8 @@ impl<'n> Resolver<'n> {
     }
 
     /// The value of the parameter `p`, evaluated at level `level`.
-    /// `element`: an expression of an element line. `text`: see [`Text`].
+    /// `element`: an expression of an element line or of a `.model` card,
+    /// where a statistical function is rejected. `text`: see [`Text`].
     pub(super) fn eval_param(
         &mut self,
         p: &ParamDef,
@@ -431,7 +432,7 @@ impl<'n> Resolver<'n> {
         // `func_shadow_top`, `stat_user_func`)
         if element && let Some(f) = statistical(&e, &mut |n| self.user_func(level, n, text)) {
             return fail(format!(
-                "HSPICE rejects `{f}()` directly in an element expression (golden `stat_direct`, `stat_in_mos`: \"cannot be defined in expressions directly\"): it belongs in a `.param`"
+                "HSPICE rejects `{f}()` directly in an element expression or a `.model` card (golden `stat_direct`, `stat_in_mos`, card kit deck `c_stat_direct`: \"cannot be defined in expressions directly\"): it belongs in a `.param`"
             ));
         }
         // the arguments of a call that is neither a built-in nor a `.param`
@@ -1452,9 +1453,10 @@ impl<'n> Resolver<'n> {
 
     /// The answer for `p`, a `key=value` of a `.model` card, evaluated at
     /// level `level`, the scope of the definition that holds the card, as
-    /// a text that every instance of that definition evaluates (a statistical
-    /// function gives its nominal value there, as in a `.param`). `caveats`
-    /// go on the answer.
+    /// a text that every instance of that definition evaluates. A statistical
+    /// function directly in the card has no value: HSPICE rejects it, as in
+    /// an element expression (card kit deck `c_stat_direct`). `caveats` go
+    /// on the answer.
     pub(super) fn resolve_card_param(
         &mut self,
         p: &ParamDef,
@@ -1463,7 +1465,7 @@ impl<'n> Resolver<'n> {
     ) -> Resolved {
         let net = self.net;
         let name = net.syms.name(p.name).to_owned();
-        let (value, mut frame) = self.eval_param(p, level, false, Text::Body);
+        let (value, mut frame) = self.eval_param(p, level, true, Text::Body);
         let root = ChainStep {
             kind: StepKind::ModelParam,
             scope: self.scopes[level].path.clone(),

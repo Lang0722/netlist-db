@@ -389,17 +389,32 @@ fn caveats_of_a_card() {
         M1 d g 0 0 n l=1u w=1u\nV1 d 0 1\n.op\n.alter\n.model n nmos level=54 vth0=0.5\n.end\n";
     let (_deck, net) = load_text("caveats", text);
     let m = all(&net, "m1");
-    // a key twice: both items, each with a caveat
+    // a key twice: both items, and HSPICE uses the last one (card kit
+    // deck `c_dup_key`), so the first one has no value
     let vth0: Vec<&Resolved> = m.params.items.iter().filter(|p| p.name == "vth0").collect();
     assert_eq!(vth0.len(), 2);
+    assert_eq!(vth0[0].value, None);
+    let why = vth0[0].unresolved.as_deref().unwrap();
     assert!(
-        vth0.iter()
-            .all(|p| has(&p.caveats, "the card sets `vth0` 2 times (lines 3, 3)"))
+        why.contains("HSPICE uses the last one") && why.contains("c_dup_key"),
+        "{why}"
     );
-    // a statistical function gives its nominal value
+    assert!(close(vth0[1].value.unwrap(), 0.4));
+    assert!(has(
+        &vth0[1].caveats,
+        "the card sets `vth0` 2 times (lines 3, 3)"
+    ));
+    assert!(has(&vth0[1].caveats, "HSPICE uses the last one"));
+    // a statistical function directly in a card: HSPICE rejects it (card
+    // kit deck `c_stat_direct`), so it has no value
     let u0 = item(&m, "u0");
-    assert!(close(u0.value.unwrap(), 0.01));
-    assert!(has(&u0.caveats, "nominal value"));
+    assert_eq!(u0.value, None);
+    let why = u0.unresolved.as_deref().unwrap();
+    assert!(
+        why.contains("cannot be defined in expressions directly"),
+        "{why}"
+    );
+    assert!(why.contains("c_stat_direct"), "{why}");
     assert!(has(&m.caveats, "`.option scalm` is 2"));
     assert!(has(&m.caveats, "defines the card `n` again"));
     // an `.if` block in the definition of the card
@@ -408,6 +423,30 @@ fn caveats_of_a_card() {
     let (_deck, net) = load_text("caveats_if", text);
     let m = all(&net, "m1");
     assert!(has(&m.caveats, "has an `.if` block"));
+}
+
+#[test]
+fn limit_twice_and_stat_through_param() {
+    // a limit of a bin set twice: both items keep their values, and the
+    // first one is the limit (deck `mdl_dup_keys`)
+    let text = "* t\n.param sig='0.01*agauss(1,0.1,3)'\n\
+        .model n.1 nmos level=54 lmin=0.1u lmin=0.5u lmax=2u wmin=0.1u wmax=5u u0=sig\n\
+        M1 d g 0 0 n l=1u w=1u\nV1 d 0 1\n.end\n";
+    let (_deck, net) = load_text("limit_twice", text);
+    let m = all(&net, "m1");
+    let lmin: Vec<&Resolved> = m.params.items.iter().filter(|p| p.name == "lmin").collect();
+    assert_eq!(lmin.len(), 2);
+    assert!(close(lmin[0].value.unwrap(), 0.1e-6));
+    assert!(close(lmin[1].value.unwrap(), 0.5e-6));
+    assert!(
+        lmin.iter()
+            .all(|p| has(&p.caveats, "the first one for a limit of a bin"))
+    );
+    // a statistical function through a `.param` gives its nominal value
+    // (card kit deck `c_stat_param`)
+    let u0 = item(&m, "u0");
+    assert!(close(u0.value.unwrap(), 0.01));
+    assert!(has(&u0.caveats, "nominal value"));
 }
 
 #[test]

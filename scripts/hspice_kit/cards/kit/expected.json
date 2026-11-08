@@ -738,9 +738,11 @@
       "scope": "",
       "card_unresolved": null,
       "values": [
-       0.25
+       null
       ],
-      "unresolved": []
+      "unresolved": [
+       "HSPICE rejects `agauss()` directly in an element expression or a `.model` card (golden `stat_direct`, `stat_in_mos`, card kit deck `c_stat_direct`: \"cannot be defined in expressions directly\"): it belongs in a `.param`"
+      ]
      }
     }
    ]
@@ -771,10 +773,12 @@
       "scope": "",
       "card_unresolved": null,
       "values": [
-       0.24,
+       null,
        0.32
       ],
-      "unresolved": []
+      "unresolved": [
+       "the card sets `vth0` again, on line 3: HSPICE uses the last one (card kit deck `c_dup_key`, probed for `vth0`)"
+      ]
      }
     }
    ]
