@@ -121,6 +121,8 @@ fn macro_model_per_instance_and_corner() {
     );
     assert!(has(&m.caveats, "evaluated where the card is defined"));
     assert!(has(&m.caveats, "values written on the card"));
+    // the card kit confirmed the scope rule (`c_mac_*`): no "not probed"
+    assert!(!has(&m.caveats, "not probed"), "{:?}", m.caveats);
     // the other instance: L=500n takes the second bin
     let m2 = all(&net, "xamp.x2.m0");
     let card2 = m2.card.as_ref().unwrap();
@@ -252,7 +254,7 @@ fn top_level_card_scope() {
         assert!(close(value(&m, "vth0"), 0.31), "{mode}");
         assert!(close(value(&m, "u0"), 0.02));
         // `kk` is defined below the card only: no value where the card is
-        // defined, and a caveat that HSPICE can evaluate it in the instance
+        // defined (HSPICE stops on such a deck: card kit `c_top_card_notop`)
         let k1 = item(&m, "k1");
         assert!(k1.value.is_none(), "{mode}: {k1:?}");
         assert!(
@@ -261,17 +263,11 @@ fn top_level_card_scope() {
                 .unwrap()
                 .contains("`kk` is not defined")
         );
-        assert!(has(
-            &k1.caveats,
-            "`kk` is also defined below the card, in `x1`"
-        ));
-        // under LOCAL the subckt's `dv` is nearer to the MOSFET: a caveat
+        assert!(k1.caveats.is_empty(), "{mode}: {k1:?}");
+        // under LOCAL the subckt's `dv` is nearer to the MOSFET, and HSPICE
+        // still uses the top-level `dv` (card kit `c_top_card_local`)
         let vth0 = item(&m, "vth0");
-        assert_eq!(
-            has(&vth0.caveats, "`dv` is also defined below the card"),
-            mode == "local",
-            "{mode}: {vth0:?}"
-        );
+        assert!(vth0.caveats.is_empty(), "{mode}: {vth0:?}");
         // the top-level MOSFET: no level below the card
         let top = all(&net, "m2");
         assert!(close(value(&top, "vth0"), 0.31));
@@ -344,7 +340,12 @@ fn card_along_the_instance_path() {
     let under_mid = all(&net, "x1.x1.r1");
     assert_eq!(under_mid.card.as_ref().unwrap().def, "mid");
     assert!(close(value(&under_mid, "tc1r"), 2.0));
-    assert!(has(&under_mid.caveats, "looked up along the instance path"));
+    // HSPICE takes the card on the instance path for an R line (card kit
+    // `c_r_dynamic`): no caveat
+    assert!(!has(
+        &under_mid.caveats,
+        "looked up along the instance path"
+    ));
     let at_top = all(&net, "x2.r1");
     assert_eq!(at_top.card.as_ref().unwrap().def, "(top level)");
     assert!(close(value(&at_top, "tc1r"), 1.0));
@@ -423,6 +424,46 @@ fn caveats_of_a_card() {
     let (_deck, net) = load_text("caveats_if", text);
     let m = all(&net, "m1");
     assert!(has(&m.caveats, "has an `.if` block"));
+}
+
+#[test]
+fn caveats_of_the_scope_rule() {
+    // a limit of a bin that reads a name that the MOSFET's own instance
+    // defines too: the known gap, with no "not probed"
+    let text = "* t\n.option parhier=local\n.param lo=0.1u\n\
+        .model n.1 nmos level=54 lmin=lo lmax=2u wmin=0.1u wmax=5u vth0=0.3\n\
+        .subckt cell d g lo=0.2u\nM1 d g 0 0 n l=1u w=1u\n.ends cell\n\
+        X1 d g cell\nV1 d 0 1\n.end\n";
+    let (_deck, net) = load_text("limit_below", text);
+    let m = all(&net, "x1.m1");
+    let lmin = item(&m, "lmin");
+    assert!(close(lmin.value.unwrap(), 0.1e-6));
+    assert!(has(
+        &lmin.caveats,
+        "`lo` is also defined below the card, in `x1`"
+    ));
+    assert!(has(&lmin.caveats, "known gap"));
+    assert!(!has(&lmin.caveats, "not probed"), "{:?}", lmin.caveats);
+    assert!(item(&m, "vth0").caveats.is_empty());
+    // the card of an R line along the instance path (card kit
+    // `c_r_dynamic`): no "not probed" caveat for an R line
+    let text = "* t\n.model rm r rsh=200\n.subckt leaf a b\nR1 a b rm l=10u w=1u\n.ends leaf\n\
+        .subckt mid a b\n.model rm r rsh=300\nX1 a b leaf\n.ends mid\nX1 a 0 mid\nVa a 0 1\n.end\n";
+    let (_deck, net) = load_text("r_dynamic", text);
+    let m = all(&net, "x1.x1.r1");
+    assert_eq!(m.card.as_ref().unwrap().scope, "x1");
+    assert!(close(value(&m, "rsh"), 300.0));
+    assert!(!has(&m.caveats, "not probed"), "{:?}", m.caveats);
+    // a diode keeps it: not probed for a diode
+    let text = "* t\n.model dm d is=1e-14\n.subckt leaf a b\nD1 a b dm\n.ends leaf\n\
+        .subckt mid a b\n.model dm d is=4e-14\nX1 a b leaf\n.ends mid\nX1 a 0 mid\nVa a 0 1\n.end\n";
+    let (_deck, net) = load_text("d_dynamic", text);
+    let m = all(&net, "x1.x1.d1");
+    assert!(
+        has(&m.caveats, "for a diode this was not probed"),
+        "{:?}",
+        m.caveats
+    );
 }
 
 #[test]

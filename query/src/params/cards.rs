@@ -16,10 +16,10 @@
 //! top-level card with the top-level parameters, a card inside a subckt
 //! with the parameters of that subckt's instance on the path. HSPICE was
 //! measured to do so for the ranges of a bin (decks `q_limits_mac_*`,
-//! `q_limits_nested_*`), with one known gap (`scripts/hspice_kit/README.md`):
-//! the first MOSFET that looks at a bin (breadth-first) evaluates the
-//! ranges in its own instance. For the other parameters of a card this was
-//! not probed, and every answer says so.
+//! `q_limits_nested_*`) and for the other parameters of a card (the card
+//! kit, `scripts/hspice_kit/cards`). The ranges have one known gap
+//! (`scripts/hspice_kit/README.md`): the first MOSFET that looks at a bin
+//! (breadth-first) evaluates them in its own instance.
 use super::*;
 use crate::{
     api::{BinChoice, BinRange, ModelCard, ModelParams, Page, Paged, page},
@@ -27,7 +27,7 @@ use crate::{
 };
 
 /// The scope rule of a card, on each answer with a card.
-const SCOPE_RULE: &str = "the parameters of a card are evaluated where the card is defined: a top-level card with the top-level parameters, a card inside a subckt with the parameters of that subckt's instance on this path (HSPICE does so for the limits of a bin: decks `q_limits_mac_*`, `q_limits_nested_*` of `scripts/hspice_kit`; for the other parameters of a card this was not probed)";
+const SCOPE_RULE: &str = "the parameters of a card are evaluated where the card is defined: a top-level card with the top-level parameters, a card inside a subckt with the parameters of that subckt's instance on this path (HSPICE does so: decks `q_limits_mac_*` and `q_limits_nested_*` of `scripts/hspice_kit` for the limits of a bin, and the card kit `scripts/hspice_kit/cards` for the other parameters)";
 
 /// What the values are, on each answer with a card.
 const AS_WRITTEN: &str = "these are the values written on the card: the simulator derives the values that a device uses from them (the `l…`, `w…` and `p…` terms of a binned model with Leff and Weff, the temperature, the defaults of the parameters that the card does not set), and those are not computed";
@@ -395,8 +395,11 @@ impl Netlist {
         let mut caveats = Vec::new();
         let card = match found {
             Some((j, md)) => {
-                // the card that the definition of the line sees
-                if let Some(seen) = self.visible_model(holder, model)
+                // the card that the definition of the line sees; for an R
+                // line HSPICE takes the one on the instance path (card kit
+                // deck `c_r_dynamic`)
+                if kind != ElemKind::Resistor
+                    && let Some(seen) = self.visible_model(holder, model)
                     && !std::ptr::eq(seen, md)
                 {
                     caveats.push(format!(
@@ -724,16 +727,23 @@ impl Netlist {
             .collect()
     }
 
-    /// The caveats on `p`, an item of a card at level `j`, for the names it
+    /// The caveats on `p`, a limit of a bin at level `j`, for the names it
     /// reads that the element's level `k` sees otherwise (see
-    /// [`Netlist::bound_below`]): HSPICE evaluated the limits of a bin so
-    /// in the first MOSFET that looked at the bin (the known gap).
+    /// [`Netlist::bound_below`]): HSPICE evaluates the limits of a bin so in
+    /// the first MOSFET that looks at the bin (the known gap). Any other
+    /// item has none: HSPICE evaluates it where the card is defined (card
+    /// kit decks `c_top_card_local`, `c_nested_*`, `c_dynamic_local`), and
+    /// stops when only a level below defines the name (`c_top_card_notop`).
     fn below_caveats(&self, r: &Resolver<'_>, p: &ParamDef, j: usize, k: usize) -> Vec<String> {
+        let key = self.syms.name(p.name);
+        if !LIMITS.iter().any(|l| l.eq_ignore_ascii_case(key)) {
+            return Vec::new();
+        }
         self.bound_below(r, p, j, k)
             .into_iter()
             .map(|(name, at)| {
                 format!(
-                    "`{name}` is also defined below the card, in `{at}` on this path: HSPICE evaluates the limits of a bin in the instance of the first MOSFET that looks at the bin (breadth-first), not where the bin is defined (known gap, `scripts/hspice_kit/README.md`); for this parameter that was not probed, and this value is the one where the card is defined"
+                    "`{name}` is also defined below the card, in `{at}` on this path: HSPICE evaluates the limits of a bin in the instance of the first MOSFET that looks at the bin (breadth-first), not where the bin is defined, so for that MOSFET this limit can differ (known gap, `scripts/hspice_kit/README.md`); this value is the one where the card is defined"
                 )
             })
             .collect()

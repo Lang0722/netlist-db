@@ -285,10 +285,9 @@ handle, and the other tools take it first. See `mcp_server/README.md`.
   and `p…` terms of a binned model with Leff and Weff, the temperature, and
   the defaults of the parameters that the card does not set. A card's
   parameters are evaluated where the card is defined. HSPICE was measured
-  to do so for the limits of a bin, with one known gap
-  (`scripts/hspice_kit/README.md`); for the other card parameters this was
-  not probed, and each answer says so. The kit `scripts/hspice_kit/cards`
-  asks HSPICE about them.
+  to do so for the limits of a bin (with one known gap,
+  `scripts/hspice_kit/README.md`) and for the other card parameters (the
+  kit `scripts/hspice_kit/cards`).
 - An element letter that the parser does not read (for example `E`, `G`,
   `B`) is counted by its letter, and its nets are marked
   `connectivity_incomplete`. So are the nets of a definition with an
