@@ -175,6 +175,22 @@ impl Netlist {
         run(py, || answer(self.inner.resolve_element(path)))
     }
 
+    #[pyo3(signature = (path, names=None, limit=50, cursor=None))]
+    fn resolve_model(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        names: Option<Vec<String>>,
+        limit: i64,
+        cursor: Option<String>,
+    ) -> String {
+        run(py, || {
+            let names = names.unwrap_or_default();
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            answer(page(limit, cursor).and_then(|p| self.inner.resolve_model(path, &names, &p)))
+        })
+    }
+
     #[pyo3(signature = (scope_path, net, view="logical", limit=50, cursor=None))]
     fn net_info(
         &self,

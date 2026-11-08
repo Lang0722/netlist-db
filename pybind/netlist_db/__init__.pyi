@@ -19,6 +19,13 @@ class Netlist:
     def element_info(self, path: str) -> dict: ...
     def resolve_param(self, scope_path: str, name: str) -> dict: ...
     def resolve_element(self, path: str) -> dict: ...
+    def resolve_model(
+        self,
+        path: str,
+        names: Optional[Iterable[str]] = None,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+    ) -> dict: ...
     def net_info(
         self,
         scope_path: str,

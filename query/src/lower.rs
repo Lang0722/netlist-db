@@ -21,8 +21,8 @@ use crate::{
     api::{Level, LoadError},
     intern::{Interner, Sym},
     model::{
-        Def, DefId, Diag, ElemKind, Element, FuncDef, LocIdx, ModelDef, ParamDef, Parhier, ROOT,
-        Range32, Root, SourceFile, Swept, TextRef,
+        BinOptions, CardParam, Def, DefId, Diag, ElemKind, Element, FuncDef, LocIdx, ModelDef,
+        ParamDef, Parhier, ROOT, Range32, Root, SourceFile, Swept, TextRef,
     },
 };
 use netlist_db::{
@@ -177,6 +177,7 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
             dspf: Vec::new(),
             skipped: Vec::new(),
             protected: false,
+            bin_opts: BinOptions::default(),
         },
         reported: vec![false; parsed.inner.len()],
         reading: Vec::new(),
@@ -187,6 +188,8 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
         model_first: HashMap::new(),
         mos_models,
         wl,
+        bin_numbers: [None; 4],
+        bin_wnflag: None,
         non_utf8_files: HashSet::new(),
         lone_cr_files: HashSet::new(),
         alter: None,
@@ -204,7 +207,9 @@ fn lower(parsed: Parsed, files: Files, opts: &LoadOptions) -> Result<Netlist, Lo
         .syms
         .reserve(texts.iter().map(String::len).sum::<usize>() / 48);
     lower.run(opts)?;
+    let bin_opts = lower.bin_options();
     let mut net = lower.net;
+    net.bin_opts = bin_opts;
     // `a/../b.sp` and `b.sp` are one file
     let mut canon: Vec<std::path::PathBuf> = parsed
         .inner
@@ -320,6 +325,11 @@ struct Lower<'p> {
     mos_models: HashSet<String>,
     /// `.option wl`: the first value after the model of a MOSFET is W.
     wl: bool,
+    /// The bin options read so far (see [`BinOptions`]): the last plain
+    /// number of `scale`, `scalm`, `defl` and `defw`, and the last
+    /// `wnflag`, of the top level of the first run.
+    bin_numbers: [Option<f64>; 4],
+    bin_wnflag: Option<bool>,
     /// The files with a `non_utf8` warning.
     non_utf8_files: HashSet<&'p str>,
     /// The files with a `lone_cr` warning.
@@ -1017,13 +1027,21 @@ impl<'p> Lower<'p> {
         self.diag(Level::Error, "duplicate_subckt", message, Some(loc));
     }
 
-    /// Lowers the `.model` card `m` of file `pid` into `def`. A second
-    /// card with the name of one in the same scope is an error: HSPICE
-    /// aborts on the same card read twice (a file included twice, golden
-    /// `inc_twice_params`). Two cards on different lines were not probed;
-    /// they get the same error.
+    /// Lowers the `.model` card `m` of file `pid` into `def`, with its
+    /// `key=value` items in `Def::card_params`. A second card with the name
+    /// of one in the same scope is an error: HSPICE aborts on the same card
+    /// read twice (a file included twice, golden `inc_twice_params`). Two
+    /// cards on different lines were not probed; they get the same error.
     fn model(&mut self, m: &ModelBuilder, pid: usize, def: DefId) {
         let text: &'p str = &self.texts[pid];
+        let first = self.net.defs[def.idx()].card_params.len();
+        for kv in &m.params {
+            let p = kv_param(&mut self.net.syms, text, pid as u32, kv, self.alter);
+            self.net.defs[def.idx()]
+                .card_params
+                .push(CardParam::new(&p));
+        }
+        let params = range32(first, self.net.defs[def.idx()].card_params.len());
         let syms = &mut self.net.syms;
         let kind = match m.model_type {
             ModelTypeBuilder::Unknown(sp) => syms.intern(&text[sp.start..sp.end()]),
@@ -1056,6 +1074,7 @@ impl<'p> Lower<'p> {
                     ValueBuilder::Num(x) => Some(x),
                     ValueBuilder::Expr(_) => None,
                 }),
+            params,
         };
         if self.alter.is_none() {
             match self.model_first.get(&(def, model.name)) {
@@ -1173,7 +1192,51 @@ impl<'p> Lower<'p> {
         {
             self.net.tnom = Some(p.clone());
         }
+        if top && self.alter.is_none() {
+            self.bin_option(&text[key.start..key.end()], value, text);
+        }
         self.net.options.push(p);
+    }
+
+    /// Reads the top-level first-run `.option` item `key` (with `value`, in
+    /// file `text`) for the bin options, as the model selector does
+    /// (`src/models/bins.rs`, `Options::new`): only a plain number sets
+    /// `scale`, `scalm`, `defl` and `defw`, and `wnflag` is set by a bare
+    /// item, a number, or a number in quotes.
+    fn bin_option(&mut self, key: &str, value: Option<&ValueBuilder>, text: &str) {
+        const NUMBERS: [&str; 4] = ["scale", "scalm", "defl", "defw"];
+        if let Some(i) = NUMBERS.iter().position(|k| k.eq_ignore_ascii_case(key)) {
+            if let Some(&ValueBuilder::Num(x)) = value {
+                self.bin_numbers[i] = Some(x);
+            }
+        } else if key.eq_ignore_ascii_case("wnflag") {
+            let flag = match value {
+                None => Some(true),
+                Some(&ValueBuilder::Num(x)) => Some(x != 0.0),
+                Some(&ValueBuilder::Expr(sp)) => text[sp.start..sp.end()]
+                    .parse::<f64>()
+                    .ok()
+                    .map(|x| x != 0.0),
+            };
+            if flag.is_some() {
+                self.bin_wnflag = flag;
+            }
+        }
+    }
+
+    /// The bin options of the deck (see [`BinOptions`]): a last number of
+    /// 0 or less gives the default back.
+    fn bin_options(&self) -> BinOptions {
+        let d = BinOptions::default();
+        let number =
+            |i: usize, default: f64| self.bin_numbers[i].filter(|&x| x > 0.0).unwrap_or(default);
+        BinOptions {
+            scale: number(0, d.scale),
+            scalm: number(1, d.scalm),
+            defl: number(2, d.defl),
+            defw: number(3, d.defw),
+            wnflag: self.bin_wnflag.unwrap_or(d.wnflag),
+        }
     }
 
     /// Lowers an analysis or output command (an unknown command has an
@@ -1662,6 +1725,7 @@ fn new_def(name: Sym, parent: Option<DefId>, loc: LocIdx, alter: Option<u32>) ->
         params: Vec::new(),
         funcs: Vec::new(),
         models: Vec::new(),
+        card_params: Vec::new(),
         elements: Vec::new(),
         rcl_ends: Vec::new(),
         pins: Vec::new(),

@@ -59,6 +59,8 @@ use resolver::{List, Scan};
 
 mod queries;
 
+mod cards;
+
 /// Name references nested deeper than this (a name whose text uses a name
 /// whose text uses …) are unresolved, so that no deck can overflow the
 /// stack.

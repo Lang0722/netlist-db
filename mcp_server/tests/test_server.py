@@ -93,7 +93,7 @@ def test_tools_have_docs():
     assert names == {
         "load_netlist", "unload_netlist", "summary", "diagnostics", "list_subckts",
         "subckt_info", "subckt_text", "instances_of", "element_info", "resolve_param",
-        "resolve_element", "net_info", "trace_net",
+        "resolve_element", "resolve_model", "net_info", "trace_net",
     }
     for t in tools:
         assert t.description and len(t.description) > 40, t.name
@@ -141,3 +141,26 @@ def test_odd_arguments_give_answers_or_errors():
     assert call("trace_net", handle=h, scope_path="", net="1", depth=2**64)["hops"]["total"] == 24
     assert call("trace_net", handle=h, scope_path="", net="1", depth=-1)["error"]["kind"] == "bad_argument"
     assert call("load_netlist", path="a\x00b")["error"]["kind"] in ("bad_argument", "load_failed")
+
+
+def test_resolve_model(tmp_path):
+    (tmp_path / "pdk.lib").write_text(
+        "* pdk\n.lib tt\n.param dv=0.01\n.lib 'pdk.lib' core\n.endl tt\n.lib core\n"
+        ".subckt mac d g s b l=100n w=1u\n"
+        ".model n.1 nmos level=54 lmin=0 lmax=1u wmin=0 wmax=1 vth0='0.3+dv+1e-8/l'\n"
+        ".model n.2 nmos level=54 lmin=1u lmax=1 wmin=0 wmax=1 vth0='0.5+dv'\n"
+        "M0 d g s b n l=l w=w\n.ends mac\n.endl core\n"
+    )
+    (tmp_path / "top.sp").write_text(
+        "* t\n.lib 'pdk.lib' tt\nX1 d g 0 0 mac l=0.1u\nX2 d g 0 0 mac l=2u\nV1 d 0 1\n.end\n"
+    )
+    h = call("load_netlist", path=str(tmp_path / "top.sp"))["handle"]
+    m = call("resolve_model", handle=h, path="x1.m0", names=["vth0"])
+    assert (m["card"]["name"], m["card"]["scope"]) == ("n.1", "x1")
+    assert abs(m["params"]["items"][0]["value"] - 0.41) < 1e-12
+    m2 = call("resolve_model", handle=h, path="x2.m0", names=["vth0"], cursor="")
+    assert m2["card"]["name"] == "n.2"
+    assert abs(m2["params"]["items"][0]["value"] - 0.51) < 1e-12
+    # an empty list of names is all the items
+    assert call("resolve_model", handle=h, path="x2.m0", names=[])["params"]["total"] == 6
+    assert call("resolve_model", handle=h, path="x1")["error"]["kind"] == "bad_argument"

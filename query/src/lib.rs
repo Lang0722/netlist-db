@@ -24,10 +24,11 @@ mod paths;
 mod rejects;
 
 pub use api::{
-    ChainStep, ChildCall, Conn, DEFAULT_LIMIT, DefParasitics, DeviceGroup, Diagnostic, DspfFile,
-    ElementBrief, ElementInfo, ElementParams, Hop, InstanceRef, Level, LoadError, Loc, MAX_LIMIT,
-    NameText, NetInfo, NetTrace, NetView, Page, Paged, Parasitics, PinNet, QueryError, Resolved,
-    StepKind, SubcktInfo, SubcktRow, SubcktSort, SubcktText, Summary, TraceDir,
+    BinChoice, BinRange, ChainStep, ChildCall, Conn, DEFAULT_LIMIT, DefParasitics, DeviceGroup,
+    Diagnostic, DspfFile, ElementBrief, ElementInfo, ElementParams, Hop, InstanceRef, Level,
+    LoadError, Loc, MAX_LIMIT, ModelCard, ModelParams, NameText, NetInfo, NetTrace, NetView, Page,
+    Paged, Parasitics, PinNet, QueryError, Resolved, StepKind, SubcktInfo, SubcktRow, SubcktSort,
+    SubcktText, Summary, TraceDir,
 };
 pub use netlist_db::{LibOverride, TitleLine};
 
@@ -122,6 +123,8 @@ pub struct Netlist {
     /// The deck has a `.prot` region, which the loader does not read: a
     /// name can be defined there.
     pub(crate) protected: bool,
+    /// The `.option` items that choose the bin of a MOSFET.
+    pub(crate) bin_opts: model::BinOptions,
 }
 
 impl Netlist {

@@ -73,6 +73,21 @@ class Netlist:
     def resolve_element(self, path: str) -> dict:
         return json.loads(self._n.resolve_element(path))
 
+    def resolve_model(
+        self,
+        path: str,
+        names: Optional[Iterable[str]] = None,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+    ) -> dict:
+        """The `.model` card that the element at `path` uses (for a MOSFET,
+        the bin it gets), and the card's parameters evaluated where the card
+        is defined. `names`: only these parameters (all when omitted)."""
+        if isinstance(names, str):
+            names = [names]
+        listed = None if names is None else [str(n) for n in names]
+        return json.loads(self._n.resolve_model(path, listed, _i64(limit), cursor))
+
     def net_info(
         self,
         scope_path: str,

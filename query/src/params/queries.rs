@@ -115,7 +115,7 @@ impl Netlist {
     /// definition `def`: in it, in a definition it is written inside, or
     /// at the top level, the nearest one (the rule of the hierarchy
     /// analysis for `X` lines).
-    fn visible_model(&self, def: DefId, m: Sym) -> Option<&ModelDef> {
+    pub(super) fn visible_model(&self, def: DefId, m: Sym) -> Option<&ModelDef> {
         let mut at = Some(def);
         while let Some(d) = at {
             let found = self.defs[d.idx()]
@@ -133,7 +133,7 @@ impl Netlist {
     /// The caveats of `.alter` blocks that set `.option parhier`, or that
     /// redefine a definition of the path `w`, an `X` line of the path or
     /// the element at its end.
-    fn alter_caveats(&self, w: &Walk) -> Vec<String> {
+    pub(super) fn alter_caveats(&self, w: &Walk) -> Vec<String> {
         let mut out = Vec::new();
         if self.alters.is_empty() {
             return out;
@@ -845,7 +845,7 @@ impl Netlist {
         let card = |m: Sym| self.visible_model(holder, m);
         let model_caveat = |md: &ModelDef| {
             let mut c = format!(
-                "the element has the model `{}` (`.model` at {}): model-card parameters are not resolved, and some (a scale, a TC) can change the effective value",
+                "the element has the model `{}` (`.model` at {}): some parameters of the card (a scale, a TC) can change the effective value, and this value does not use them (resolve_model gives the card's parameters)",
                 self.syms.name(md.name),
                 loc_str(self, md.loc)
             );
@@ -1038,7 +1038,7 @@ impl Netlist {
                     let name = self.syms.name(md.name);
                     items[vi].src = Src::Fail(
                         format!(
-                            "`{name}` is a model (`.model {name} {}` at {}): the value comes from the model card, whose parameters are not resolved",
+                            "`{name}` is a model (`.model {name} {}` at {}): the value comes from the model card, which this query does not read (resolve_model gives the card's parameters)",
                             self.syms.name(md.kind),
                             loc_str(self, md.loc)
                         ),

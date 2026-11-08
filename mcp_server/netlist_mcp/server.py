@@ -246,6 +246,18 @@ def resolve_element(handle: str, path: str) -> str:
 
 
 @mcp.tool()
+def resolve_model(
+    handle: str,
+    path: str,
+    names: Optional[list[str]] = None,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+) -> str:
+    """The `.model` card that one element uses (a MOSFET's bin, as HSPICE chooses it from L, W and NF; the card of an R, C, L, diode or BJT), and the card's parameters (`vth0`, `tox`, ...) evaluated where the card is defined (a card inside a PDK wrapper subckt with that instance's parameters, and the corner's), each with its chain, paged. `names`: only these parameters (all when omitted). The values are those written on the card, not the simulator's effective values."""
+    return _call(handle, "resolve_model", path, names or None, limit, _opt(cursor))
+
+
+@mcp.tool()
 def net_info(
     handle: str,
     scope_path: str,

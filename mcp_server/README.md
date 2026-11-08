@@ -52,6 +52,7 @@ claude mcp add netlist-db -- /path/to/netlist-db/.venv/bin/python -m netlist_mcp
 | `element_info(handle, path)` | One element by its instance path |
 | `resolve_param(handle, scope_path, name)` | A parameter value in a scope, with its chain |
 | `resolve_element(handle, path)` | The numeric parameters of one element |
+| `resolve_model(handle, path, names, limit, cursor)` | The `.model` card of one element (a MOSFET's bin) and the card's parameters, evaluated where the card is defined |
 | `net_info(handle, scope_path, net, view, limit, cursor)` | The pins on a net, and its DSPF parasitics |
 | `trace_net(handle, scope_path, net, direction, depth, limit, cursor)` | Where a net goes through ports |
 

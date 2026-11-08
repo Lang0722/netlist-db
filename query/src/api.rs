@@ -728,6 +728,9 @@ pub enum StepKind {
     /// A parameter of the element line itself (the R value, `w=`, an `X`
     /// override when the element is an `X` line, a source's `dc`, …).
     ElementParam,
+    /// A `key=value` of a `.model` card, evaluated in the scope of the
+    /// definition that holds the card (see [`crate::Netlist::resolve_model`]).
+    ModelParam,
     /// A value that HSPICE gives with no line in the deck for it, or from a
     /// command: `temper` (the first `.temp` value, else 25), the default AC
     /// phase 0, the DC value 0 of a source with none.
@@ -800,6 +803,96 @@ pub struct ElementParams {
     /// What makes the whole answer less certain (the path, the element
     /// type, an `.alter` change of the element, a duplicate definition).
     /// At most 50, as in [`Resolved::caveats`].
+    pub caveats: Vec<String>,
+}
+
+/// The `.model` card of an element, in [`ModelParams::card`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelCard {
+    /// The name of the card, in its first spelling (`nch.1` for a bin).
+    pub name: String,
+    /// The model type, as the card writes it (`nmos`, `r`, …).
+    #[serde(rename = "type")]
+    pub r#type: String,
+    /// The qualified name of the definition that holds the card
+    /// (`(top level)` for the top level).
+    pub def: String,
+    /// The instance path (lowercase) of the scope where the parameters of
+    /// the card are evaluated: the instance of `def` on the element's path
+    /// (`""` for the top level; with `top=`, a definition in parentheses, as
+    /// in [`ChainStep::scope`]).
+    pub scope: String,
+    /// The line of the card.
+    pub loc: Loc,
+    /// The number of `key=value` items on the card.
+    pub params_total: usize,
+}
+
+/// One range of a bin that holds a MOSFET, in [`BinChoice::ranges`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BinRange {
+    /// `l` (the length), `w` (the width per finger, W/NF, unless `WNFLAG=0`
+    /// on the line, else `.option wnflag=0`), `nfin` (level 72) or
+    /// `wsheet` (level 72).
+    pub name: String,
+    /// The size of the MOSFET that the range holds.
+    pub value: f64,
+    /// The limits of the bin (`lmin` and `lmax`, …), after `.option
+    /// scalm` (not the fin counts): `min <= value < max`, where a value at
+    /// most 2e-15 (relative) below a limit counts as on it.
+    pub min: f64,
+    pub max: f64,
+}
+
+/// How the card of a MOSFET was chosen, in [`ModelParams::selection`]: as
+/// the model selector of `netlist-db` chooses it (`AST::mosfet_models`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BinChoice {
+    /// `exact`: a card with the model name of the line; `bin`: the first
+    /// bin `name.N` (in netlist order) whose ranges hold the MOSFET. Each
+    /// level of the instance path is tried, from the MOSFET's own up to the
+    /// top level.
+    pub by: String,
+    /// The length and width of the MOSFET (`.option defl`/`defw` when the
+    /// line has none), times `.option scale`; `None` when one has no value
+    /// (see [`ModelParams::unresolved`]).
+    pub l: Option<f64>,
+    pub w: Option<f64>,
+    /// The number of fingers (`NF`, 1 when the line has none).
+    pub nf: Option<f64>,
+    /// The ranges of the bin, for `by` = `bin`.
+    pub ranges: Vec<BinRange>,
+    /// The bins of the name that do not hold the MOSFET: at the levels below
+    /// the card's, and before it at its level.
+    pub bins_passed: usize,
+}
+
+/// The answer of [`crate::Netlist::resolve_model`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ModelParams {
+    /// The instance path of the element, lowercase.
+    pub path: String,
+    /// `mosfet`, `resistor`, `diode`, ….
+    pub kind: String,
+    /// The model name on the element line, as written.
+    pub model: String,
+    /// The card that the element uses on this path. `None` exactly when
+    /// `unresolved` is set.
+    pub card: Option<ModelCard>,
+    /// Why no card was found: no card of the name on the instance path, no
+    /// bin holds the MOSFET, a bin without its limits, a size or a limit
+    /// with no value.
+    pub unresolved: Option<String>,
+    /// How the card of a MOSFET was chosen (also when none was: the size).
+    pub selection: Option<BinChoice>,
+    /// The `key=value` items of the card, in card order, each as written
+    /// and evaluated where the card is defined, with its chain; or, for the
+    /// names asked for, the items of those names (a name the card does not
+    /// set has no value). A page.
+    pub params: Paged<Resolved>,
+    /// What makes the whole answer less certain (the scope rule of a card,
+    /// the path, `.alter` changes, `.option scalm`, …). At most 50, as in
+    /// [`Resolved::caveats`].
     pub caveats: Vec<String>,
 }
 

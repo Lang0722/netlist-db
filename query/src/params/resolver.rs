@@ -368,7 +368,7 @@ impl<'n> Resolver<'n> {
 
     /// The value of the parameter `p`, evaluated at level `level`.
     /// `element`: an expression of an element line. `text`: see [`Text`].
-    fn eval_param(
+    pub(super) fn eval_param(
         &mut self,
         p: &ParamDef,
         level: usize,
@@ -1448,6 +1448,32 @@ impl<'n> Resolver<'n> {
         };
         frame.caveats.extend(item.caveats);
         self.answer(item.name, value, root, &frame)
+    }
+
+    /// The answer for `p`, a `key=value` of a `.model` card, evaluated at
+    /// level `level`, the scope of the definition that holds the card, as
+    /// a text that every instance of that definition evaluates (a statistical
+    /// function gives its nominal value there, as in a `.param`). `caveats`
+    /// go on the answer.
+    pub(super) fn resolve_card_param(
+        &mut self,
+        p: &ParamDef,
+        level: usize,
+        caveats: Vec<String>,
+    ) -> Resolved {
+        let net = self.net;
+        let name = net.syms.name(p.name).to_owned();
+        let (value, mut frame) = self.eval_param(p, level, false, Text::Body);
+        let root = ChainStep {
+            kind: StepKind::ModelParam,
+            scope: self.scopes[level].path.clone(),
+            name: name.clone(),
+            text: param_text(net, p),
+            value: value.as_ref().ok().copied(),
+            loc: Some(net.loc(p.loc)),
+        };
+        frame.caveats.extend(caveats);
+        self.answer(name, value, Some(root), &frame)
     }
 }
 

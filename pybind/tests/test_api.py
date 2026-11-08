@@ -155,3 +155,66 @@ def test_lib_override(tmp_path):
         tmp_path / "main.sp", lib_override=[(tmp_path / "models.lib", "tt", "ff")]
     )
     assert ff.resolve_param("", "rv")["value"] == 2000.0
+
+
+# A PDK library in the macro-model style (corners, a wrapper subckt with
+# binned cards inside it), and a circuit that uses it
+PDK = """* pdk
+.lib tt
+.param dvth_g=0
+.lib 'pdk.lib' core
+.endl tt
+.lib ff
+.param dvth_g=-0.03
+.lib 'pdk.lib' core
+.endl ff
+.lib core
+.subckt nch_mac d g s b l=100n w=1u nf=1
+.param dvth_l='5e-9/l'
+.model nch.1 nmos level=54 lmin=20n lmax=200n wmin=0.1u wmax=5u vth0='0.35+dvth_g+dvth_l' tox=1.2n
+.model nch.2 nmos level=54 lmin=200n lmax=2u wmin=0.1u wmax=5u vth0='0.40+dvth_g' tox=1.2n
+M0 d g s b nch l=l w=w nf=nf
+.ends nch_mac
+.endl core
+"""
+
+TOP = """* circuit
+.lib 'pdk.lib' tt
+X1 d g 0 0 nch_mac l=60n w=2u nf=2
+X2 d g 0 0 nch_mac l=500n w=1u
+V1 d 0 1
+.end
+"""
+
+
+def test_resolve_model(tmp_path):
+    (tmp_path / "pdk.lib").write_text(PDK)
+    (tmp_path / "top.sp").write_text(TOP)
+    net = netlist_db.load(tmp_path / "top.sp")
+    m = net.resolve_model("x1.m0", names=["vth0", "tox"])
+    assert (m["card"]["name"], m["card"]["scope"], m["card"]["def"]) == ("nch.1", "x1", "nch_mac")
+    assert m["selection"]["by"] == "bin" and m["selection"]["ranges"][1]["value"] == 1e-6
+    vth0, tox = m["params"]["items"]
+    assert vth0["value"] == pytest.approx(0.35 + 5e-9 / 60e-9)
+    assert vth0["chain"][0]["kind"] == "ModelParam"
+    assert tox["value"] == pytest.approx(1.2e-9)
+    # one name as a string; the other bin; another corner
+    assert net.resolve_model("x2.m0", names="vth0")["params"]["items"][0]["value"] == pytest.approx(0.4)
+    ff = netlist_db.load(tmp_path / "top.sp", lib_override=[(tmp_path / "pdk.lib", "tt", "ff")])
+    got = ff.resolve_model("x1.m0", names=["vth0"])["params"]["items"][0]["value"]
+    assert got == pytest.approx(0.32 + 5e-9 / 60e-9)
+    # all the items, in pages
+    first = net.resolve_model("x1.m0", limit=2)
+    assert [p["name"] for p in first["params"]["items"]] == ["level", "lmin"]
+    assert first["params"]["total"] == 7
+    rest = net.resolve_model("x1.m0", cursor=first["params"]["next_cursor"])
+    assert rest["params"]["items"][-1]["name"] == "tox"
+    # errors are dicts
+    assert net.resolve_model("x1")["error"]["kind"] == "bad_argument"
+    assert net.resolve_model("x9.m0")["error"]["kind"] == "not_found"
+    assert net.resolve_model("x1.m0", limit=-1)["error"]["kind"] == "bad_argument"
+    # a golden deck: a top-level card with no bins
+    exact = golden("hier_counts").resolve_model("x1.xl0.mn")
+    assert exact["card"]["scope"] == "" and exact["selection"]["by"] == "exact"
+    first = exact["params"]["items"][0]
+    assert (first["name"], first["value"]) == ("level", 1.0)

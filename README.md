@@ -197,6 +197,12 @@ questions about it, in JSON, in pages:
 - The value of a parameter or of an element parameter, through the
   hierarchy, with the chain of definitions that gave it (`resolve_param`,
   `resolve_element`).
+- The `.model` card that an element uses and the values of the card's
+  parameters (`resolve_model`). For a MOSFET the card is the bin that HSPICE
+  chooses from its L, W and NF, as `model_select` chooses it. The parameters
+  are evaluated where the card is defined: a card inside a PDK wrapper
+  subckt (`nch_mac`) gets the parameters of that instance, and of the corner
+  that the `.lib` line (or `lib_override`) picks.
 - Which pins are on a net, and where the net goes through ports
   (`net_info`, `trace_net`).
 - DSPF parasitic files: included as netlist text, or given with
@@ -231,6 +237,11 @@ for row in net.list_subckts(sort="copies", limit=5)["items"]:
 print(net.resolve_param("x1", "whowins")["value"])  # 4.0 (parhier=global)
 pins = net.net_info("x1", "a")       # {"total": ..., "connections": {"items": [...], "next_cursor": ...}}
 err = net.subckt_info("nosuch")      # {"error": {"kind": "not_found", "message": ..., "suggestions": [...]}}
+
+# a MOSFET in a PDK wrapper subckt: its bin, and the values of the card
+card = netlist_db.load("top.sp").resolve_model("xamp.x1.m0", names=["vth0", "tox"])
+card["card"]["name"], card["card"]["scope"]    # ('nch.1', 'xamp.x1')
+card["params"]["items"][0]["value"]            # vth0, with this instance's L and the corner's shift
 ```
 
 A query that fails gives a `dict` with the key `error`, so use
@@ -269,8 +280,14 @@ handle, and the other tools take it first. See `mcp_server/README.md`.
 
 ### Limits
 
-- Model-card parameters are text only: the tool does not compute model
-  values.
+- `resolve_model` gives the values written on a model card. It does not
+  compute the values that the simulator derives from them: the `l…`, `w…`
+  and `p…` terms of a binned model with Leff and Weff, the temperature, and
+  the defaults of the parameters that the card does not set. A card's
+  parameters are evaluated where the card is defined. HSPICE was measured
+  to do so for the limits of a bin, with one known gap
+  (`scripts/hspice_kit/README.md`); for the other card parameters this was
+  not probed, and each answer says so.
 - An element letter that the parser does not read (for example `E`, `G`,
   `B`) is counted by its letter, and its nets are marked
   `connectivity_incomplete`. So are the nets of a definition with an
@@ -353,6 +370,7 @@ MOSFETs) loads in 0.84 s. The same text with no `*|DSPF` line loads in
 | Query tool: DSPF parasitic files | `query/src/dspf.rs` |
 | Query tool: load checks for forms that HSPICE rejects | `query/src/rejects.rs` |
 | Query tool: parameters | `query/src/params.rs`, `query/src/params/` |
+| Query tool: the card of an element and its values (`resolve_model`) | `query/src/params/cards.rs` |
 | Query tool: expressions | `expr/src/` |
 
 Some files keep their tests in a `tests.rs` in the folder named after the

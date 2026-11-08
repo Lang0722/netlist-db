@@ -99,7 +99,8 @@ pub(crate) struct FuncDef {
     pub(crate) alter: Option<u32>,
 }
 
-/// A `.model` card. Its parameters are text only (in the file at `loc`).
+/// A `.model` card. Its parameters are in [`Def::card_params`]; the
+/// queries evaluate them on demand (`crate::params::cards`).
 #[derive(Debug, Clone)]
 pub(crate) struct ModelDef {
     pub(crate) name: Sym,
@@ -112,6 +113,96 @@ pub(crate) struct ModelDef {
     /// its value is not a number. HSPICE rejects an `L` line whose `l` card
     /// is not `level=3` (golden `ind_model_nolevel`).
     pub(crate) level: Option<Option<f64>>,
+    /// The `key=value` items of the card, in order, in
+    /// [`Def::card_params`] of the definition that holds the card.
+    pub(crate) params: Range32,
+}
+
+/// One `key=value` of a `.model` card, in [`Def::card_params`]. A PDK
+/// library holds millions of them, so this keeps 24 bytes of each (a
+/// [`ParamDef`] has 56): the file is the file of the card, and the
+/// `.alter` block is the card's. [`CardParam::param`] gives the full form.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CardParam {
+    pub(crate) name: Sym,
+    /// The line of the key.
+    pub(crate) line: u32,
+    /// The value as written: the bytes `start..end` of the card's file
+    /// (an expression without its quotes). `start == end` when the parser
+    /// kept a number whose text was not found: then `num` is the value.
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    /// The value when the text is a plain number (with its unit); NaN when
+    /// it is not (a deck cannot write a NaN).
+    pub(crate) num: f64,
+}
+
+impl CardParam {
+    /// The compact form of `p`, a parameter of a card (its text is in the
+    /// file of the card).
+    pub(crate) fn new(p: &ParamDef) -> Self {
+        let (start, end) = p.text.map_or((0, 0), |t| (t.start, t.end));
+        CardParam {
+            name: p.name,
+            line: p.loc.line,
+            start,
+            end,
+            num: p.num.unwrap_or(f64::NAN),
+        }
+    }
+
+    /// The full form, for the card `md` that holds it.
+    pub(crate) fn param(&self, md: &ModelDef) -> ParamDef {
+        let file = md.loc.file;
+        ParamDef {
+            name: self.name,
+            text: (self.start < self.end).then_some(TextRef {
+                file,
+                start: self.start,
+                end: self.end,
+            }),
+            num: (!self.num.is_nan()).then_some(self.num),
+            loc: LocIdx {
+                file,
+                line: self.line,
+            },
+            alter: md.alter,
+        }
+    }
+}
+
+/// The `.option` items that choose the bin of a MOSFET, read as the model
+/// selector reads them (`src/models/bins.rs`, `Options::new`): those of the
+/// top level of the first run, the last plain number of each, where a value
+/// of 0 or less gives the default back. HSPICE ignores other values (`'7u'`,
+/// a name, an expression: decks `opt_scale_*`, `opd_*`, `os_*`, `zd_*`,
+/// `zq_*`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct BinOptions {
+    /// `.option scale`: it multiplies L, W and the sheet width of a line.
+    pub(crate) scale: f64,
+    /// `.option scalm`: it multiplies the limits of a bin (not the fin
+    /// counts).
+    pub(crate) scalm: f64,
+    /// `.option defl`, `.option defw`: the L and W of a line with none.
+    pub(crate) defl: f64,
+    pub(crate) defw: f64,
+    /// `.option wnflag`: the bins compare W/NF unless it is 0 (by default
+    /// they do). A bare `.option wnflag` is 1, and a number in quotes
+    /// counts (decks `opw_*`).
+    pub(crate) wnflag: bool,
+}
+
+impl Default for BinOptions {
+    fn default() -> Self {
+        BinOptions {
+            scale: 1.0,
+            scalm: 1.0,
+            defl: 1e-4,
+            defw: 1e-4,
+            wnflag: true,
+        }
+    }
 }
 
 /// The type of an element line, from its first letter.
@@ -248,6 +339,8 @@ pub(crate) struct Def {
     pub(crate) params: Vec<ParamDef>,
     pub(crate) funcs: Vec<FuncDef>,
     pub(crate) models: Vec<ModelDef>,
+    /// The arena of the `key=value` items of `models`.
+    pub(crate) card_params: Vec<CardParam>,
     pub(crate) elements: Vec<Element>,
     /// For the R, C and L lines of `elements` with a model word or a
     /// `key=value`: the element index and the byte right after its second
@@ -295,6 +388,12 @@ impl Def {
         self.pins.shrink_to_fit();
         self.elem_params.shrink_to_fit();
         self.params.shrink_to_fit();
+        self.card_params.shrink_to_fit();
+    }
+
+    /// The `key=value` items of card `md`, a card of this definition.
+    pub(crate) fn card_params(&self, md: &ModelDef) -> &[CardParam] {
+        &self.card_params[md.params.range()]
     }
 
     /// The nodes of `e`, an element of this definition.
@@ -376,5 +475,12 @@ mod tests {
     #[test]
     fn element_size() {
         assert_eq!(std::mem::size_of::<super::Element>(), 56);
+    }
+
+    /// A `CardParam` stays 24 bytes: a PDK library has millions of card
+    /// parameters.
+    #[test]
+    fn card_param_size() {
+        assert_eq!(std::mem::size_of::<super::CardParam>(), 24);
     }
 }
