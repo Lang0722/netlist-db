@@ -1,0 +1,8 @@
+# The crates of `Cargo.lock` are in `vendor/`: a build needs no network.
+# After a change of a dependency, run `cargo vendor` and commit `vendor/`
+# (see "Dependencies" in the README).
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

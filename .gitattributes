@@ -1,0 +1,3 @@
+# the vendored crates: no change of line ends (cargo checks each file), and not
+# a part of the language statistics
+/vendor/** -text linguist-vendored

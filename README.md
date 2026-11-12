@@ -381,6 +381,30 @@ have an inline `mod tests` at the end of the file (`src/span.rs`,
 tests of the whole crate, a file for each topic. `query/tests/` holds the
 tests of the query tool that load decks through its public API.
 
+## Dependencies
+
+The crates that the workspace builds with are in `vendor/`, at the versions
+of `Cargo.lock`, and `.cargo/config.toml` tells cargo to read them from
+there: a build needs no network. After a change of a dependency in a
+`Cargo.toml`, write the folder again, and commit it with `Cargo.lock`:
+
+``` bash
+cargo vendor
+```
+
+`cargo update` finds a newer version only when it reads crates.io and not
+`vendor/`:
+
+``` bash
+mv .cargo/config.toml .cargo/config.off
+cargo update
+mv .cargo/config.off .cargo/config.toml
+cargo vendor
+```
+
+The Python packages are not vendored: `maturin` builds the binding, and
+`mcp` is the one dependency of `mcp_server`.
+
 ## Regression
 ``` bash
 cargo install cargo-regression # install for first time
