@@ -95,7 +95,6 @@ use crate::{
 };
 use core::fmt::{self, Write as _};
 use indexmap::IndexSet;
-use itertools::Itertools as _;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::{borrow::Cow, cell::OnceCell, cmp::Reverse, iter::once, ptr, rc::Rc};
 

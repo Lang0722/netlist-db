@@ -1,6 +1,5 @@
 //! The statements of a netlist: the dot commands, the lines of a level, and `.subckt` headers.
-use regex::Regex;
-use std::{path::Path, sync::LazyLock};
+use std::path::Path;
 
 use nom::{
     IResult, Input, Parser,
@@ -103,10 +102,63 @@ type DataSep = for<'a> fn(LocatedSpan<'a>) -> IResult<LocatedSpan<'a>, ()>;
 
 /// Whether `.enddata` closes the `.data` block at `i` (before any other `.data`)
 fn has_enddata(i: LocatedSpan) -> bool {
-    static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?im)^[ \t+]*\.(endd(?:ata|at|a)?|dat?a?)\b").unwrap());
-    RE.captures(i.fragment())
-        .is_some_and(|caps| caps[1].to_ascii_lowercase().starts_with("end"))
+    has_enddata_str(i.fragment())
+}
+
+/// Whether `c` is a part of a word, so that no word ends before it
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// `s` after its start `prefix`, in any ASCII case
+fn strip_no_case<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| &s[prefix.len()..])
+}
+
+/// The first line of `text` that is a `.data` or an `.enddata` (a line may
+/// start with blanks and `+`): whether it is the `.enddata`
+fn has_enddata_str(text: &str) -> bool {
+    const END: [&str; 4] = ["endd", "endda", "enddat", "enddata"];
+    const DATA: [&str; 4] = ["da", "dat", "daa", "data"];
+    for line in text.split('\n') {
+        let Some(t) = line.trim_start_matches([' ', '\t', '+']).strip_prefix('.') else {
+            continue;
+        };
+        let key = &t[..t.find(|c| !is_word(c)).unwrap_or(t.len())];
+        let is = |keys: &[&str]| keys.iter().any(|k| key.eq_ignore_ascii_case(k));
+        if is(&END) {
+            return true;
+        }
+        if is(&DATA) {
+            return false;
+        }
+    }
+    false
+}
+
+/// Where the first line `simulator lang=spice` of `text` starts
+fn back_to_spice(text: &str) -> Option<usize> {
+    fn blank(s: &str) -> &str {
+        s.trim_start_matches([' ', '\t'])
+    }
+    let is_line = |line: &str| {
+        let s = strip_no_case(blank(line), "simulator")?;
+        let t = blank(s);
+        let s = strip_no_case(t, "lang").filter(|_| t.len() < s.len())?;
+        let s = blank(s).strip_prefix('=')?;
+        let s = strip_no_case(blank(s), "spice")?;
+        (!s.chars().next().is_some_and(is_word)).then_some(())
+    };
+    let mut start = 0;
+    for line in text.split('\n') {
+        if is_line(line).is_some() {
+            return Some(start);
+        }
+        start += line.len() + 1;
+    }
+    None
 }
 
 #[inline]
@@ -579,14 +631,11 @@ fn simulator_lang(i: LocatedSpan) -> Option<(LocatedSpan, ParseError)> {
         let msg = "`simulator lang=spice` is a Spectre directive, not HSPICE; it is ignored";
         return Some((rest, ParseErrorInner::NonHspice(msg.to_owned()).record(i)));
     }
-    static BACK_TO_SPICE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?im)^[ \t]*simulator[ \t]+lang[ \t]*=[ \t]*spice\b").unwrap()
-    });
     let text: &str = rest.fragment();
-    let (end, until) = match BACK_TO_SPICE.find(text) {
+    let (end, until) = match back_to_spice(text) {
         // stop at the newline before that line, which is the next statement
-        Some(m) => (
-            rest.take_from(m.start() - 1),
+        Some(start) => (
+            rest.take_from(start - 1),
             "up to the next `simulator lang=spice`",
         ),
         None => (rest.take_from(text.len()), "to the end of the file"),

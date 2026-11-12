@@ -7,23 +7,37 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use netlist_db::{FileId, parser::parse_top_multi};
 use std::{env, path::PathBuf, process::exit, time::Instant};
+
+/// Prints the messages of the library
+#[cfg(not(feature = "tracing"))]
+struct Messages;
+
+#[cfg(not(feature = "tracing"))]
+impl log::Log for Messages {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        let (level, target) = (record.level(), record.target());
+        println!("{level:<5} [{target}] {}", record.args());
+    }
+    fn flush(&self) {}
+}
+
 #[tokio::main]
 async fn main() {
     #[cfg(not(feature = "tracing"))]
     {
-        _ = simple_logger::SimpleLogger::new().init();
+        log::set_logger(&Messages).expect("the only logger");
+        log::set_max_level(log::LevelFilter::Trace);
     }
     #[cfg(feature = "tracing")]
     {
         let subscriber = tracing_subscriber::FmtSubscriber::builder()
-            // .with_ansi(colored::control::SHOULD_COLORIZE.should_colorize())
             .with_max_level(tracing::Level::DEBUG)
             .with_target(false)
             .with_file(true)
             .with_line_number(true)
-            .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
-                "%FT%T".to_owned(),
-            ))
             .finish();
         _ = tracing::subscriber::set_global_default(subscriber);
     }

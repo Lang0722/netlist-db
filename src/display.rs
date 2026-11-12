@@ -58,16 +58,16 @@ pub fn display_wrap<
     item_sep: char,
     wrap_size: usize,
 ) -> fmt::Result {
-    use itertools::Itertools as _;
-    for mut ts in iter.into_iter().chunks(wrap_size).into_iter() {
-        write!(f, "\n{line_sep}")?;
-        if let Some(first) = ts.next() {
-            fmt_one(first, f)?;
-            for t in ts {
-                write!(f, "{item_sep}")?;
-                fmt_one(t, f)?;
-            }
+    // how many items the current line has
+    let mut in_line = 0;
+    for t in iter {
+        if in_line == 0 {
+            write!(f, "\n{line_sep}")?;
+        } else {
+            write!(f, "{item_sep}")?;
         }
+        fmt_one(t, f)?;
+        in_line = (in_line + 1) % wrap_size;
     }
     Ok(())
 }

@@ -11,8 +11,6 @@ use crate::{
 };
 use alloc::sync::Arc;
 use nom::Input as _;
-#[cfg(test)]
-use regex::Regex;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -566,25 +564,10 @@ fn without_section_lines(mut body: String) -> String {
     body
 }
 
-/// `match_lib` as it was written with a regex: the regex of `section`
-#[cfg(test)]
-fn match_lib_regex(section: &str) -> impl Fn(&str) -> Option<(String, u32)> {
-    let section_escaped = regex::escape(section);
-    let re = Regex::new(&format!(
-        r"(?ims)^\s*\.lib\s+{section_escaped}\b(.*?)^\s*\.endl\b(?:\s+{section_escaped}\b)?"
-    ))
-    .unwrap();
-    move |text| {
-        re.captures_iter(text).last().map(|caps| {
-            let start_offset = caps.get(1).unwrap().start();
-            let line_num_offset = (text[..start_offset].matches('\n').count()) as u32;
-            (caps[1].to_owned(), line_num_offset)
-        })
-    }
-}
-
+/// `match_lib` was a regex before, and it gave the answers of that regex for
+/// all these texts. The answers are kept here as their hash (FNV-1a).
 #[test]
-fn match_lib_like_the_regex() {
+fn match_lib_answers_do_not_change() {
     // random texts made of lines that open, close or fill sections
     let pieces = [
         ".lib tt",
@@ -614,10 +597,13 @@ fn match_lib_like_the_regex() {
         ".lib\u{a0}tt",
         "\u{a0}.endl",
     ];
-    let regexes: Vec<_> = ["tt", "ss", "TT"]
-        .into_iter()
-        .map(|section| (section, match_lib_regex(section)))
-        .collect();
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut add = |bytes: &[u8]| {
+        for b in bytes {
+            hash = (hash ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    let mut found = 0;
     let mut seed = 12345u64;
     let mut next = || {
         seed = seed
@@ -634,14 +620,20 @@ fn match_lib_like_the_regex() {
             }
             text.push_str(pieces[next() % pieces.len()]);
         }
-        for (section, regex) in &regexes {
-            assert_eq!(
-                match_lib(&text, section),
-                regex(&text),
-                "{text:?} {section}"
-            );
+        for section in ["tt", "ss", "TT"] {
+            match match_lib(&text, section) {
+                Some((body, line)) => {
+                    found += 1;
+                    add(&[1]);
+                    add(body.as_bytes());
+                    add(&[0xff]);
+                    add(&line.to_le_bytes());
+                }
+                None => add(&[0]),
+            }
         }
     }
+    assert_eq!((found, hash), (69041, 0xa140_a59d_5f3c_ea06));
 }
 
 #[test]

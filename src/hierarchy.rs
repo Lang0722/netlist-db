@@ -1,6 +1,5 @@
 use crate::{Subckt, instance::InstanceCtx};
 use indexmap::IndexMap;
-use itertools::Itertools as _;
 use std::{collections::HashMap, iter::once, ptr};
 
 /// [`Subckt::append`] follows the instance hierarchy at most this deep
@@ -50,6 +49,7 @@ impl<'s> Subckt<'s> {
                 .iter()
                 .map(|inst| **inst)
                 .chain(once(cktname))
+                .collect::<Vec<_>>()
                 .join(".")
         };
         for (idx, include) in include_subckts.iter().enumerate().rev() {
@@ -59,6 +59,7 @@ impl<'s> Subckt<'s> {
                         .iter()
                         .map(|s| s.name)
                         .chain(once(ckt.name))
+                        .collect::<Vec<_>>()
                         .join(" -> ");
                     return Err(format!(
                         "{}: subckt `{}` instantiates itself ({cycle})",
@@ -83,11 +84,10 @@ impl<'s> Subckt<'s> {
                 for port in &ckt.ports {
                     _ = nodes_map.remove(&port.to_lowercase());
                 }
-                internal_nodes.extend(
-                    nodes_map
-                        .into_values()
-                        .map(|n| inst_path.iter().copied().chain(once(n)).join(".")),
-                );
+                internal_nodes.extend(nodes_map.into_values().map(|n| {
+                    let path = inst_path.iter().copied().chain(once(n));
+                    path.copied().collect::<Vec<_>>().join(".")
+                }));
                 if idx == 0 {
                     // idx==0 means in top
                     append_subckts.push(ckt);
@@ -124,22 +124,34 @@ pub(crate) mod test {
 
     use crate::{FileId, Subckt, parser::parse_top_multi};
 
+    /// Prints the messages of the library
+    #[cfg(not(feature = "tracing"))]
+    struct Messages;
+
+    #[cfg(not(feature = "tracing"))]
+    impl log::Log for Messages {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            let (level, target) = (record.level(), record.target());
+            println!("{level:<5} [{target}] {}", record.args());
+        }
+        fn flush(&self) {}
+    }
+
     pub(crate) fn init_logger() {
         #[cfg(not(feature = "tracing"))]
-        {
-            _ = simple_logger::SimpleLogger::new().init();
+        if log::set_logger(&Messages).is_ok() {
+            log::set_max_level(log::LevelFilter::Trace);
         }
         #[cfg(feature = "tracing")]
         {
             let subscriber = tracing_subscriber::FmtSubscriber::builder()
-                // .with_ansi(colored::control::SHOULD_COLORIZE.should_colorize())
                 .with_max_level(tracing::Level::DEBUG)
                 .with_target(false)
                 .with_file(true)
                 .with_line_number(true)
-                .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
-                    "%FT%T".to_owned(),
-                ))
                 .finish();
             _ = tracing::subscriber::set_global_default(subscriber);
         }

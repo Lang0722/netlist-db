@@ -663,7 +663,8 @@ impl<'a, 's> Usage<'a, 's> {
             return n;
         }
         let n = self.errors.len();
-        let path = self.path.iter().copied().chain(once(name)).join(".");
+        let path = self.path.iter().copied().chain(once(name));
+        let path = path.collect::<Vec<_>>().join(".");
         self.errors.push((e, path));
         self.error_numbers.insert(text, n);
         n

@@ -1,16 +1,8 @@
 use std::path::PathBuf;
 
 use pyo3::{Borrowed, Bound, FromPyObject, IntoPyObject, PyAny, PyErr, PyResult, Python};
-use pyo3_stub_gen::{PyStubType, TypeInfo};
 
 use crate::FileId;
-
-impl PyStubType for FileId {
-    #[inline]
-    fn type_output() -> TypeInfo {
-        <PathBuf>::type_output() | <(PathBuf, String)>::type_output()
-    }
-}
 
 impl<'py> IntoPyObject<'py> for FileId {
     type Target = PyAny;

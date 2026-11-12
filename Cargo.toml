@@ -3,6 +3,10 @@ members = ["pybind", "macros", "expr", "query"]
 [workspace.package]
 version = "0.4.10"
 edition = "2024"
+# The toolchain of the CI (`RUST_VERSION` in `.github/workflows`): cargo locks
+# versions that it builds. `query` and `pybind` do not set it: `query` has an
+# `if let` guard, which is newer.
+rust-version = "1.88"
 license = "MIT"
 authors = ["Junzhuo <zhou@junzhuo.site>"]
 keywords = ["eda", "spice", "netlist", "database", "parser"]
@@ -14,10 +18,8 @@ description = "Concurrent/Parallel SPICE (HSPICE) parser."
 
 [workspace.dependencies]
 serde_json = "1.0"
-pyo3 = "0.27"
-pyo3-stub-gen = { version = "0.17", default-features = false }
+pyo3 = "0.30"
 tokio = { version = "1.47", features = ["fs", "sync", "rt", "rt-multi-thread", "macros", "time"] }
-simple_logger = "5.0.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4.28"
 fast-float2 = "0.2.3"
@@ -25,18 +27,14 @@ indexmap = "2.11"
 rustc-hash = "2"
 nom = "8"
 nom_locate = "5"
-regex = "1.11"
-thiserror = "2"
-nu-ansi-term = "0.50"
-colored = "3"
-itertools = "0.14"
-tracing = "0.1.41"
-tracing-subscriber = { version="0.3.0", features=["chrono"] }
+tracing = { version = "0.1.41", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.0", default-features = false, features = ["fmt"] }
 
 [package]
 name = "netlist-db"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 keywords.workspace = true
@@ -48,7 +46,7 @@ description.workspace = true
 include = ["/src", "/examples", "README.md"]
 
 [features]
-py = ['dep:pyo3', 'dep:pyo3-stub-gen']
+py = ['dep:pyo3']
 tracing = ["dep:tracing"]
 
 [dependencies]
@@ -60,20 +58,14 @@ rustc-hash.workspace = true
 log.workspace = true
 nom.workspace = true
 nom_locate.workspace = true
-regex.workspace = true
 serde.workspace = true
-thiserror.workspace = true
-itertools.workspace = true
 tokio.workspace = true
-nu-ansi-term.workspace = true
-colored.workspace = true
 pyo3 = { workspace = true, optional = true }
-pyo3-stub-gen = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
-simple_logger.workspace = true
 tracing-subscriber.workspace = true
 
-[target.'cfg(target_env = "musl")'.dependencies]
+# the allocator of the example `parser_multi`
+[target.'cfg(target_env = "musl")'.dev-dependencies]
 mimalloc = "0.1.43"

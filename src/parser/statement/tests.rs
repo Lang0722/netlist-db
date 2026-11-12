@@ -569,3 +569,46 @@ C1 out 0 10f";
         assert!(want.contains(part), "{part} missing in {want}");
     }
 }
+
+#[test]
+fn enddata_before_the_next_data() {
+    use super::has_enddata_str as has;
+    // the first `.data` or `.enddata` line decides; short forms and any case
+    assert!(has("1 2\n.enddata\n.data b"));
+    assert!(has("1 2\r\n + .ENDD\r\n"));
+    assert!(has(".endda"));
+    assert!(has(" \t.enddat x"));
+    assert!(!has("1 2\n.data b\n.enddata"));
+    assert!(!has(".DAT\n.enddata"));
+    assert!(!has(".da\n.enddata"));
+    assert!(!has(""));
+    assert!(!has("1 2\n3 4"));
+    // not these: a longer word, a line that starts with another word
+    assert!(has(".datas\n.enddata_x\n.endd1\n.enddata"));
+    assert!(!has("x .enddata\n* .enddata\n..enddata"));
+    assert!(has(".enddata$ comment"));
+}
+
+#[test]
+fn back_to_spice_line() {
+    use super::back_to_spice as at;
+    assert_eq!(at("\nr1 a b 1\nsimulator lang=spice\n"), Some(10));
+    assert_eq!(at("\n \tSIMULATOR\tLANG = SPICE\r\n"), Some(1));
+    assert_eq!(at("simulator lang=spice"), Some(0));
+    // the first such line
+    assert_eq!(
+        at("\nsimulator lang=spectre\nsimulator lang=spice x\nsimulator lang=spice"),
+        Some(24)
+    );
+    for not in [
+        "",
+        "\nsimulatorlang=spice",
+        "\nsimulator lang=spicex",
+        "\nsimulator lang=spice_1",
+        "\nx simulator lang=spice",
+        "\nsimulator lang",
+        "\nsimulator lang==spice",
+    ] {
+        assert_eq!(at(not), None, "{not:?}");
+    }
+}
